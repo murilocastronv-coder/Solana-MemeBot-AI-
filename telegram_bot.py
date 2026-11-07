@@ -214,7 +214,7 @@ def handle(update):
   checks=live_status()
   missing=[]
   if not get_address():missing.append("carteira no disco persistente")
-  if not os.getenv("JUPITER_API_KEY"):missing.append("JUPITER_API_KEY")
+  # Jupiter supports keyless API access at reduced rate limits.
   if not os.getenv("SOLANA_RPC_URL"):missing.append("SOLANA_RPC_URL")
   if not CHAT:missing.append("TELEGRAM_CHAT_ID fixo")
   missing.extend(["assinatura e envio validados", "confirmação on-chain e reconciliação", "posições persistentes e vendas TP/SL", "limite de perdas com proteção contra ordens duplicadas"])
