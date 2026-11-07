@@ -1,5 +1,5 @@
 """Telegram Solana token radar. Read-only, no wallet credentials or trades."""
-import os,time,logging,threading,requests
+import os,time,logging,threading,requests,re
 from flask import Flask,Response
 import paper_positions as paper
 import paper_auto as auto
@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.INFO)
 TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
 CHAT=os.getenv("TELEGRAM_CHAT_ID","")
 PRIVATE_CHAT=None  # First private /start after process startup; resets on restart.
+CONNECTED_WALLETS={}  # Public addresses only; temporary, never seed phrases.
 INTERVAL=max(60,int(os.getenv("SCAN_INTERVAL_SECONDS","300")))
 TP=float(os.getenv("TP_PERCENT","15"))
 SL=float(os.getenv("SL_PERCENT","8"))
@@ -155,8 +156,31 @@ def handle(update):
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
- elif action in ("wallet_connect","/carteira"):
-  send(chat,"🔐 CARTEIRA — CAMPO LOCAL DE TESTE\\nAbra a página HTTPS abaixo. A chave digitada permanece somente na página e NÃO é enviada ao servidor, salva ou usada para operar.\\nhttps://solana-memebot-telegram.onrender.com/carteira\\n⚠️ Ainda não conecta nem assina transações. Use apenas uma carteira de teste; não insira a chave da sua Phantom principal.")
+ elif action in ("wallet_connect","/carteira","/wallet"):
+  address=CONNECTED_WALLETS.get(str(chat))
+  if address:
+   try:
+    rpc=os.getenv("SOLANA_RPC_URL","https://api.mainnet-beta.solana.com")
+    response=session.post(rpc,json={"jsonrpc":"2.0","id":1,"method":"getBalance","params":[address]},timeout=12)
+    response.raise_for_status()
+    data=response.json()
+    if "error" in data:raise ValueError("RPC error")
+    balance=int(data["result"]["value"])/1_000_000_000
+    send(chat,"👻 Phantom — endereço público vinculado (somente leitura)\\n"+address+"\\nSaldo: "+fmt(balance)+" SOL\\n/desconectar para remover. Nenhuma transação pode ser assinada.")
+   except (requests.RequestException,ValueError,KeyError,TypeError):
+    send(chat,"Endereço vinculado: "+address+"\\nNão foi possível consultar o saldo agora.")
+  else:
+   send(chat,"👻 VINCULAR PHANTOM — SOMENTE LEITURA\\nNa Phantom, toque em Receber > Solana > Copiar endereço público. Depois envie: /connect ENDERECO_PUBLICO\\nNunca envie as 12 palavras, seed phrase ou chave privada neste chat. A vinculação não autoriza compras ou saques.")
+ elif action=="/connect":
+  parts=(msg or {}).get("text","").split()
+  if len(parts)!=2 or not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}",parts[1]):
+   send(chat,"Uso: /connect ENDERECO_PUBLICO_SOLANA\\nCopie apenas o endereço público na Phantom. Não envie 12 palavras nem chave privada.")
+  else:
+   CONNECTED_WALLETS[str(chat)]=parts[1]
+   send(chat,"✅ Endereço público vinculado para consulta: "+parts[1]+"\\nUse /wallet para consultar saldo ou /desconectar para remover. Sem assinatura ou operações reais.")
+ elif action=="/desconectar":
+  CONNECTED_WALLETS.pop(str(chat),None)
+  send(chat,"Carteira pública desvinculada desta sessão.")
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
