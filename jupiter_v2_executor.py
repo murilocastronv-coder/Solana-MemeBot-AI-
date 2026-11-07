@@ -52,8 +52,11 @@ def sign_order(order_data, wallet_passphrase):
     unsigned = VersionedTransaction.from_bytes(raw)
     keys = unsigned.message.account_keys
     required = int(unsigned.message.header.num_required_signatures)
-    if required < 1 or str(keys[0]) != address:
-        raise OrderError("Unexpected transaction fee payer")
+    if required < 1:
+        raise OrderError("Transaction has no signers")
+    # RFQ routes (JupiterZ market makers) put the market maker as fee payer and
+    # ask the taker for a partial signature. We only require that our wallet is
+    # exactly one of the required signers; we never sign as fee payer for others.
     signer_indices = [i for i in range(required) if str(keys[i]) == address]
     if len(signer_indices) != 1:
         raise OrderError("Wallet must be exactly one required signer")
