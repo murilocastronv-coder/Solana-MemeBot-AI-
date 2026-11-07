@@ -16,12 +16,13 @@ TIMEOUT=18
 class SwapError(RuntimeError): pass
 
 def configured():
-    return bool(os.getenv("JUPITER_API_KEY") and os.getenv("SOLANA_RPC_URL") and os.getenv("LIVE_TRADING_ENABLED")=="true")
+    return bool(os.getenv("SOLANA_RPC_URL") and os.getenv("LIVE_TRADING_ENABLED")=="true")
 
 def _headers():
     key=os.getenv("JUPITER_API_KEY","")
-    if not key:raise SwapError("JUPITER_API_KEY missing")
-    return {"x-api-key":key,"Content-Type":"application/json"}
+    headers={"Content-Type":"application/json"}
+    if key:headers["x-api-key"]=key
+    return headers
 
 def quote(input_mint,output_mint,amount,slippage_bps=100):
     if input_mint==output_mint or not 1<=int(amount) or not 1<=int(slippage_bps)<=300:
