@@ -22,6 +22,8 @@ class LiveEngineTests(unittest.TestCase):
         live_engine._tried.clear()
         live_engine._safety.clear()
         live_engine._sniper_seen.clear()
+        live_engine._fetch_cache[:] = [0.0, []]
+        live_engine._roundtrip_cache.clear()
         live_engine._last_notice.clear()
         self.mint_info = SAFE_MINT
         self.sent = []
@@ -34,6 +36,7 @@ class LiveEngineTests(unittest.TestCase):
             patch("live_order_bridge.sol_for_usd", return_value=50_000_000),
             patch("live_order_bridge.sol_usd_price", return_value=200),
             patch("live_engine.rpc", side_effect=lambda m, p: self.mint_info),
+            patch("live_engine.roundtrip_ok", return_value=(True, "")),
             patch("live_order_bridge.order", side_effect=lambda *a, **k: {"requestId": "r", "outAmount": "1", "transaction": "x"}),
             patch("live_order_bridge.sign_order", return_value="signed"),
             patch("live_order_bridge.execute_signed", side_effect=self.execute),
@@ -301,7 +304,8 @@ class DeadTokenTests(SellFailureTests):
 def new_pair(minutes=20):
     return {"baseToken": {"address": MINT, "symbol": "NEW"}, "priceUsd": "0.0001",
             "liquidity": {"usd": 25000}, "fdv": 300000, "pairCreatedAt": (time.time() - minutes * 60) * 1000,
-            "priceChange": {"m5": 12}, "volume": {"m5": 15000}, "txns": {"m5": {"buys": 90, "sells": 40}}}
+            "priceChange": {"m5": 12, "h1": 60}, "volume": {"m5": 15000},
+            "txns": {"m5": {"buys": 90, "sells": 40}, "h1": {"buys": 400, "sells": 250}}}
 
 
 class SniperTests(LiveEngineTests):

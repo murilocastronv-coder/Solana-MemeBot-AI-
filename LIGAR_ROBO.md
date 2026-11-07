@@ -34,9 +34,16 @@ Opcional no Render: `ORDER_FRACTION` (padrão `0.10`) e `MAX_ORDER_USD` (padrão
 ⚠️ Memecoins podem ir a zero e o stop loss pode executar bem abaixo de −8% em quedas rápidas. Use só dinheiro que aceita perder.
 
 ## 🎯 Modo sniper (moedas recém-criadas) — risco muito alto
-Ligue/desligue com os botões **🎯 Sniper ON / OFF** (o robô principal também precisa estar ligado).
-- A cada ~20 s procura moedas com **menos de 60 min**, liquidez ≥ US$ 10 mil, preço subindo nos últimos 5 min, ≥ 15 compras e 30% mais compras que vendas, volume 5 min ≥ US$ 5 mil.
-- Anti-golpe + os **10 maiores donos** (sem contar a pool) precisam ter **< 30%** das moedas.
-- Compra **5% da conta** (`SNIPER_FRACTION`), no máximo 2 posições sniper (dentro do limite total de 3).
-- Saída: stop **−15%**; a partir de **+30%** stop móvel 15% abaixo do topo; se não decolar em **45 min**, vende.
-- Stops são conferidos a cada ~20 s. Moedas novas podem cair 80–100% em segundos: o stop não garante a perda máxima.
+Ligue/desligue com **🎯 Sniper ON / OFF** (o robô principal também precisa estar ligado).
+- A cada ~20 s procura moedas de **5 a 60 min**, liquidez ≥ US$ 15 mil, FDV ≤ 20× a liquidez, subindo em 5 min (até +40%, sem já ter disparado) e no máx. +300% em 1 h, ≥ 25 compras em 5 min (30% a mais que vendas) e ≥ 100 compras em 1 h, volume 5 min entre US$ 5 mil e 3× a liquidez.
+- Anti-golpe + os 10 maiores donos (sem contar a pool) com **< 25%** + **teste de venda**.
+- Compra **5% da conta**, no máx. 2 posições sniper (dentro do limite total de 3).
+- Saída: stop **−12%**; a partir de **+25%** stop móvel 12% abaixo do topo; vende após **30 min** se não decolar.
+
+## 🛡️ Teste de venda (normal e sniper)
+Antes de comprar, cota comprar US$ 10 e vender de volta na hora. Se devolver menos de **92%**, não compra (taxa escondida, golpe "não dá para vender" ou pool rasa).
+
+## 🧪 Simulação e 📜 Histórico
+- **🧪 Simulação ON/OFF**: roda as mesmas estratégias (normal + sniper) com **preços reais** da Jupiter e **dinheiro de mentira** (começa com US$ 100, `SIM_START_USD`), com 1% de custo por lado. Não mexe na carteira. `/sim_reset` recomeça.
+- **📜 Histórico** (`/historico`): operações reais e simuladas, taxa de acerto, P/L, ganho e perda médios por estratégia.
+- Teste mudanças na simulação por 20–30 operações antes de usar dinheiro real.

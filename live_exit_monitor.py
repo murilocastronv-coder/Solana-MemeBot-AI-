@@ -13,7 +13,29 @@ _last_alert = {}
 _quote_fail_since = {}  # mint -> monotonic time quotes started failing
 DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
-SNIPER_MAX_HOLD_SECONDS = 45 * 60  # sniper trade that never took off is closed
+SNIPER_MAX_HOLD_SECONDS = 30 * 60  # sniper trade that never took off is closed
+
+SNIPER_EXIT = {"stop_loss": "0.12", "arm": "1.25", "drop": "0.12"}
+
+
+def quote_value_usd(mint, amount):
+    """Executable value of `amount` tokens: token -> SOL -> USDC (Jupiter)."""
+    sol_out = int(order(mint, SOL_MINT, int(amount))["outAmount"])
+    if sol_out <= 0:
+        raise ValueError("No executable SOL quote")
+    return int(order(SOL_MINT, USDC_MINT, sol_out)["outAmount"]) / 1_000_000
+
+
+def position_signal(position, cost, proceeds):
+    """Exit decision shared by real trading and the simulator."""
+    if position.get("mode") == "sniper":
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **SNIPER_EXIT)
+        held = time.time() - float(position.get("opened_at") or time.time())
+        if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
+            signal.update(action="sell", reason="time_stop")
+        return signal
+    return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0))
+
 
 def _evaluate():
     state = _load()
@@ -25,21 +47,8 @@ def _evaluate():
             cost = float(position["cost_usd"])
             if amount <= 0 or cost <= 0:
                 raise ValueError("Invalid position amount or cost")
-            sol_quote = order(mint, SOL_MINT, amount)
-            sol_out = int(sol_quote["outAmount"])
-            if sol_out <= 0:
-                raise ValueError("No executable SOL quote")
-            usd_quote = order(SOL_MINT, USDC_MINT, sol_out)
-            proceeds = int(usd_quote["outAmount"]) / 1_000_000
-            if position.get("mode") == "sniper":
-                signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0),
-                                              stop_loss="0.15", arm="1.30", drop="0.15")
-                held = time.time() - float(position.get("opened_at") or time.time())
-                if (signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS
-                        and signal["reason"] != "trailing"):
-                    signal.update(action="sell", reason="time_stop")
-            else:
-                signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0))
+            proceeds = quote_value_usd(mint, amount)
+            signal = position_signal(position, cost, proceeds)
             if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
                 live_trade_state.update_peak(mint, signal["peak_ratio"])
             _quote_fail_since.pop(mint, None)

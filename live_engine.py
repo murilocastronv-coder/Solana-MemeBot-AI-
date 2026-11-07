@@ -122,6 +122,27 @@ def token_safety(mint):
     return result
 
 
+ROUNDTRIP_MIN = 0.92  # buy then sell back must return >= 92% (catches taxes/honeypots/thin pools)
+_roundtrip_cache = {}
+
+
+def roundtrip_ok(mint, usd=10.0):
+    """Sell test before buying: quote SOL->token, then token->SOL for the tokens received."""
+    hit = _roundtrip_cache.get(mint)
+    if hit and time.monotonic() - hit[0] < 120:
+        return hit[1]
+    try:
+        lamports = int(usd / float(bridge.sol_usd_price()) * 1e9)
+        tokens = int(bridge.order(SOL_MINT, mint, lamports)["outAmount"])
+        back = int(bridge.order(mint, SOL_MINT, tokens)["outAmount"])
+        ratio = back / lamports if lamports else 0
+        result = (ratio >= ROUNDTRIP_MIN, "teste de venda devolveu " + format(ratio * 100, ".0f") + "%")
+    except Exception:
+        return (False, "teste de venda falhou (sem rota de venda)")
+    _roundtrip_cache[mint] = (time.monotonic(), result)
+    return result
+
+
 def account_value_usd(wallet):
     """Free SOL (in USD) plus cost of open positions."""
     price = float(bridge.sol_usd_price())
@@ -197,7 +218,7 @@ BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
-    "sniper": "🛑 Stop -15% | 🚀 a partir de +30% deixa correr (vende 15% abaixo do topo) | ⏱️ sai em 45 min se não decolar",
+    "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
 }
 
 
@@ -273,6 +294,8 @@ def buy_cycle(rows, send, chat):
             continue
         symbol = str(p["baseToken"].get("symbol", "?"))[:20]
         safe, why = token_safety(mint)
+        if safe:
+            safe, why = roundtrip_ok(mint)
         if not safe:
             unsafe.append(symbol + ": " + why)
             continue
@@ -303,7 +326,7 @@ def sell_message(symbol, signal, settled):
     pnl = settled["pnl_usd"]
     pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0
     why = {"take_profit": "🚀 Stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)",
-           "time_stop": "⏱️ Tempo esgotado (não decolou em 45 min)"}.get(signal["reason"], "🛑 Stop loss")
+           "time_stop": "⏱️ Tempo esgotado (não decolou em 30 min)"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"
@@ -352,6 +375,7 @@ def exit_cycle(send, chat):
         label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO ESGOTADO"}.get(signal["reason"], "🛑 STOP LOSS")
         send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO " + symbol + "\n" + mint)
         try:
+            state.mark_exit_reason(mint, signal["reason"])
             result = bridge.submit_swap(mint, "sell", amount, wallet)
             settled = _settle(result["order_id"], wallet)
         except Exception as exc:
@@ -377,7 +401,8 @@ def exit_cycle(send, chat):
 SNIPER_FRACTION = float(os.getenv("SNIPER_FRACTION", "0.05"))
 SNIPER_MAX_POSITIONS = 2
 SNIPER_MAX_AGE_MINUTES = 60
-SNIPER_MIN_LIQUIDITY = 10000
+SNIPER_MIN_LIQUIDITY = 15000
+SNIPER_MIN_AGE_MINUTES = 5  # skip the first minutes, when most rugs happen
 SNIPER_FEEDS = ("https://api.dexscreener.com/token-profiles/latest/v1",
                 "https://api.dexscreener.com/token-boosts/latest/v1")
 _sniper_seen = {}  # mint -> monotonic time first evaluated
@@ -390,8 +415,19 @@ def _dex(url):
     return r.json()
 
 
+_fetch_cache = [0.0, []]
+
+
 def sniper_fetch():
-    """Newest Solana tokens with pair data (DexScreener)."""
+    """Newest Solana tokens with pair data (cached 15 s; shared by real and simulated sniper)."""
+    if time.monotonic() - _fetch_cache[0] < 15:
+        return _fetch_cache[1]
+    rows = _sniper_fetch()
+    _fetch_cache[:] = [time.monotonic(), rows]
+    return rows
+
+
+def _sniper_fetch():
     mints = []
     for url in SNIPER_FEEDS:
         try:
@@ -419,23 +455,28 @@ def sniper_fetch():
 
 
 def sniper_candidate(p):
+    """New token (5-60 min) with real, broad buying that is not already parabolic."""
     try:
         age_min = (time.time() * 1000 - float(p.get("pairCreatedAt") or 0)) / 60000
         liq = float((p.get("liquidity") or {}).get("usd") or 0)
         fdv = float(p.get("fdv") or 0)
         ch = p.get("priceChange") or {}
-        m5 = ((p.get("txns") or {}).get("m5") or {})
+        tx = p.get("txns") or {}
+        m5, h1 = tx.get("m5") or {}, tx.get("h1") or {}
         buys, sells = int(m5.get("buys") or 0), int(m5.get("sells") or 0)
         vol5 = float((p.get("volume") or {}).get("m5") or 0)
-        return (0 < age_min <= SNIPER_MAX_AGE_MINUTES and liq >= SNIPER_MIN_LIQUIDITY and
-                0 < fdv / liq <= 50 and float(p.get("priceUsd") or 0) > 0 and
-                float(ch.get("m5") or 0) > 0 and buys >= 15 and buys > sells * 1.3 and vol5 >= 5000)
+        m5_change, h1_change = float(ch.get("m5") or 0), float(ch.get("h1") or 0)
+        return (SNIPER_MIN_AGE_MINUTES <= age_min <= SNIPER_MAX_AGE_MINUTES and liq >= SNIPER_MIN_LIQUIDITY and
+                0 < fdv / liq <= 20 and float(p.get("priceUsd") or 0) > 0 and
+                0 < m5_change <= 40 and h1_change <= 300 and
+                buys >= 25 and buys > sells * 1.3 and int(h1.get("buys") or 0) >= 100 and
+                5000 <= vol5 <= liq * 3)
     except (TypeError, ValueError, ZeroDivisionError):
         return False
 
 
 def holders_ok(mint):
-    """Top 10 holders (excluding the biggest account = pool/curve) must own < 30%."""
+    """Top 10 holders (excluding the biggest account = pool/curve) must own < 25%."""
     try:
         supply = int(rpc("getTokenSupply", [mint])["value"]["amount"])
         largest = rpc("getTokenLargestAccounts", [mint])["value"]
@@ -443,7 +484,7 @@ def holders_ok(mint):
         if supply <= 0:
             return False, "supply inválido"
         share = sum(amounts[1:11]) / supply
-        if share >= 0.30:
+        if share >= 0.25:
             return False, "10 maiores donos têm " + format(share * 100, ".0f") + "%"
         return True, ""
     except Exception:
@@ -473,6 +514,8 @@ def sniper_cycle(send, chat):
         safe, why = token_safety(mint)
         if safe:
             safe, why = holders_ok(mint)
+        if safe:
+            safe, why = roundtrip_ok(mint)
         if not safe:
             logging.info("Sniper skipped %s: %s", symbol, why)
             continue

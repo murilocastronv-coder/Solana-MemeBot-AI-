@@ -174,6 +174,35 @@ def reserve(order_id, mint, side):
             "created_at": datetime.now(timezone.utc).isoformat()}
         _save(state)
 
+HISTORY_MAX = 300
+
+
+def _append_history(state, position, mint, pnl_usd, reason=None):
+    import time as _time
+    position = position or {}
+    cost = float(position.get("cost_usd", 0) or 0)
+    opened = float(position.get("opened_at") or 0)
+    state.setdefault("history", []).append({
+        "mint": mint, "symbol": position.get("symbol") or mint[:6], "mode": position.get("mode", "normal"),
+        "cost_usd": round(cost, 4), "pnl_usd": None if pnl_usd is None else round(float(pnl_usd), 4),
+        "reason": reason or position.get("exit_reason") or "?", "closed_at": _time.time(),
+        "minutes": round((_time.time() - opened) / 60, 1) if opened else None})
+    state["history"] = state["history"][-HISTORY_MAX:]
+
+
+def history():
+    with _LOCK:
+        return list(_load().get("history", []))
+
+
+def mark_exit_reason(mint, reason):
+    with _LOCK:
+        state = _load()
+        if mint in state["positions"]:
+            state["positions"][mint]["exit_reason"] = reason
+            _save(state)
+
+
 def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0, pnl_usd=None):
     """Call only after independently verifying finalized on-chain outcome."""
     with _LOCK:
@@ -184,7 +213,8 @@ def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0,
         if position is not None:
             state["positions"][pending["mint"]] = position
         if pending["side"] == "sell":
-            state["positions"].pop(pending["mint"], None)
+            closed = state["positions"].pop(pending["mint"], None)
+            _append_history(state, closed, pending["mint"], pnl_usd)
         state["daily_loss_usd"] += max(0.0, float(realized_loss_usd))
         if pnl_usd is not None:
             state["day_pnl_usd"] = float(state.get("day_pnl_usd", 0.0)) + float(pnl_usd)
@@ -300,6 +330,7 @@ def write_off(mint):
         if position is None:
             return None
         loss = float(position.get("cost_usd", 0) or 0)
+        _append_history(state, position, mint, -loss, "dead")
         state["daily_loss_usd"] += loss
         state["day_pnl_usd"] = float(state.get("day_pnl_usd", 0.0)) - loss
         state["total_pnl_usd"] = float(state.get("total_pnl_usd", 0.0)) - loss
