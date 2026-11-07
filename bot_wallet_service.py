@@ -15,8 +15,6 @@ def wallet_path():
     return Path(raw)
 
 def create_or_get():
-    if not os.getenv("TELEGRAM_CHAT_ID"):
-        raise RuntimeError("Set TELEGRAM_CHAT_ID to the owner's private chat ID first")
     password=os.getenv("BOT_WALLET_ENCRYPTION_PASSPHRASE","")
     if len(password)<24:
         raise RuntimeError("Configure BOT_WALLET_ENCRYPTION_PASSPHRASE (24+ characters) in Render secrets")
