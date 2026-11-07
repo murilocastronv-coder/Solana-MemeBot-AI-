@@ -8,6 +8,7 @@ import live_trade_state as trade_state
 import live_exit_monitor
 import telegram_owner
 from live_swap_executor import configured as swap_configured
+from jupiter_v2_executor import headers as jupiter_headers
 from bot_wallet_service import create_or_get, get_address, export_private_key
 from datetime import datetime,timezone
 app=Flask(__name__)
@@ -225,10 +226,7 @@ def handle(update):
   checks=live_status()
   missing=[]
   if not get_address():missing.append("carteira no disco persistente")
-  # Jupiter supports keyless API access at reduced rate limits.
-  # Public mainnet RPC fallback is configured for basic reads; dedicated RPC recommended for execution.
-  # Private owner is claimed on first /start; group chats are rejected.
-  missing.extend(["assinatura e envio validados", "confirmação on-chain e reconciliação", "posições persistentes e vendas TP/SL", "limite de perdas com proteção contra ordens duplicadas"])
+  missing.extend(["executor Jupiter V2 ainda não integrado ao motor de ordens", "assinatura e envio não testados", "confirmação on-chain e reconciliação não integradas", "compra automática e vendas TP/SL ainda não integradas", "limites de risco e recuperação ainda não testados"])
   send(chat,"⛔ TRADING REAL BLOQUEADO — diagnóstico\nNão executei nenhuma compra.\nPendências:\n• "+"\n• ".join(missing)+"\n\nParâmetros aprovados: US$ 10/compra, TP +15%, SL -8%, 3 posições, perdas máximas US$ 3/dia.\nO botão só poderá iniciar após testes completos. Não envie chaves ou senhas pelo Telegram.")
  elif action in ("live_stop","/parar","/live_off"):
   auto.set_enabled(chat,False)
@@ -240,7 +238,7 @@ def handle(update):
    send(chat,"⚠️ Falha ao salvar parada no disco. Trading real permanece bloqueado no executor; verifique o Render.")
  elif action in ("live_status","/status_real"):
   checks=live_status()
-  send(chat,"📊 TRADING REAL\nStatus: DESATIVADO\nCarteira: "+(get_address() or "não configurada")+"\nAPI de swaps: "+("configurada" if swap_configured() else "não configurada")+"\nAssinatura/envio: BLOQUEADOS até testes e verificações\nCompras e vendas reais: 0 executadas por este bot\nTP +15% | SL -8% | US$ 10 por ordem.")
+  send(chat,"📊 TRADING REAL\nStatus: DESATIVADO\nCarteira: "+(get_address() or "não configurada")+"\nJupiter V2: módulo instalado (acesso keyless disponível; chave opcional)\nExecutor integrado ao trading: NÃO\nAssinatura/envio: BLOQUEADOS até testes e verificações\nCompras e vendas reais automáticas: NÃO ATIVADAS\nTP +15% | SL -8% | US$ 10 por ordem.")
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\nCompra: US$ 10 | TP: +15% | SL: -8%\nSaldo fictício livre: $"+fmt(st["balance"])+"\nPosições automáticas: "+str(st["open"])+" / 3\nResultado realizado: $"+fmt(st["realized"])+"\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
