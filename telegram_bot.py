@@ -212,7 +212,13 @@ def handle(update):
   send(chat,"Carteira pública desvinculada desta sessão.")
  elif action in ("live_start","/iniciar","/live_on"):
   checks=live_status()
-  send(chat,"⛔ TRADING REAL NÃO INICIADO\nA carteira existe, mas o executor de swaps e os controles de segurança ainda não estão implementados. Nenhuma compra foi feita.\nConfiguração prevista: US$ 10 por ordem, TP +15%, SL -8%, máximo 3 posições e limite de perdas US$ 3/dia.\nNão deposite fundos para trading automático até concluir e testar a integração.")
+  missing=[]
+  if not get_address():missing.append("carteira no disco persistente")
+  if not os.getenv("JUPITER_API_KEY"):missing.append("JUPITER_API_KEY")
+  if not os.getenv("SOLANA_RPC_URL"):missing.append("SOLANA_RPC_URL")
+  if not CHAT:missing.append("TELEGRAM_CHAT_ID fixo")
+  missing.extend(["assinatura e envio validados", "confirmação on-chain e reconciliação", "posições persistentes e vendas TP/SL", "limite de perdas com proteção contra ordens duplicadas"])
+  send(chat,"⛔ TRADING REAL BLOQUEADO — diagnóstico\nNão executei nenhuma compra.\nPendências:\n• "+"\n• ".join(missing)+"\n\nParâmetros aprovados: US$ 10/compra, TP +15%, SL -8%, 3 posições, perdas máximas US$ 3/dia.\nO botão só poderá iniciar após testes completos. Não envie chaves ou senhas pelo Telegram.")
  elif action in ("live_stop","/parar","/live_off"):
   auto.set_enabled(chat,False)
   send(chat,"⏹️ Trading automático desativado. Nenhuma compra ou venda real estava habilitada.")
