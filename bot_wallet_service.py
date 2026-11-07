@@ -46,3 +46,19 @@ def get_address():
     if not path.exists():return None
     data=json.loads(path.read_text(encoding="utf-8"))
     return data["public_address"] if data.get("version")==1 else None
+
+def export_private_key(password):
+    """Decrypt only after passphrase validation; caller must never log output."""
+    from cryptography.fernet import InvalidToken
+    data=json.loads(wallet_path().read_text(encoding="utf-8"))
+    if data.get("version") != 1: raise ValueError("Invalid wallet")
+    salt=base64.b64decode(data["salt"],validate=True)
+    derived=Scrypt(salt=salt,length=32,n=2**15,r=8,p=1).derive(password.encode())
+    try:
+        secret=Fernet(base64.urlsafe_b64encode(derived)).decrypt(data["ciphertext"].encode())
+    except InvalidToken:
+        raise ValueError("Invalid password or wallet")
+    wallet=Keypair.from_bytes(secret)
+    if str(wallet.pubkey()) != data["public_address"]:
+        raise ValueError("Wallet address mismatch")
+    return str(wallet.pubkey()), str(wallet)
