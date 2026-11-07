@@ -1,6 +1,7 @@
 """Telegram Solana token radar. Read-only, no wallet credentials or trades."""
 import os,time,logging,threading,requests
 from flask import Flask
+import paper_positions as paper
 from datetime import datetime,timezone
 app=Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +30,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🔔 Alertas","callback_data":"alerts"},{"text":"⚙️ TP / SL","callback_data":"settings"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"📊 Simulações","callback_data":"positions"},{"text":"🔔 Alertas","callback_data":"alerts"}]]
 def menu(chat):
  send(chat,"🤖 Solana MemeBot AI\nRadar de tokens, contratos para copiar e TP/SL indicativos. Nenhuma compra é executada.",keyboard())
 def market_json(url):
@@ -152,6 +153,24 @@ def handle(update):
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
+ elif action in ("positions","/posicoes"):
+  items=paper.list_open(chat)
+  if not items:send(chat,"Nenhuma simulação aberta. Use /simular CONTRATO PRECO_ENTRADA VALOR_USD")
+  else:
+   for mint,p in items:send(chat,"📊 SIMULAÇÃO\\nContrato: "+mint+"\\nEntrada: $"+fmt(p["entry"])+"\\nTP: $"+fmt(p["entry"]*(1+p["tp"]/100))+"\\nSL: $"+fmt(p["entry"]*(1-p["sl"]/100))+"\\n/remover "+mint)
+ elif action=="/simular":
+  parts=(msg or {}).get("text","").split()
+  if len(parts)!=4:send(chat,"Uso: /simular CONTRATO PRECO_ENTRADA VALOR_USD\\nExemplo: /simular <contrato> 0.000012 2")
+  else:
+   try:
+    mint=parts[1];entry=float(parts[2]);usd=float(parts[3])
+    paper.add(chat,mint,entry,usd,TP,SL)
+    send(chat,"✅ Simulação registrada (nenhuma compra real).\\nContrato: "+mint+"\\nTP: $"+fmt(entry*(1+TP/100))+"\\nSL: $"+fmt(entry*(1-SL/100))+"\\nAvisarei quando o preço observado atingir um alvo.")
+   except (ValueError,OverflowError) as exc:send(chat,"Erro: "+str(exc))
+ elif action=="/remover":
+  parts=(msg or {}).get("text","").split()
+  if len(parts)!=2:send(chat,"Uso: /remover CONTRATO")
+  else:send(chat,"Simulação removida." if paper.remove(chat,parts[1]) else "Contrato não encontrado.")
  elif action in ("alerts","/alerts"):
   send(chat,"🔔 Alertas automáticos: "+("ATIVADOS" if ALERTS_ENABLED else "PAUSADOS")+"\nVarredura a cada "+str(INTERVAL)+" segundos enquanto o serviço estiver ativo.\nUse /pausar ou /ativar.")
  elif action=="/pausar":
@@ -162,11 +181,17 @@ def handle(update):
   send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nLiquidez mínima: $"+str(MIN_LIQ)+"\nVolume 24h mínimo: $"+str(MIN_VOLUME)+"\nIdade mínima: "+str(MIN_AGE_HOURS)+" horas\nFDV/liquidez máximo: "+str(MAX_FDV_LIQ)+"\nAlertas por varredura: "+str(MAX_ALERTS)+"\nSem auditoria on-chain. Ajuste no Render.")
  else:menu(chat)
 def loop():
- offset=None;next_scan=0
+ offset=None;next_scan=0;next_positions=0
  while True:
   try:
    if time.monotonic()>=next_scan:
-    scan(True);next_scan=time.monotonic()+INTERVAL
+    next_scan=time.monotonic()+INTERVAL
+    try:scan(True)
+    except Exception:logging.exception("automatic opportunity scan failed")
+   if active_chat() and time.monotonic()>=next_positions:
+    next_positions=time.monotonic()+60
+    try:paper.check(active_chat(),send,fmt)
+    except Exception:logging.exception("paper position monitoring failed")
    if TOKEN:
     data=request_api("getUpdates",offset=offset,timeout=15,allowed_updates=["message","callback_query"])
     for u in data.get("result",[]):
