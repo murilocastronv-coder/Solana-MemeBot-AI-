@@ -2,6 +2,7 @@
 import os,time,logging,threading,requests
 from flask import Flask
 import paper_positions as paper
+import paper_auto as auto
 from datetime import datetime,timezone
 app=Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -30,9 +31,9 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"📊 Simulações","callback_data":"positions"},{"text":"🔔 Alertas","callback_data":"alerts"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}]]
 def menu(chat):
- send(chat,"🤖 Solana MemeBot AI\nRadar de tokens, contratos para copiar e TP/SL indicativos. Nenhuma compra é executada.",keyboard())
+ send(chat,"🤖 Solana MemeBot AI\nRadar de tokens e simulação automática. Use /auto_on para iniciar operações fictícias de US$ 10. Nenhuma compra real é executada.",keyboard())
 def market_json(url):
  last_error=None
  for attempt in range(3):
@@ -112,6 +113,7 @@ def qualifies(p):
 def scan(alert=False):
  global last
  rows=fetch();last=rows
+ if active_chat():auto.enter(active_chat(),rows,send,fmt)
  if alert and active_chat() and ALERTS_ENABLED:
   sent=0
   for p in reversed(rows):
@@ -153,6 +155,13 @@ def handle(update):
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
+ elif action in ("autostatus","/auto","/autostatus"):
+  st=auto.status(chat)
+  send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
+ elif action=="/auto_on":
+  auto.set_enabled(chat,True);send(chat,"🧪 Trading SIMULADO ATIVADO. Compras fictícias de $10, até 3 posições, TP +15%, SL -8%. Não há ordens reais.")
+ elif action=="/auto_off":
+  auto.set_enabled(chat,False);send(chat,"⏸️ Trading simulado pausado. Nenhuma ordem real existe. Posições fictícias não serão monitoradas até /auto_on.")
  elif action in ("positions","/posicoes"):
   items=paper.list_open(chat)
   if not items:send(chat,"Nenhuma simulação aberta. Use /simular CONTRATO PRECO_ENTRADA VALOR_USD")
@@ -190,6 +199,8 @@ def loop():
     except Exception:logging.exception("automatic opportunity scan failed")
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+60
+    try:auto.exit_positions(active_chat(),send,fmt)
+    except Exception:logging.exception("auto paper exit failed")
     try:paper.check(active_chat(),send,fmt)
     except Exception:logging.exception("paper position monitoring failed")
    if TOKEN:
