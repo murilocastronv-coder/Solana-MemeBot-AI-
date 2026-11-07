@@ -5,6 +5,7 @@ import paper_positions as paper
 import paper_auto as auto
 from live_preflight import live_status, risk_settings
 import live_trade_state as trade_state
+import live_exit_monitor
 from live_swap_executor import configured as swap_configured
 from bot_wallet_service import create_or_get, get_address, export_private_key
 from datetime import datetime,timezone
@@ -276,6 +277,8 @@ def loop():
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+60
 
+    try:live_exit_monitor.monitor(send,active_chat())
+    except Exception:logging.exception("live exit quote monitoring failed")
     try:paper.check(active_chat(),send,fmt)
     except Exception:logging.exception("paper position monitoring failed")
    if TOKEN:
