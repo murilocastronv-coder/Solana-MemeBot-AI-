@@ -307,7 +307,7 @@ def handle(update):
   st=btc_perps.summary()
   send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x · "+("💵 DINHEIRO REAL" if st["mode"]=="real" else "🧪 SIMULAÇÃO com preço real")+" · gráfico "+st["timeframe"]+"\nRompimento de 20 velas a favor da média de 200 + stop por ATR e stop móvel. LONG e SHORT, 20% da conta por ordem. Decide a cada vela fechada e controla o stop a cada ~20 s.",keyboard())
  elif action in ("backtest","/backtest"):
-  send(chat,"⏳ Rodando backtest dos últimos 30 dias (baixando ~9 mil velas do BTC)... leva até 1 minuto.")
+  send(chat,"⏳ Rodando backtest da estratégia M5 nos últimos 30 dias (~9 mil velas do BTC)... leva até 1 minuto.")
   def run_bt():
    try:
     import backtest
@@ -319,10 +319,10 @@ def handle(update):
   st=btc_perps.summary()
   if st["mode"]=="real" and action=="strat_scalp":
    lev=st["leverage"]
-   send(chat,"⚠️ SCALPING M5 COM DINHEIRO REAL ("+str(lev)+"x)\nCada operação dura ~5 min. Taxa da Jupiter por ida e volta ≈ 0,12% da posição = ~"+format(0.12*lev,".1f")+"% da garantia. O movimento médio de uma vela de 5 min do BTC é parecido com isso: as taxas podem comer o lucro e a conta pode cair mesmo acertando mais da metade.\nProteções: só opera com sinal + volatilidade suficiente, stop 1×ATR, mantém se a vela seguinte confirmar (economiza taxa), pausa no dia se perder 10%.\nRecomendado: testar antes no 🧪 Modo simulação ou usar 2–3x.",[[{"text":"✅ Confirmar scalping REAL","callback_data":"strat_scalp_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
+   send(chat,"⚠️ SCALPING M5 COM DINHEIRO REAL ("+str(lev)+"x)\nCada operação dura no máximo 5 min. Custos por ida e volta ≈ 0,16% da posição (taxa + deslize). Rode o 📊 Backtest antes: se ficou 🔴, a estratégia tende a perder dinheiro.\nRecomendado: 🧪 Modo simulação.",[[{"text":"✅ Confirmar scalping REAL","callback_data":"strat_scalp_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
   else:
    btc_perps.set_option("strategy","scalp")
-   send(chat,"⚡ SCALPING M5 ATIVO ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+")\nA cada vela de 5 min fechada: se a tendência (EMA 20/50) e a vela anterior mostram força (corpo ≥ ½ ATR, fechou perto da ponta, RSI sem exagero) e o BTC está se mexendo o bastante, abre LONG/SHORT e FECHA no fim da vela. Se a próxima vela confirmar a mesma direção, mantém (economiza taxa). Stop de proteção 1×ATR. Pausa no dia se perder 10%. Resumo a cada 1 hora.",keyboard())
+   send(chat,"⚡ SCALPING M5 ATIVO ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+")\nCOMPRA: EMA 9 > EMA 21, RSI 52–70, volume acima da média de 20 velas, vela de alta, ATR suficiente e preço perto da EMA 9.\nVENDA (short): EMA 9 < EMA 21, RSI 30–48, volume acima da média, vela de baixa, ATR suficiente.\n10% da conta por operação · stop 0,25% · alvo 0,40% · FECHA no fim da vela sempre · para no dia com −3% · pausa 1 h após 3 perdas seguidas.",keyboard())
  elif action=="strat_trend":
   btc_perps.set_option("strategy","trend");send(chat,"📈 Estratégia de tendência ativa (rompimento + stop móvel).",keyboard())
  elif action in ("tf_1h","tf_5m"):

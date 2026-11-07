@@ -27,7 +27,8 @@ def fetch_history(interval, days=DAYS, extra=250):
                           "&limit=1000&endTime=" + str(end))
             if not rows:
                 break
-            out = [{"t": int(r[0]) // 1000, "o": float(r[1]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4])}
+            out = [{"t": int(r[0]) // 1000, "o": float(r[1]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4]),
+                        "v": float(r[5])}
                    for r in rows] + out
             end = int(rows[0][0]) - 1
     except Exception:
@@ -38,7 +39,8 @@ def fetch_history(interval, days=DAYS, extra=250):
                           "&start=" + str(start_s) + "&end=" + str(end_s))
             if not rows:
                 break
-            out = sorted(({"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "o": float(r[3]), "c": float(r[4])}
+            out = sorted(({"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "o": float(r[3]), "c": float(r[4]),
+                          "v": float(r[5])}
                           for r in rows), key=lambda c: c["t"]) + out
             end_s = start_s
     seen, uniq = set(), []
@@ -79,7 +81,9 @@ class Account:
     def report(self):
         n = len(self.trades)
         wins = sum(1 for t in self.trades if t > 0)
-        return {"leverage": self.lev, "trades": n, "win_rate": wins / n * 100 if n else 0.0,
+        return {"leverage": self.lev, "trades": n, "wins": wins, "losses": n - wins,
+                "win_rate": wins / n * 100 if n else 0.0, "pnl_usd": self.equity - START,
+                "gross_usd": self.equity - START + self.fees,
                 "final": self.equity, "pnl_pct": (self.equity / START - 1) * 100, "fees": self.fees,
                 "max_dd": self.max_dd * 100, "best": max(self.trades, default=0.0), "worst": min(self.trades, default=0.0)}
 
@@ -92,43 +96,54 @@ def _stop_hit(pos, candle):
     return None
 
 
-def scalp_signals(candles, warmup=120):
+SLIPPAGE = 0.0002   # 0.02% per side (spread + slippage), on top of the 0.06% fee
+
+
+def scalp_signals(candles, warmup=60):
     return [b.scalp_signal(candles[i - warmup + 1:i + 1]) if i >= warmup - 1 else (None, 0.0, "")
             for i in range(len(candles))]
 
 
-def run_scalp(candles, leverage, warmup=120, sigs=None):
-    """M5 momentum scalping: signal on candle i, enter at i+1 open, exit at i+1 close (or stop)."""
+def run_scalp(candles, leverage=1, warmup=60, sigs=None, sl=None, tp=None, fee_mult=1.0, slip_mult=1.0):
+    """Owner's M5 strategy: signal on closed candle i, enter at candle i+1 open, exit inside candle i+1 at
+    SL/TP (if both are touched in the same candle the stop counts — worst case) or at its close.
+    10% of equity per trade, 3% daily loss stop, 1-hour pause after 3 consecutive losses."""
     sigs = sigs or scalp_signals(candles, warmup)
+    sl = b.SCALP_SL_PCT if sl is None else sl
+    tp = b.SCALP_TP_PCT if tp is None else tp
+    fee, slip = b.FEE_RATE * fee_mult, SLIPPAGE * slip_mult
     acc = Account(leverage)
-    pos, day, day_start, paused = None, None, START, None
+    day, day_start, streak, pause_until = None, START, 0, 0
     for i in range(warmup, len(candles) - 1):
-        side, a, _ = sigs[i]
+        side, _, _ = sigs[i]
         nxt = candles[i + 1]
         d = time.strftime("%Y-%m-%d", time.gmtime(nxt["t"]))
         if d != day:
-            day, day_start, paused = d, acc.equity, None
-        if paused == d:
+            day, day_start = d, acc.equity
+        if not side or nxt["t"] < pause_until or acc.equity <= day_start * (1 - b.SCALP_DAILY_LOSS):
             continue
-        if not pos:
-            if not side or a <= 0:
-                continue
-            pos = acc.open(side, nxt["o"], a, b.SCALP_STOP_ATR)
-            if not pos:
-                continue
-            pos["open_i"] = i + 1
-        exit_price = _stop_hit(pos, nxt)
-        if exit_price is not None:
-            acc.close(pos, exit_price, (i + 2 - pos["open_i"]) * 5 / 60)
-            pos = None
+        size = acc.equity * b.SCALP_FRACTION * leverage
+        if size < 1:
+            break
+        entry = nxt["o"]
+        if side == "long":
+            stop, target = entry * (1 - sl), entry * (1 + tp)
+            exit_price = stop if nxt["l"] <= stop else target if nxt["h"] >= target else nxt["c"]
+            move = exit_price / entry - 1
         else:
-            # keep through the next candle only if it signals the same direction; else exit at this close
-            next_side = sigs[i + 1][0]
-            if next_side != pos["side"]:
-                acc.close(pos, nxt["c"], (i + 2 - pos["open_i"]) * 5 / 60)
-                pos = None
-        if acc.equity <= day_start * (1 - b.SCALP_DAILY_LOSS):
-            paused = d
+            stop, target = entry * (1 + sl), entry * (1 - tp)
+            exit_price = stop if nxt["h"] >= stop else target if nxt["l"] <= target else nxt["c"]
+            move = 1 - exit_price / entry
+        cost = size * (fee * 2 + slip * 2)
+        pnl = size * move - cost
+        acc.equity += pnl
+        acc.fees += cost
+        acc.trades.append(pnl)
+        acc.peak = max(acc.peak, acc.equity)
+        acc.max_dd = max(acc.max_dd, (acc.peak - acc.equity) / acc.peak if acc.peak else 0)
+        streak = streak + 1 if pnl <= 0 else 0
+        if streak >= b.SCALP_MAX_LOSS_STREAK:
+            pause_until, streak = nxt["t"] + b.SCALP_STREAK_PAUSE, 0
     return acc.report()
 
 
@@ -169,37 +184,56 @@ def run_trend(candles, leverage, warmup=250, sigs=None):
     return acc.report()
 
 
-LEVERAGES = (2, 3, 5, 10)
+SL_GRID = (0.0015, 0.0020, 0.0025, 0.0030)
+TP_GRID = (0.0025, 0.0035, 0.0040, 0.0050)
+LEVERAGES = (1,)
 
 
-def _line(r):
-    return (format(r["leverage"], "d") + "x: " + ("🟢 " if r["pnl_pct"] > 0 else "🔴 ") +
-            format(r["pnl_pct"], "+.1f") + "% ($100 → $" + format(r["final"], ".2f") + ") | " +
-            str(r["trades"]) + " ops | acerto " + format(r["win_rate"], ".0f") + "% | taxas $" +
-            format(r["fees"], ".2f") + " | queda máx " + format(r["max_dd"], ".0f") + "%")
+def _money(v):
+    return ("+" if v >= 0 else "−") + "$" + format(abs(v), ".2f")
 
 
-def report_text(m5, h1, days=DAYS):
-    lines = ["📊 BACKTEST — últimos " + str(days) + " dias de BTC (com taxas da Jupiter)",
-             "Começando com $100, 20% da conta por ordem. Entrada na abertura da vela seguinte, sem olhar o futuro.", ""]
-    if m5:
-        move = (m5[-1]["c"] / m5[-1 - min(len(m5) - 1, days * 288)]["c"] - 1) * 100
-        lines.append("BTC no período: " + format(move, "+.1f") + "%")
-        lines.append("")
-        lines.append("⚡ SCALPING M5 (fecha no fim da vela):")
-        sigs = scalp_signals(m5)
-        lines += ["  " + _line(run_scalp(m5, lev, sigs=sigs)) for lev in LEVERAGES]
-    if h1:
-        lines.append("")
-        lines.append("📈 TENDÊNCIA 1h (rompimento + stop móvel):")
-        sigs = trend_signals(h1)
-        lines += ["  " + _line(run_trend(h1, lev, sigs=sigs)) for lev in LEVERAGES]
-    lines += ["", "⚠️ Resultado passado não garante o futuro. 30 dias é pouco: use como sinal de alerta, não como promessa.",
-              "Se a estratégia ficou 🔴 com taxas, ela tende a perder dinheiro com dinheiro real."]
+def _pct(x):
+    return format(x * 100, ".2f").rstrip("0").rstrip(".") + "%"
+
+
+def report_text(m5, h1=None, days=DAYS):
+    lines = ["📊 BACKTEST — ESTRATÉGIA M5 (EMA 9/21 + RSI + Volume + ATR), últimos " + str(days) + " dias de BTC",
+             "$100 inicial · $10 por operação (10% da conta) · sem alavancagem · fecha no fim da vela",
+             "Custos: taxa 0,06% + deslize 0,02% em cada lado. Entra na abertura da vela seguinte ao sinal.", ""]
+    if not m5:
+        return "\n".join(lines + ["Sem dados de preço."])
+    move = (m5[-1]["c"] / m5[-1 - min(len(m5) - 1, days * 288)]["c"] - 1) * 100
+    sigs = scalp_signals(m5)
+    r = run_scalp(m5, 1, sigs=sigs)
+    win = r["pnl_usd"] > 0
+    lines += ["💵 P/L TOTAL: " + ("🟢 LUCRO " if win else "🔴 PREJUÍZO ") + _money(r["pnl_usd"]) +
+              " (" + format(r["pnl_pct"], "+.2f") + "%) · $100 → $" + format(r["final"], ".2f"),
+              "Stop 0,25% / alvo 0,40% (padrão)",
+              "Operações: " + str(r["trades"]) + " (" + str(r["wins"]) + " ganhos / " + str(r["losses"]) + " perdas) · acerto " +
+              format(r["win_rate"], ".0f") + "%",
+              "Lucro bruto (sem custos): " + _money(r["gross_usd"]) + " · custos: $" + format(r["fees"], ".2f"),
+              "Maior ganho " + _money(r["best"]) + " · maior perda " + _money(r["worst"]) + " · queda máx " +
+              format(r["max_dd"], ".1f") + "%",
+              "Comparação: BTC no período " + format(move, "+.1f") + "% (comprar e segurar $100 → $" +
+              format(100 * (1 + move / 100), ".2f") + ")", ""]
+    grid = []
+    for sl in SL_GRID:
+        for tp in TP_GRID:
+            g = run_scalp(m5, 1, sigs=sigs, sl=sl, tp=tp)
+            grid.append((g["pnl_usd"], sl, tp, g))
+    grid.sort(key=lambda x: -x[0])
+    lines.append("🔧 Outras combinações de stop/alvo (P/L em " + str(days) + " dias):")
+    for pnl, sl, tp, g in grid[:5]:
+        lines.append("  SL " + _pct(sl) + " / TP " + _pct(tp) + ": " + ("🟢 " if pnl > 0 else "🔴 ") + _money(pnl) +
+                     " · acerto " + format(g["win_rate"], ".0f") + "%")
+    lines.append("  … pior: SL " + _pct(grid[-1][1]) + " / TP " + _pct(grid[-1][2]) + ": " + _money(grid[-1][0]))
+    stress = run_scalp(m5, 1, sigs=sigs, fee_mult=2, slip_mult=2)
+    lines += ["", "🧱 Com taxas e deslize dobrados: " + ("🟢 " if stress["pnl_usd"] > 0 else "🔴 ") + _money(stress["pnl_usd"]),
+              "", "⚠️ Resultado passado não garante o futuro. Escolher o melhor stop/alvo olhando o mesmo período "
+              "superestima o resultado. Se ficou 🔴, a estratégia tende a perder com dinheiro real."]
     return "\n".join(lines)
 
 
 def run(days=DAYS):
-    m5 = fetch_history("5m", days, extra=150)
-    h1 = fetch_history("1h", days, extra=260)
-    return report_text(m5, h1, days)
+    return report_text(fetch_history("5m", days, extra=80), None, days)
