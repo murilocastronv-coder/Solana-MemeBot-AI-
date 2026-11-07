@@ -2,7 +2,7 @@
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from wallet_monitor import wallet_public_address, rpc_balance_sol
 import requests
 
 LOG = logging.getLogger("memebot")
@@ -87,6 +87,15 @@ def main():
     LOG.warning("READ ONLY. No wallet connection or live trading. Trading enabled: %s", TRADING_ENABLED)
     while True:
         try:
+            address = wallet_public_address()
+            if address:
+                try:
+                    balance = rpc_balance_sol(address)
+                    LOG.info("wallet_read_only_balance_sol=%.9f", balance)
+                except (requests.RequestException, ValueError, TypeError, KeyError, RuntimeError) as exc:
+                    LOG.warning("wallet_balance_unavailable=%s", exc)
+            else:
+                LOG.info("wallet_public_address_not_configured")
             for result in scan():
                 LOG.info("token_assessment=%s", result)
         except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
