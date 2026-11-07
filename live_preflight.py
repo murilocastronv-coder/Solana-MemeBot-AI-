@@ -27,5 +27,5 @@ def require_live_ready():
     raise RuntimeError("Live trading is unavailable: no authorized signer or audited execution pipeline")
 
 def risk_settings():
-    return {"order_usd": 2.0, "max_positions": 3, "stop_loss_percent": 8.0,
+    return {"order_usd": 10.0, "max_positions": 3, "stop_loss_percent": 8.0,
             "take_profit_percent": 15.0, "daily_loss_limit_usd": 3.0}
