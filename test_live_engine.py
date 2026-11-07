@@ -76,17 +76,17 @@ class LiveEngineTests(unittest.TestCase):
         signal = {"action": "sell", "reason": "take_profit", "change_pct": 20.0}
         position = state._load()["positions"][MINT]
         with patch("live_engine.sell_signals", return_value=[(MINT, position, signal)]), \
-             patch("live_trade_state._sol_to_usd", return_value=46.0):
+             patch("live_trade_state._sol_to_usd", return_value=23.0):
             live_engine.exit_cycle(self.send, "1")
         st = state.status()
         self.assertEqual((st["positions"], st["pending"], st["daily_loss_usd"]), (0, 0, 0.0))
         self.assertTrue(st["enabled"])
         msg = self.sent[-1]
-        for part in ("LUCRO", "VENDEU BONK", "US$ 40.00", "US$ 46.00", "+6.00 USD (+15.0%)", "P/L total: +6.00", "1/1"):
+        for part in ("LUCRO", "VENDEU BONK", "US$ 20.00", "US$ 23.00", "+3.00 USD (+15.0%)", "P/L total: +3.00", "1/1"):
             self.assertIn(part, msg)
         self.assertIn("COMPROU BONK", self.sent[1])
-        self.assertEqual(state.pnl_summary()["total_pnl_usd"], 6.0)
-        self.assertIn("US$ 40.00 de BONK (20% da conta de US$ 200.00)", self.sent[0])
+        self.assertEqual(state.pnl_summary()["total_pnl_usd"], 3.0)
+        self.assertIn("US$ 20.00 de BONK (10% da conta de US$ 200.00)", self.sent[0])
         self.assertEqual(state.daily_loss_limit(), 30.0)
 
     def test_reports_why_nothing_was_bought(self):
