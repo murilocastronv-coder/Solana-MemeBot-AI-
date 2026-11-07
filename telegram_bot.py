@@ -6,6 +6,7 @@ app=Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
 CHAT=os.getenv("TELEGRAM_CHAT_ID","")
+PRIVATE_CHAT=None  # First private /start after process startup; resets on restart.
 INTERVAL=max(60,int(os.getenv("SCAN_INTERVAL_SECONDS","300")))
 TP=float(os.getenv("TP_PERCENT","15"))
 SL=float(os.getenv("SL_PERCENT","8"))
@@ -52,21 +53,25 @@ def message(p):
  "🛑 SL -"+str(SL)+"%: "+sl+"\n"+
  "💧 Liquidez: $"+fmt(liq)+"\n"+
  "⚠️ Não auditado. Risco de scam/rug pull; TP/SL não são ordens.")
+def active_chat():
+ return CHAT or PRIVATE_CHAT
+
 def scan(alert=False):
  global last
  rows=fetch();last=rows
- if alert and CHAT:
+ if alert and active_chat():
   for p in reversed(rows):
    mint=p.get("baseToken",{}).get("address")
    if mint in seen:continue
    seen.add(mint)
    if float(p.get("liquidity",{}).get("usd") or 0)>=MIN_LIQ:
-    send(CHAT,"🔔 Token detectado (não é recomendação):\n"+message(p))
+    send(active_chat(),"🔔 Token detectado (não é recomendação):\n"+message(p))
   if len(seen)>2000:seen.clear()
  return rows
 def authorized(chat):
- return bool(CHAT) and str(chat)==str(CHAT)
+ return bool(active_chat()) and str(chat)==str(active_chat())
 def handle(update):
+ global PRIVATE_CHAT
  msg=update.get("message");cb=update.get("callback_query")
  if cb:
   chat=cb.get("message",{}).get("chat",{}).get("id");action=cb.get("data","")
@@ -74,10 +79,15 @@ def handle(update):
  else:
   chat=(msg or {}).get("chat",{}).get("id");action=(msg or {}).get("text","").split(" ")[0]
  if not chat:return
+ chat_type=(cb.get("message",{}).get("chat",{}).get("type") if cb else (msg or {}).get("chat",{}).get("type"))
+ if chat_type!="private":return
+ if not CHAT and PRIVATE_CHAT is None and action in ("/start","/menu"):
+  PRIVATE_CHAT=str(chat)
+  logging.info("Private Telegram chat registered in memory; will reset on restart")
  if action=="/id":
-  send(chat,"Seu chat ID: "+str(chat)+"\nConfigure TELEGRAM_CHAT_ID no Render para restringir o acesso.");return
+  send(chat,"Seu chat ID privado: "+str(chat)+"\nNão é necessário configurar Chat ID para o modo temporário.");return
  if not authorized(chat):
-  send(chat,"Acesso não autorizado. Configure TELEGRAM_CHAT_ID no Render. Nenhuma carteira está conectada.");return
+  send(chat,"Este bot já está vinculado a outra conversa privada nesta execução. Se você é o proprietário, configure TELEGRAM_CHAT_ID no Render. Nenhuma carteira está conectada.");return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("scan","/scan"):
   try:
@@ -105,7 +115,7 @@ def loop():
    else:time.sleep(10)
   except Exception:logging.exception("telegram worker error");time.sleep(10)
 @app.get("/")
-def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN and CHAT),"trading":False}
+def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":False}
 if __name__=="__main__":
  if TOKEN:threading.Thread(target=loop,daemon=True).start()
  else:logging.warning("Missing TELEGRAM_BOT_TOKEN; worker not started")
