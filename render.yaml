@@ -1,0 +1,16 @@
+services:
+  - type: worker
+    name: solana-memebot-monitor
+    runtime: python
+    plan: starter
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    autoDeployTrigger: off
+    envVars:
+      - key: SCAN_INTERVAL_SECONDS
+        value: "180"
+      - key: MIN_LIQUIDITY_USD
+        value: "25000"
+      - key: MIN_PAIR_AGE_HOURS
+        value: "24"
