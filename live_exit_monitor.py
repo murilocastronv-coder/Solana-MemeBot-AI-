@@ -10,6 +10,8 @@ import live_trade_state
 from jupiter_v2_executor import order, SOL_MINT, USDC_MINT
 
 _last_alert = {}
+_quote_fail_since = {}  # mint -> monotonic time quotes started failing
+DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
 SNIPER_MAX_HOLD_SECONDS = 45 * 60  # sniper trade that never took off is closed
 
@@ -40,19 +42,35 @@ def _evaluate():
                 signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0))
             if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
                 live_trade_state.update_peak(mint, signal["peak_ratio"])
+            _quote_fail_since.pop(mint, None)
             yield mint, position, signal
         except Exception:
             logging.warning("Live position quote/monitoring unavailable for mint %s", mint[:8])
+            # Dead token (rug / no liquidity): Jupiter works for SOL but has no route for it.
+            if not _jupiter_healthy():
+                _quote_fail_since.pop(mint, None)
+                continue
+            since = _quote_fail_since.setdefault(mint, time.monotonic())
+            if time.monotonic() - since >= DEAD_AFTER_SECONDS:
+                yield mint, position, {"action": "write_off", "reason": "dead", "change_pct": -100.0}
+
+def _jupiter_healthy():
+    try:
+        return int(order(SOL_MINT, USDC_MINT, 100_000_000)["outAmount"]) > 0
+    except Exception:
+        return False
 
 def sell_signals():
-    """Positions whose executable quote hit TP or SL (used by live_engine)."""
-    return [(m, p, s) for m, p, s in _evaluate() if s["action"] == "sell"]
+    """Positions to exit: TP/SL/time stop ("sell") or dead tokens ("write_off")."""
+    return [(m, p, s) for m, p, s in _evaluate() if s["action"] in ("sell", "write_off")]
 
 def monitor(send, chat):
     """Alert-only mode, used while real trading is not active."""
     if not chat:
         return
     for mint, position, signal in sell_signals():
+        if signal["action"] != "sell":
+            continue
         key = (mint, signal["reason"])
         now = time.monotonic()
         if now - _last_alert.get(key, 0) < 900:

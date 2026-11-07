@@ -284,6 +284,40 @@ def _sol_to_usd(lamports):
     return int(order(SOL_MINT, USDC_MINT, int(lamports))["outAmount"]) / 1_000_000
 
 
+def set_position_amount(mint, amount_raw):
+    """Track the amount actually held (some tokens charge transfer fees)."""
+    with _LOCK:
+        state = _load()
+        if mint in state["positions"] and int(amount_raw) > 0:
+            state["positions"][mint]["token_amount_raw"] = int(amount_raw)
+            _save(state)
+
+def write_off(mint):
+    """Close a worthless position (rug/no route) as a full loss."""
+    with _LOCK:
+        state = _load()
+        position = state["positions"].pop(mint, None)
+        if position is None:
+            return None
+        loss = float(position.get("cost_usd", 0) or 0)
+        state["daily_loss_usd"] += loss
+        state["day_pnl_usd"] = float(state.get("day_pnl_usd", 0.0)) - loss
+        state["total_pnl_usd"] = float(state.get("total_pnl_usd", 0.0)) - loss
+        state["trades_closed"] = int(state.get("trades_closed", 0)) + 1
+        if state["daily_loss_usd"] >= _loss_limit(state):
+            state["enabled"] = False
+            state["halted"] = True
+        _save(state)
+        return {"cost_usd": loss, "halted": state["halted"]}
+
+def drop_position(mint):
+    """Wallet no longer holds the token (sold outside the bot or rugged)."""
+    with _LOCK:
+        state = _load()
+        position = state["positions"].pop(mint, None)
+        _save(state)
+        return position
+
 def discard_pending(order_id):
     """Drop a reservation whose transaction verifiably never changed balances."""
     with _LOCK:

@@ -10,7 +10,7 @@ from decimal import Decimal, ROUND_DOWN
 from solders.pubkey import Pubkey
 import live_trade_state as state
 import telegram_owner
-from jupiter_v2_executor import order, sign_order, execute_signed, USDC_MINT, SOL_MINT
+from jupiter_v2_executor import order, sign_order, execute_signed, USDC_MINT, SOL_MINT, OrderError
 from solana_settlement import wait_for_finalized, get_token_balance, get_sol_balance
 
 class TradingNotReady(RuntimeError):
@@ -102,15 +102,23 @@ def submit_swap(mint, side, amount_raw, wallet_address):
     # From this point, failures require explicit reconciliation; do not
     # automatically delete the pending order or resend the transaction.
     input_mint, output_mint = (SOL_MINT, mint) if side == "buy" else (mint, SOL_MINT)
+    stage = "quoting"
     try:
         before = get_token_balance(wallet_address, mint)
         before_sol = get_sol_balance(wallet_address)
         state.annotate_pending(order_id, before_token_raw=before, before_sol_raw=before_sol, input_amount_raw=swap_amount, cost_usd=order_usd, stage="quoting")
         response = order(input_mint, output_mint, swap_amount, taker=wallet_address)
+        stage = "signing"
         state.annotate_pending(order_id, request_id=response["requestId"], stage="signing")
         signed = sign_order(response, os.environ["BOT_WALLET_ENCRYPTION_PASSPHRASE"])
         state.annotate_pending(order_id, stage="submitting")
-        result = execute_signed(signed, response["requestId"])
+        stage = "submitting"
+        try:
+            result = execute_signed(signed, response["requestId"])
+        except OrderError:
+            stage = "rejected"  # Jupiter answered explicitly that the swap failed: nothing landed
+            raise
+        stage = "submitted"
         state.annotate_pending(order_id, signature=result["signature"], stage="submitted")
         finalized = wait_for_finalized(result["signature"])
         state.annotate_pending(order_id, stage="finalized")
@@ -124,6 +132,11 @@ def submit_swap(mint, side, amount_raw, wallet_address):
                 "before_token_raw": before, "after_token_raw": after,
                 "input_amount_raw": swap_amount, "input_mint": input_mint, "output_mint": output_mint,
                 "reconciliation_required": True}
-    except Exception:
-        # Do not log credentials or signed transactions.
-        raise TradingNotReady("Order outcome uncertain or failed; pending reservation retained. Reconcile before retrying.") from None
+    except Exception as exc:
+        # Never include credentials or signed transactions in the reason.
+        reason = type(exc).__name__ + ": " + str(exc)[:160]
+        if stage in ("quoting", "signing", "rejected"):
+            # Nothing was sent (or Jupiter confirmed failure): release immediately.
+            state.discard_pending(order_id)
+            raise TradingNotReady("Não enviada (" + stage + "): " + reason) from None
+        raise TradingNotReady("Resultado incerto (" + stage + "): " + reason) from None

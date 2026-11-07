@@ -202,6 +202,102 @@ class RecoveryTests(LiveEngineTests):
         self.assertIn("-2.00 USD", self.sent[-1])
 
 
+class SellFailureTests(LiveEngineTests):
+    def open_position(self):
+        live_engine.start(); self.side = "buy"
+        live_engine.buy_cycle([pair()], self.send, "1")
+        live_engine._sell_failed.clear()
+        live_engine._sell_fail_count.clear()
+        self.side = "sell"
+        return state._load()["positions"][MINT]
+
+    def sl(self, position):
+        return patch("live_engine.sell_signals", return_value=[(MINT, position, {"action": "sell", "reason": "stop_loss", "change_pct": -9.0})])
+
+    def test_rejected_sell_releases_immediately_with_reason(self):
+        import jupiter_v2_executor
+        position = self.open_position()
+        with self.sl(position), patch("live_order_bridge.execute_signed",
+                                      side_effect=jupiter_v2_executor.OrderError("Slippage exceeded")):
+            live_engine.exit_cycle(self.send, "1")
+        self.assertEqual(state.status()["pending"], 0)
+        self.assertTrue(state.can_open()[0])
+        self.assertIn("Slippage exceeded", self.sent[-1])
+        with self.sl(position):
+            live_engine.exit_cycle(self.send, "1")      # retry is delayed 60 s
+        self.assertEqual(state.status()["positions"], 1)
+
+    def test_quote_failure_releases_immediately(self):
+        position = self.open_position()
+        with self.sl(position), patch("live_order_bridge.order", side_effect=RuntimeError("no route")):
+            live_engine.exit_cycle(self.send, "1")
+        self.assertEqual(state.status()["pending"], 0)
+        self.assertIn("no route", self.sent[-1])
+
+    def test_sells_what_wallet_really_holds(self):
+        position = self.open_position()
+        self.chain["token"] = 4900  # 2% transfer fee
+        seen = {}
+        real = live_engine.bridge.submit_swap
+        def spy(mint, side, amount, wallet):
+            seen["amount"] = amount
+            return real(mint, side, amount, wallet)
+        with self.sl(position), patch("live_engine.bridge.submit_swap", side_effect=spy), \
+             patch("live_trade_state._sol_to_usd", return_value=18.0):
+            live_engine.exit_cycle(self.send, "1")
+        self.assertEqual(seen["amount"], 4900)
+        self.assertEqual(state.status()["positions"], 0)
+
+    def test_token_gone_from_wallet_is_removed(self):
+        position = self.open_position()
+        self.chain["token"] = 0
+        with self.sl(position):
+            live_engine.exit_cycle(self.send, "1")
+        self.assertEqual(state.status()["positions"], 0)
+        self.assertIn("não tem mais", self.sent[-1])
+
+
+class DeadTokenTests(SellFailureTests):
+    def test_dead_token_written_off_after_10_min(self):
+        import live_exit_monitor as m
+        self.open_position()
+        m._quote_fail_since.clear()
+        def quote(inp, out, amount, taker=None):
+            if inp == MINT:
+                raise RuntimeError("no route")
+            return {"outAmount": "20000000", "requestId": "r"}
+        with patch("live_exit_monitor.order", side_effect=quote):
+            live_engine.exit_cycle(self.send, "1")
+            self.assertEqual(state.status()["positions"], 1)          # not yet: could be temporary
+            m._quote_fail_since[MINT] -= 601
+            live_engine.exit_cycle(self.send, "1")
+        st = state.status()
+        self.assertEqual(st["positions"], 0)
+        self.assertTrue(st["enabled"])                                 # keeps running
+        self.assertIn("MOEDA ZERADA", self.sent[-1])
+        self.assertAlmostEqual(state.pnl_summary()["total_pnl_usd"], -20.0)
+
+    def test_jupiter_outage_never_writes_off(self):
+        import live_exit_monitor as m
+        self.open_position()
+        m._quote_fail_since.clear()
+        with patch("live_exit_monitor.order", side_effect=RuntimeError("Jupiter down")):
+            m._quote_fail_since[MINT] = -10_000
+            live_engine.exit_cycle(self.send, "1")
+        self.assertEqual(state.status()["positions"], 1)
+
+    def test_unsellable_token_written_off_after_5_failures(self):
+        import jupiter_v2_executor
+        position = self.open_position()
+        with self.sl(position), patch("live_order_bridge.execute_signed",
+                                      side_effect=jupiter_v2_executor.OrderError("honeypot")):
+            for _ in range(6):
+                live_engine._sell_failed.clear()
+                live_engine.exit_cycle(self.send, "1")
+        self.assertEqual(state.status()["positions"], 0)
+        self.assertIn("5 tentativas", self.sent[-1])
+
+
 def new_pair(minutes=20):
     return {"baseToken": {"address": MINT, "symbol": "NEW"}, "priceUsd": "0.0001",
             "liquidity": {"usd": 25000}, "fdv": 300000, "pairCreatedAt": (time.time() - minutes * 60) * 1000,

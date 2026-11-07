@@ -71,14 +71,17 @@ def _settle(order_id, wallet):
 
 
 def _failure(send, chat, side, mint, exc):
+    logging.warning("%s failed for %s: %s", side, mint[:8], exc)
     pending = state.pending_orders()
     if pending:
         send(chat, "⏳ " + side.capitalize() + " ainda sem confirmação: " + mint +
+             "\nMotivo: " + str(exc)[:200] +
              "\nVou conferir sozinho os saldos na blockchain em ~2 min e liberar o robô. "
              "Nada é reenviado em dobro.")
     else:
-        _notice(send, chat, ("fail", side, str(exc)[:80]),
-                "⛔ " + side.capitalize() + " não enviada: " + str(exc)[:200])
+        _notice(send, chat, ("fail", side, mint, str(exc)[:60]),
+                "⛔ " + side.capitalize() + " não enviada (" + mint[:6] + "…): " + str(exc)[:220] +
+                ("\nTento de novo em 1 min." if side == "venda" else ""), 900)
 
 
 def momentum_ok(p):
@@ -171,6 +174,24 @@ def _why_not_ready():
 
 
 REPORT_EVERY_SECONDS = 3600
+SELL_RETRY_SECONDS = 60
+MAX_SELL_FAILURES = 5  # after this many rejected sells (honeypot / no route) the position is written off
+_sell_failed = {}  # mint -> monotonic time of last failed sell attempt
+_sell_fail_count = {}
+
+
+def _write_off(send, chat, mint, symbol, no_route):
+    result = state.write_off(mint)
+    _sell_fail_count.pop(mint, None)
+    _sell_failed.pop(mint, None)
+    if not result:
+        return
+    why = ("sem rota de venda há 10 min (moeda morta / golpe)" if no_route
+           else "não foi possível vender após " + str(MAX_SELL_FAILURES) + " tentativas")
+    send(chat, "💀 MOEDA ZERADA — " + symbol + "\n" + why + ".\nRegistrei perda de US$ " +
+         format(result["cost_usd"], ".2f") + " e liberei a vaga. O robô continua operando." +
+         ("\n⚠️ Isso atingiu o limite de perda do dia: robô pausado. Toque em ▶️ Iniciar para religar."
+          if result["halted"] else "") + "\n📄 " + mint)
 BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 
 
@@ -307,15 +328,40 @@ def exit_cycle(send, chat):
     wallet = get_address()
     if not wallet:
         return
+    now = time.monotonic()
     for mint, position, signal in sell_signals():
-        label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO ESGOTADO"}.get(signal["reason"], "🛑 STOP LOSS")
-        send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO\n" + mint)
+        symbol = position.get("symbol") or mint[:6]
+        if signal["action"] == "write_off" or _sell_fail_count.get(mint, 0) >= MAX_SELL_FAILURES:
+            _write_off(send, chat, mint, symbol, signal["action"] == "write_off")
+            continue
+        if now - _sell_failed.get(mint, -SELL_RETRY_SECONDS) < SELL_RETRY_SECONDS:
+            continue
         try:
-            result = bridge.submit_swap(mint, "sell", int(position["token_amount_raw"]), wallet)
+            held = bridge.get_token_balance(wallet, mint)
+        except Exception:
+            held = None
+        if held == 0:
+            state.drop_position(mint)
+            send(chat, "⚠️ A carteira não tem mais " + symbol + " (" + mint + "). Foi vendida fora do bot ou a moeda "
+                 "sumiu. Removi da lista para o robô continuar.")
+            continue
+        amount = int(position["token_amount_raw"])
+        if held is not None and held < amount:
+            state.set_position_amount(mint, held)  # transfer-fee tokens: sell what we really hold
+            amount = held
+        label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO ESGOTADO"}.get(signal["reason"], "🛑 STOP LOSS")
+        send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO " + symbol + "\n" + mint)
+        try:
+            result = bridge.submit_swap(mint, "sell", amount, wallet)
             settled = _settle(result["order_id"], wallet)
         except Exception as exc:
+            _sell_failed[mint] = time.monotonic()
+            if not state.pending_orders():
+                _sell_fail_count[mint] = _sell_fail_count.get(mint, 0) + 1
             _failure(send, chat, "venda", mint, exc)
-            return
+            if state.pending_orders():
+                return  # uncertain: wait for automatic reconciliation
+            continue  # nothing was sent: try the other positions
         if settled.get("status") == "settled_sell":
             send(chat, sell_message(position.get("symbol") or mint[:6], signal, settled))
         else:
