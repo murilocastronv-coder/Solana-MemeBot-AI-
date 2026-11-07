@@ -35,8 +35,10 @@ def preflight():
         raise TradingNotReady("Live trading switch disabled")
     owner = telegram_owner.get_owner()
     configured = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if not owner or not configured or owner != configured:
-        raise TradingNotReady("Owner must be verified and pinned in TELEGRAM_CHAT_ID")
+    if not owner:
+        raise TradingNotReady("Private Telegram owner has not been registered")
+    if configured and str(owner) != configured:
+        raise TradingNotReady("Configured Telegram owner does not match the registered private owner")
     if not os.getenv("JUPITER_API_KEY"):
         raise TradingNotReady("Jupiter API key required for reliable live execution")
     if not os.getenv("SOLANA_RPC_URL") or os.getenv("SOLANA_RPC_URL") == "https://api.mainnet-beta.solana.com":
