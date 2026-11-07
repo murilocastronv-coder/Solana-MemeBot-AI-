@@ -72,14 +72,14 @@ class DipBacktestTests(unittest.TestCase):
     def test_single_buy_closes_at_2_50(self):
         c = dip_series([])
         bottom = c[-1]["c"]
-        c = dip_series([bottom * 1.003, bottom * 1.006, bottom * 1.012])
+        c = dip_series([bottom * 1.006, bottom * 1.012, bottom * 1.024])
         r = bt.run_dip(c)
         self.assertEqual((r["cycles"], r["by_buys"][1]), (1, 1))
         self.assertAlmostEqual(r["pnl_usd"], 2.50, places=2)
 
     def test_three_buys_close_at_3(self):
         bottom = dip_series([])[-1]["c"]
-        path = [bottom * 0.995, bottom * 0.989, bottom * 0.984, bottom * 0.978, bottom * 0.99, bottom * 1.0, bottom * 1.01]
+        path = [bottom * 0.99, bottom * 0.979, bottom * 0.968, bottom * 0.958, bottom * 0.975, bottom * 0.99, bottom * 1.005]
         r = bt.run_dip(dip_series(path))
         self.assertEqual((r["cycles"], r["by_buys"][3]), (1, 1))
         self.assertAlmostEqual(r["pnl_usd"] - r["open_pnl"], 3.00, places=2)   # closed cycle = +$3 net
@@ -87,10 +87,10 @@ class DipBacktestTests(unittest.TestCase):
 
     def test_emergency_stop_and_liquidation(self):
         bottom = dip_series([])[-1]["c"]
-        path = [bottom * (1 - 0.01 * k) for k in range(1, 13)]           # keeps falling 12%
+        path = [bottom * (1 - 0.01 * k) for k in range(1, 30)]           # keeps falling 29%
         with_stop = bt.run_dip(dip_series(path))
         self.assertEqual((with_stop["emergency"], with_stop["liquidated"]), (1, 0))
-        self.assertLess(with_stop["pnl_usd"], -40)
+        self.assertTrue(-35 < with_stop["pnl_usd"] < -20)                 # ~-$27 with 5x (was ~-$55 with 10x)
         no_stop = bt.run_dip(dip_series(path), emergency=False)
         self.assertEqual(no_stop["liquidated"], 1)
         self.assertLess(no_stop["pnl_usd"], with_stop["pnl_usd"])

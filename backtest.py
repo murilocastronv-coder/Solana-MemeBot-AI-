@@ -242,7 +242,7 @@ def _money(v):
 
 def report_text(m5, h1=None, days=365):
     lines = ["📊 BACKTEST — 🎯 COMPRA NO FUNDO (só long), " + str(days) + " dias de BTC em velas de 5 min",
-             "Conta inicial $" + format(DIP_START, ".0f") + " · cada compra $25 × 10x · até 3 compras · "
+             "Conta inicial $" + format(DIP_START, ".0f") + " · cada compra $25 × " + str(b.DIP_LEV) + "x · até 3 compras · "
              "1 compra fecha com +$2,50 líquido, 2–3 compras com +$3,00 líquido",
              "Compra quando cai ≥ " + format(b.DIP_DROP * 100, ".1f") + "% da máxima de 2 h + RSI < " + str(b.DIP_RSI) +
              " + primeira vela verde · recompra a cada −" + format(b.DIP_GAP * 100, ".0f") + "%",
@@ -275,8 +275,8 @@ def report_text(m5, h1=None, days=365):
               "  Sem stop de emergência: " + ("🟢 " if no_stop["pnl_usd"] > 0 else "🔴 ") + _money(no_stop["pnl_usd"]) +
               " · liquidações: " + str(no_stop["liquidated"]),
               "  Com taxas e deslize dobrados: " + ("🟢 " if stress["pnl_usd"] > 0 else "🔴 ") + _money(stress["pnl_usd"]),
-              "", "⚠️ Resultado passado não garante o futuro. Com 10x e recompras, uma queda forte do BTC pode levar "
-              "a garantia inteira de um ciclo ($75)."]
+              "", "⚠️ Resultado passado não garante o futuro. Com alavancagem e recompras, uma queda forte do BTC pode levar "
+              "boa parte da garantia de um ciclo ($75)."]
     return "\n".join(lines)
 
 

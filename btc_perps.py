@@ -110,19 +110,19 @@ def signal(candles):
 
 
 # ------------------------------------------------------------------ "Compra no fundo" (dip buying with up to 3 buys)
-# Long only. On 5m candles: after a big drop, buy US$ 25 at 10x; if it keeps falling a good distance,
+# Long only. On 5m candles: after a big drop, buy US$ 25 at 5x; if it keeps falling a good distance,
 # buy US$ 25 more (max 3 buys). One buy: close at +US$ 2.50 net of fees. 2-3 buys: close as soon as the
 # whole position reaches DIP_TP_MULTI net. Emergency stop before liquidation.
 DIP_USD = 25.0
-DIP_LEV = 10
+DIP_LEV = 5
 DIP_MAX_BUYS = 3
 DIP_DROP = 0.015          # price >= 1.5% below the highest high of the last 2 hours (24 candles)
 DIP_LOOKBACK = 24
 DIP_RSI = 30              # RSI 14 below 30 (oversold) ...
-DIP_GAP = 0.01            # re-buy when price is 1% below the last buy
+DIP_GAP = 0.02            # re-buy when price is 2% below the last buy
 DIP_TP_FIRST = 2.50       # net profit target (US$) with a single buy
 DIP_TP_MULTI = 3.00       # net profit target (US$) with 2-3 buys
-DIP_EMERGENCY = 0.07      # close all if price falls 7% below the average price (10x liquidates ~9%)
+DIP_EMERGENCY = 0.07      # close all if price falls 7% below the average price (5x liquidates ~18%)
 
 
 def rsi(closes, length=14):
@@ -443,7 +443,7 @@ def _account_value(data):
 
 
 def _dip_add(data, price, send, chat):
-    """One buy of US$ 25 at 10x (first buy or re-buy). Returns True if it went through."""
+    """One buy of US$ 25 at DIP_LEV x (first buy or re-buy). Returns True if it went through."""
     real = data["mode"] == "real"
     pos_key, _ = _keys(data)
     pos = data[pos_key]
@@ -476,8 +476,8 @@ def _dip_add(data, price, send, chat):
     pos["collateral"] += collateral
     target = DIP_TP_FIRST if n == 1 else DIP_TP_MULTI
     send(chat, ("🟢 COMPRA NO FUNDO" if n == 1 else "🔁 RECOMPRA " + str(n) + "/" + str(DIP_MAX_BUYS)) +
-         " — BTC LONG 10x " + ("💵 REAL" if real else "(simulado)") + "\nPreço: $" + format(entry, ",.0f") +
-         " · garantia $25 → posição $250\nTotal: " + str(n) + " compra(s), $" + format(pos["collateral"], ".0f") +
+         " — BTC LONG " + str(DIP_LEV) + "x " + ("💵 REAL" if real else "(simulado)") + "\nPreço: $" + format(entry, ",.0f") +
+         " · garantia $25 → posição $" + format(size, ".0f") + "\nTotal: " + str(n) + " compra(s), $" + format(pos["collateral"], ".0f") +
          " de garantia, preço médio $" + format(pos["entry"], ",.0f") +
          "\n🎯 Fecha tudo com lucro líquido ≥ $" + format(target, ".2f") +
          (" · próxima recompra em $" + format(entry * (1 - DIP_GAP), ",.0f") if n < DIP_MAX_BUYS else " · sem mais recompras") +
@@ -563,7 +563,7 @@ def status_text(price=None):
     real = s["mode"] == "real"
     lines = ["₿ ROBÔ BTC ALAVANCADO — " + ("🟢 LIGADO" if s["enabled"] else "🔴 DESLIGADO"),
              "Modo: " + ("💵 DINHEIRO REAL (carteira do bot, Jupiter Perps)" if real else "🧪 SIMULAÇÃO com preço real"),
-             ("Estratégia: 🎯 COMPRA NO FUNDO (só long, $25 × 10x, até 3 compras)" if s.get("strategy") == "dip" else
+             ("Estratégia: 🎯 COMPRA NO FUNDO (só long, $25 × " + str(DIP_LEV) + "x, até 3 compras, recompra a cada −" + format(DIP_GAP * 100, ".0f") + "%)" if s.get("strategy") == "dip" else
               "Estratégia: 📈 Tendência · gráfico " + s["timeframe"]),
              "Alavancagem: " + str(s["leverage"]) + "x | 20% da conta por ordem",
              ("Conta real" if real else "Saldo simulado") + ": $" + format(s["equity"], ".2f") +
