@@ -291,7 +291,23 @@ def export_page():
     if state["attempts"]>=3:EXPORT_TOKENS.pop(token,None)
     return export_html("<p>Senha incorreta ou carteira indisponível. Volte e tente novamente.</p>"),403
    EXPORT_TOKENS.pop(token,None)
-   return export_html("<p><small>Não compartilhe nem faça captura de tela. Qualquer pessoa com esta chave controla os fundos. Importe na Phantom e depois feche esta página.</small></p><p>Endereço público:</p><textarea readonly>"+html.escape(address)+"</textarea><p>Chave privada (importar na Phantom):</p><textarea id="private-key" readonly>"+html.escape(private_key)+"</textarea><button type="button" onclick="copyKey()">📋 Copiar chave privada</button><p id="copy-status" role="status"></p><script>async function copyKey(){const el=document.getElementById("private-key");try{await navigator.clipboard.writeText(el.value);document.getElementById("copy-status").textContent="Chave copiada. Importe na Phantom e limpe a área de transferência depois.";}catch(e){el.focus();el.select();document.getElementById("copy-status").textContent="Selecione Copiar no menu do celular.";}}</script>")
+   page = """<p><small>Não compartilhe sua chave privada. Importe na Phantom e feche esta página.</small></p>
+<p>Endereço público:</p><textarea readonly>""" + html.escape(address) + """</textarea>
+<p>Chave privada (importar na Phantom):</p><textarea id="private-key" readonly>""" + html.escape(private_key) + """</textarea>
+<button type="button" onclick="copyKey()">📋 Copiar chave privada</button><p id="copy-status" role="status"></p>
+<script>
+async function copyKey() {
+ const el = document.getElementById('private-key');
+ try {
+  await navigator.clipboard.writeText(el.value);
+  document.getElementById('copy-status').textContent = 'Chave copiada. Importe na Phantom e limpe a área de transferência depois.';
+ } catch (e) {
+  el.focus(); el.select();
+  document.getElementById('copy-status').textContent = 'Selecione Copiar no menu do celular.';
+ }
+}
+</script>"""
+   return export_html(page)
  return export_html('<p>Link válido por 2 minutos. A senha é enviada apenas por HTTPS para descriptografar a carteira. Não abra em dispositivo compartilhado.</p><form method="post"><label>Senha da carteira</label><input type="password" name="password" required autocomplete="off" maxlength="512"><button type="submit">Mostrar minha chave privada</button></form><small>A chave nunca será enviada ao Telegram. Confirme o endereço após importar na Phantom.</small>')
 @app.get("/carteira")
 def wallet_page():
