@@ -34,7 +34,7 @@ def quote(input_mint,output_mint,amount,slippage_bps=100):
         raise SwapError("No valid swap route")
     if int(data.get("inAmount",0))!=int(amount) or int(data.get("outAmount",0))<=0:
         raise SwapError("Invalid quote amounts")
-    if int(data.get("priceImpactPct",0) or 0)>1:
+    if float(data.get("priceImpactPct",0) or 0)>1:
         raise SwapError("Price impact too high")
     return data
 
