@@ -99,6 +99,19 @@ class LiveEngineTests(unittest.TestCase):
         live_engine.buy_cycle([young], self.send, "1")
         self.assertEqual(len(self.sent), 1)  # throttled to once per hour
 
+    def test_two_buys_per_scan_max_three_open(self):
+        live_engine.start(); self.side = "buy"
+        mints = ["DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+                 "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3"]
+        rows = []
+        for m in mints:
+            p = pair(); p["baseToken"] = {"address": m, "symbol": m[:4]}; rows.append(p)
+        live_engine.buy_cycle(rows, self.send, "1")
+        self.assertEqual(state.status()["positions"], 2)   # 2 per scan
+        live_engine.buy_cycle(rows, self.send, "1")
+        self.assertEqual(state.status()["positions"], 3)   # capped at 3 open
+        self.assertEqual(sum("COMPROU" in m for m in self.sent), 3)
+
     def test_skips_token_without_uptrend(self):
         live_engine.start()
         falling = pair(); falling["priceChange"]["h1"] = -3

@@ -20,7 +20,7 @@ Build command: `pip install -r requirements.txt`.
 3. **▶️ Iniciar trading real**.
 
 ## O que ele faz
-- A cada varredura compra no máximo 1 moeda que passa em **todos** os filtros:
+- A cada varredura compra **até 2 moedas** (máximo de **3 abertas** ao mesmo tempo) que passem em **todos** os filtros:
   - liquidez ≥ US$ 30 mil, volume 24h ≥ US$ 20 mil, idade ≥ 24 h, FDV/liquidez ≤ 100, variação 24h entre −20% e +80%;
   - **em alta agora**: subindo em 1 h e 6 h, sem queda forte em 5 min, e mais compras que vendas na última hora;
   - **anti-golpe**: o criador não pode criar mais moedas (mint authority) nem congelar carteiras (freeze authority).

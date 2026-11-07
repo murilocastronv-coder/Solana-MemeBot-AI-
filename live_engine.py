@@ -171,6 +171,7 @@ def _why_not_ready():
 
 
 REPORT_EVERY_SECONDS = 3600
+BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 
 
 EXIT_TEXT = {
@@ -218,7 +219,10 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode):
 
 
 def buy_cycle(rows, send, chat):
-    """Buy at most one new token per scan (10% of account value)."""
+    """Buy up to BUYS_PER_SCAN new tokens per scan (10% of account value each).
+
+    The total number of open positions is still capped at 3 (live_trade_state).
+    """
     if not chat:
         return None
     if not ready():
@@ -238,6 +242,7 @@ def buy_cycle(rows, send, chat):
     now = time.monotonic()
     qualified = 0
     unsafe = []
+    bought = []
     for p in rows:
         if not live_candidate(p):
             continue
@@ -250,7 +255,15 @@ def buy_cycle(rows, send, chat):
         if not safe:
             unsafe.append(symbol + ": " + why)
             continue
-        return _execute_buy(p, mint, symbol, send, chat, wallet, ORDER_FRACTION, "normal")
+        result = _execute_buy(p, mint, symbol, send, chat, wallet, ORDER_FRACTION, "normal")
+        if not result or result.get("status") != "settled_buy":
+            return result  # failed, uncertain or no balance: stop buying this scan
+        bought.append(result)
+        open_mints.add(mint)
+        if len(bought) >= BUYS_PER_SCAN or not state.can_open()[0]:
+            break
+    if bought:
+        return bought[-1]
     reasons = sorted(_skip_reasons(rows).items(), key=lambda kv: -kv[1])
     detail = "\n".join("• " + str(n) + " com " + label for label, n in reasons if n)
     extra = " (já compradas, tentadas nas últimas 24h ou reprovadas no anti-golpe)" if qualified else ""
