@@ -74,13 +74,16 @@ O menu agora é só de BTC (memecoins removidas; posições antigas continuam co
 ### ⚡ Gráfico 5m (operações rápidas o dia todo)
 Mesma lógica de rompimento a favor da tendência em velas de 5 min (canal de 100 min, tendência de ~16 h), stop 1,5×ATR e stop móvel 2,5×ATR. Pula sinais em que o stop é menor que 0,35% (as taxas comeriam mais de 1/3 do risco).
 
-### 🎯 Compra no fundo (só long, até 2 compras)
-Botões **📈 Estratégia tendência** / **🎯 Compra no fundo** (no modo real pede confirmação).
-- Só opera quando o BTC está em **tendência de alta** (último fechamento de 1 h acima da média de 200 h).
-- Compra **$20 × 3x** (posição $60) quando, no gráfico de 5 min, o BTC está ≥ 1,5% abaixo da máxima das últimas 2 h, RSI 14 < 30 e fecha a primeira vela verde.
-- Se cair mais **4%** abaixo da 1ª compra, compra mais **$20 × 3x** — no máximo **2 compras** ($40).
-- **1 compra**: fecha com **+$2,50 líquido**. **2 compras**: fecha tudo com **+$3,00 líquido**.
-- Nunca faz short. **Stop de emergência** em −7% do preço médio (com 3x a liquidação fica perto de −30%).
+### 📉 LONG DCA M5 (estratégia atual de recuperação, só long)
+Botão **📉 Long DCA M5**. Ao escolher, o robô vai para **🧪 Modo simulação** (operações reais não são ativadas automaticamente).
+- **Entrada** (vela de 5 min fechada): RSI 14 < 30 · fechamento ≥ 2% abaixo da máxima das últimas 4 h · fechou acima da máxima da vela anterior · filtro H1: não compra com tendência de baixa forte (preço < EMA 50 < EMA 200 e EMA 50 caindo nas últimas 6 h).
+- **Margem $25 × 10x** por compra (posição $250), **até 3 compras** ($750), uma de cada vez, nunca dobra o valor: 2ª a −2,5% da 1ª, 3ª a −3,5% da 2ª (variante por ATR no backtest: 3×ATR e 4×ATR de 1 h).
+- **Saída**: fecha 100% quando o lucro **líquido** agregado (taxas de entrada e saída, slippage e juros) chega a **+$2,50**.
+- **Proteção**: stop de emergência −5% do preço médio **ou** perda máxima de $50 no ciclo (o que vier primeiro), sempre antes da liquidação.
+- Configuração em `dca_strategy.py` (`DEFAULT`).
 
-### 📊 Backtest (1 ano)
-Roda a Compra no fundo em 365 dias de velas de 5 min (+ ~8 dias de aquecimento para a média de 200 h): P/L total, ciclos com lucro/perda, quantos usaram 1/2 compras, stops de emergência, liquidações, custos (com juros separados), queda máxima, aviso se a conta ficou sem saldo, **todos os meses**, comparação com comprar e segurar, versão sem filtro de tendência, sem stop e com custos dobrados. Juros estimados em ~0,003%/h.
+### 📊 Backtest LONG DCA M5
+Período fixo **07/11/2025 → 07/11/2026**, velas reais de **1 minuto** do BTCUSDT (Binance, salvas no disco persistente em `btc_1m_cache.bin`) agregadas em 5 min e 1 h; simulação minuto a minuto dentro de cada vela de 5 min; entrada na abertura da vela seguinte ao sinal (sem olhar o futuro); taxas, slippage, juros, margem e liquidação.
+1. Configuração do pedido no ano inteiro + resultado mensal.
+2. 24 variantes (recompra fixa × ATR, filtro H1 on/off, stops −3/−5/−7%, perda máx. $30/$50) classificadas **só com os 9 primeiros meses** (lucro líquido penalizado por drawdown).
+3. A melhor variante roda **uma vez** nos **últimos 3 meses** (fora da amostra) + conclusão. Se não houver lucro consistente, o relatório diz para manter em simulação.

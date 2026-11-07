@@ -46,10 +46,18 @@ def send(chat,text,keyboard=None):
  args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
+def split_message(text,limit=3800):
+ """Telegram allows ~4096 characters per message."""
+ parts,cur=[],""
+ for line in text.split("\n"):
+  if len(cur)+len(line)+1>limit and cur:parts.append(cur);cur=""
+  cur+=("\n" if cur else "")+line
+ if cur:parts.append(cur)
+ return parts
 def keyboard():
  return [[{"text":"₿ BTC ON","callback_data":"btc_on"},{"text":"₿ BTC OFF","callback_data":"btc_off"}],
   [{"text":"⚙️ Alavancagem","callback_data":"lev"},{"text":"📊 Status BTC","callback_data":"btc_status"}],
-  [{"text":"📈 Estratégia tendência","callback_data":"strat_trend"},{"text":"🎯 Compra no fundo","callback_data":"strat_dip"}],
+  [{"text":"📈 Estratégia tendência","callback_data":"strat_trend"},{"text":"📉 Long DCA M5","callback_data":"strat_dip"}],
   [{"text":"⏱️ Gráfico 1h","callback_data":"tf_1h"},{"text":"⚡ Gráfico 5m","callback_data":"tf_5m"}],
   [{"text":"💵 Modo REAL","callback_data":"mode_real"},{"text":"🧪 Modo simulação","callback_data":"mode_sim"}],
   [{"text":"🧪 Teste real $5","callback_data":"btc_test"}],
@@ -307,21 +315,30 @@ def handle(update):
   st=btc_perps.summary()
   send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x · "+("💵 DINHEIRO REAL" if st["mode"]=="real" else "🧪 SIMULAÇÃO com preço real")+" · gráfico "+st["timeframe"]+"\nRompimento de 20 velas a favor da média de 200 + stop por ATR e stop móvel. LONG e SHORT, 20% da conta por ordem. Decide a cada vela fechada e controla o stop a cada ~20 s.",keyboard())
  elif action in ("backtest","/backtest"):
-  send(chat,"⏳ Rodando backtest da Compra no fundo em 1 ano de BTC (~105 mil velas de 5 min)... pode levar 2–3 minutos.")
+  send(chat,"⏳ Backtest LONG DCA M5 · 07/11/2025 → 07/11/2026 com velas de 1 min (~540 mil). Na 1ª vez baixa os dados (2–5 min); depois fica salvo e é rápido.")
   def run_bt():
    try:
-    import backtest
-    send(chat,backtest.run(),keyboard())
+    import dca_backtest
+    marks=set()
+    def progress(f):
+     step=int(f*4)
+     if 0<step<4 and step not in marks:
+      marks.add(step);send(chat,"⏳ Baixando dados: "+str(step*25)+"%")
+    for part in dca_backtest.run_report(btc_perps._get,progress):
+     for chunk in split_message(part):send(chat,chunk)
+    send(chat,"Fim do backtest.",keyboard())
    except Exception as exc:
     logging.exception("backtest failed");send(chat,"❌ Backtest falhou: "+type(exc).__name__+": "+str(exc)[:200])
   threading.Thread(target=run_bt,daemon=True).start()
  elif action in ("strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok"):
   st=btc_perps.summary()
-  if st["mode"]=="real" and action in ("strat_dip","strat_scalp"):
-   send(chat,"⚠️ COMPRA NO FUNDO COM DINHEIRO REAL\nCada compra usa $20 de garantia com 3x (posição de $60), no máximo 2 compras ($40); a 2ª só depois de cair mais 4%. Com 2 compras, o stop de emergência (−7% do preço médio) custa ~$9.\nSó compra quedas quando o BTC está acima da média de 200 h. Rode o 📊 Backtest (1 ano) antes.",[[{"text":"✅ Confirmar compra no fundo REAL","callback_data":"strat_dip_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
-  else:
-   btc_perps.set_option("strategy","dip")
-   send(chat,"🎯 COMPRA NO FUNDO ATIVA ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+") — só compra, nunca short\n• Só opera com o BTC em tendência de alta (acima da média de 200 h).\n• Compra $20 × 3x quando o BTC cai ≥ 1,5% da máxima de 2 h, RSI < 30 e aparece a primeira vela verde de 5 min.\n• Se cair mais 4% abaixo da 1ª compra, compra mais $20 × 3x (máx. 2 compras).\n• 1 compra: fecha com +$2,50 líquido (precisa o BTC subir ~4,4%). 2 compras: fecha tudo com +$3,00 líquido.\n• Stop de emergência: −7% abaixo do preço médio.",keyboard())
+  note=""
+  if st["mode"]=="real" and not st["position"]:
+   btc_perps.set_option("mode","sim");note="\n🧪 Coloquei em MODO SIMULAÇÃO (operações reais não são ativadas automaticamente). Para dinheiro real, toque em 💵 Modo REAL depois de validar no backtest."
+  elif st["mode"]=="real":
+   note="\n⚠️ Há uma posição real aberta; o modo continua REAL até ela fechar."
+  btc_perps.set_option("strategy","dip")
+  send(chat,"📉 LONG DCA M5 ATIVA — só LONG, nunca short"+note+"\n• Entrada (vela de 5 min fechada): RSI 14 < 30 + queda ≥ 2% em 4 h + fechou acima da máxima da vela anterior + H1 sem tendência de baixa forte.\n• Margem $25 × 10x por compra (posição $250), até 3 compras ($750), uma de cada vez: 2ª a −2,5% da 1ª, 3ª a −3,5% da 2ª.\n• Fecha 100% quando o lucro LÍQUIDO (taxas, slippage e juros) chega a +$2,50.\n• Stop de emergência: −5% do preço médio ou perda máx. de $50 no ciclo (sempre antes da liquidação).",keyboard())
  elif action=="strat_trend":
   btc_perps.set_option("strategy","trend");send(chat,"📈 Estratégia de tendência ativa (rompimento + stop móvel).",keyboard())
  elif action in ("tf_1h","tf_5m"):
