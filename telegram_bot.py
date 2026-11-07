@@ -11,6 +11,7 @@ import live_order_bridge
 import live_engine
 import sim_engine
 import pumpfun
+import btc_perps
 import trade_report
 from live_swap_executor import configured as swap_configured
 from jupiter_v2_executor import headers as jupiter_headers
@@ -46,7 +47,17 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"🟣 Pump.fun ON","callback_data":"pump_on"},{"text":"🟣 Pump.fun OFF","callback_data":"pump_off"}],[{"text":"🧪 Simulação ON","callback_data":"sim_on"},{"text":"🧪 Simulação OFF","callback_data":"sim_off"}],[{"text":"📜 Histórico","callback_data":"history"}],[{"text":"📊 Status trading real","callback_data":"live_status"},{"text":"🔧 Destravar robô","callback_data":"unstick"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+ return [[{"text":"₿ BTC ON","callback_data":"btc_on"},{"text":"₿ BTC OFF","callback_data":"btc_off"}],
+  [{"text":"⚙️ Alavancagem","callback_data":"lev"},{"text":"📊 Status BTC","callback_data":"btc_status"}],
+  [{"text":"📜 Histórico","callback_data":"history"}],
+  [{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
+  [{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}]]
+def leverage_keyboard():
+ return [[{"text":str(x)+"x","callback_data":"lev_"+str(x)} for x in btc_perps.LEVERAGES],[{"text":"⬅️ Voltar","callback_data":"/menu"}]]
+def btc_status():
+ try:price=btc_perps.fetch_price()
+ except Exception:price=None
+ return btc_perps.status_text(price)
 def trading_readiness():
  """Report observed switches and ledger state; never imply real trading works."""
  st=trade_state.status()
@@ -89,7 +100,7 @@ def trading_status_text():
  return "\n".join(lines)
 
 def menu(chat):
- send(chat,"🤖 Solana MemeBot AI\n"+trading_status_text(),keyboard())
+ send(chat,"🤖 BTC Perps Bot\n"+btc_status(),keyboard())
 def market_json(url):
  last_error=None
  for attempt in range(3):
@@ -287,6 +298,23 @@ def handle(update):
    send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura compra até 2 moedas em alta e aprovada no anti-golpe, usando 10% da conta (máx. 3 posições). Vende sozinho: stop -8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para ao perder 15% da conta no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
   except Exception as exc:
    send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
+ elif action in ("btc_on","/btc_on"):
+  btc_perps.set_enabled(True);lev=btc_perps.summary()["leverage"]
+  send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x (SIMULAÇÃO com preço real)\nEstratégia de tendência (rompimento de 20h + média de 200 + stop móvel por ATR). Opera LONG e SHORT com 20% da conta por ordem. Decide a cada vela de 1h fechada e controla o stop a cada ~20 s.\nA execução com dinheiro real na Jupiter Perps ainda não está ligada.",keyboard())
+ elif action in ("btc_off","/btc_off"):
+  btc_perps.set_enabled(False);send(chat,"₿ Robô BTC desligado. Uma posição simulada aberta fica parada até religar.",keyboard())
+ elif action in ("btc_status","/btc"):
+  send(chat,btc_status(),keyboard())
+ elif action in ("lev","/alavancagem"):
+  send(chat,"⚙️ Escolha a alavancagem (atual: "+str(btc_perps.summary()["leverage"])+"x).\nQuanto maior, maior o ganho e a perda: com 10x, ~9% contra liquida; com 20x, ~4,5%. O stop fica sempre antes da liquidação. Recomendado: 2x–3x.",leverage_keyboard())
+ elif action.startswith("lev_"):
+  try:
+   lev=btc_perps.set_leverage(action[4:])
+   pos=btc_perps.summary()["position"]
+   send(chat,"✅ Alavancagem: "+str(lev)+"x. Vale para as próximas ordens"+(" (a posição aberta continua com "+str(pos["leverage"])+"x)." if pos else "."),keyboard())
+  except ValueError:send(chat,"Alavancagem inválida.",leverage_keyboard())
+ elif action=="/btc_reset":
+  btc_perps.reset();send(chat,"₿ Simulação BTC reiniciada com $"+format(btc_perps.START_USD,".2f")+".")
  elif action in ("pump_on","/pump_on"):
   trade_state.set_flag("pumpfun_enabled",True)
   extra="" if live_engine.ready() else "\n⚠️ O robô principal está desligado: toque em ▶️ Iniciar trading real para operar com dinheiro real (a 🧪 simulação testa o pump.fun mesmo assim)."
@@ -295,7 +323,7 @@ def handle(update):
   trade_state.set_flag("pumpfun_enabled",False)
   send(chat,"🟣 Pump.fun DESLIGADO. Posições abertas continuam com stop e venda automática.",keyboard())
  elif action in ("history","/historico"):
-  try:send(chat,trade_report.history_text(trade_state.history(),sim_engine.summary()),keyboard())
+  try:send(chat,trade_report.btc_history_text(btc_perps.summary()),keyboard())
   except Exception as exc:logging.exception("history failed");send(chat,"⚠️ Histórico indisponível: "+str(exc)[:150])
  elif action in ("sim_on","/sim_on"):
   sim_engine.set_enabled(True);st=sim_engine.summary()
@@ -371,6 +399,8 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
+ send(chat,"🔄 Bot reiniciado (deploy).\n"+btc_status(),keyboard())
+ if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  st=trade_state.status()
  reason=live_engine.why_stopped()
  send(chat,"🔄 Bot reiniciado (deploy). Estado salvo recuperado:\n"+
@@ -383,20 +413,10 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  while True:
   try:
-   if time.monotonic()>=next_scan:
-    next_scan=time.monotonic()+INTERVAL
-    try:scan(True)
-    except Exception:logging.exception("automatic opportunity scan failed")
    if active_chat() and time.monotonic()>=next_sniper:
     next_sniper=time.monotonic()+20
-    try:live_engine.sniper_cycle(send,active_chat())
-    except Exception:logging.exception("sniper cycle failed")
-    try:sim_engine.sniper_cycle(send,active_chat())
-    except Exception:logging.exception("sim sniper cycle failed")
-    try:pumpfun.cycle(send,active_chat())
-    except Exception:logging.exception("pump.fun cycle failed")
-    try:sim_engine.pumpfun_cycle(send,active_chat())
-    except Exception:logging.exception("sim pump.fun cycle failed")
+    try:btc_perps.cycle(send,active_chat())
+    except Exception:logging.exception("btc cycle failed")
    if active_chat() and time.monotonic()-last_recovery_notice>3600:
     last_recovery_notice=time.monotonic()
     try:
@@ -407,16 +427,12 @@ def loop():
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+20
 
-    try:sim_engine.exit_cycle(send,active_chat())
-    except Exception:logging.exception("sim exit cycle failed")
     try:live_engine.recover(send,active_chat())
     except Exception:logging.exception("pending order recovery failed")
     try:
      if os.getenv("LIVE_TRADING_ENABLED")=="true":live_engine.exit_cycle(send,active_chat())
      else:live_exit_monitor.monitor(send,active_chat())
     except Exception:logging.exception("live exit cycle failed")
-    try:paper.check(active_chat(),send,fmt)
-    except Exception:logging.exception("paper position monitoring failed")
    if TOKEN:
     data=request_api("getUpdates",offset=offset,timeout=8,allowed_updates=["message","callback_query"])
     for u in data.get("result",[]):
