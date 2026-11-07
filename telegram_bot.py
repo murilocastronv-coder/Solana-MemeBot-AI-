@@ -66,11 +66,11 @@ def trading_status_text():
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
         "🔴 ROBÔ DESLIGADO" if not running else "🟢 ROBÔ LIGADO",
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
-        "Compras automáticas (US$ 10): "+("SIM" if running else "NÃO"),
-        "Vendas automáticas TP +15% / SL -8%: "+("SIM" if running else "NÃO"),
+        "Compras automáticas (20% da conta): "+("SIM" if running else "NÃO"),
+        "Vendas automáticas (SL -8% / stop móvel após +15%): "+("SIM" if running else "NÃO"),
         "Posições registradas: "+str(st["positions"])+" / 3",
         "Ordens pendentes: "+str(st["pending"]),
-        "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ 3.00",
+        "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ "+format(trade_state.daily_loss_limit(),".2f"),
         "P/L hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD | P/L total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD",
         "Operações fechadas: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)",
         "",
@@ -273,7 +273,7 @@ def handle(update):
  elif action in ("live_start","/iniciar","/live_on"):
   try:
    live_engine.start()
-   send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura ele compra até 1 token que passar nos filtros (US$ 10 por compra, máx. 3 posições) e vende sozinho em TP +15% ou SL -8%. Para ao perder US$ 3 no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
+   send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura compra até 1 moeda em alta e aprovada no anti-golpe, usando 20% da conta (máx. 3 posições). Vende sozinho: stop -8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para ao perder 15% da conta no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
   except Exception as exc:
    send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
  elif action in ("live_stop","/parar","/live_off"):

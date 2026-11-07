@@ -19,6 +19,23 @@ class TradingNotReady(RuntimeError):
 LAMPORTS_PER_SOL = 1_000_000_000
 FEE_RESERVE_LAMPORTS = 10_000_000
 
+MAX_ORDER_USD = float(os.getenv("MAX_ORDER_USD", "100"))
+MIN_ORDER_USD = 1.0
+
+def sol_usd_price():
+    quote = order(SOL_MINT, USDC_MINT, LAMPORTS_PER_SOL)
+    price = Decimal(int(quote["outAmount"])) / Decimal(1_000_000)
+    if not price.is_finite() or price <= 0:
+        raise TradingNotReady("Invalid SOL/USD quote")
+    return price
+
+def sol_for_usd(wallet_address, usd):
+    """Quote `usd` worth of SOL without signing or spending."""
+    lamports = int((Decimal(str(usd)) * LAMPORTS_PER_SOL / sol_usd_price()).to_integral_value(rounding=ROUND_DOWN))
+    if lamports <= 0 or get_sol_balance(wallet_address) < lamports + FEE_RESERVE_LAMPORTS:
+        raise TradingNotReady("Insufficient SOL for USD " + format(float(usd), ".2f") + " buy plus 0.01 SOL fee reserve")
+    return lamports
+
 def sol_for_ten_usd(wallet_address):
     """Quote USD 10 worth of SOL without signing or spending."""
     quote = order(SOL_MINT, USDC_MINT, LAMPORTS_PER_SOL)
@@ -64,8 +81,8 @@ def submit_swap(mint, side, amount_raw, wallet_address):
     from bot_wallet_service import get_address
     if wallet_address != get_address():
         raise TradingNotReady("Wallet address does not match encrypted signer")
-    if side == "buy" and int(amount_raw) != 10_000_000:
-        raise TradingNotReady("Buy request must specify exactly USD 10")
+    if side == "buy" and not MIN_ORDER_USD * 1_000_000 <= int(amount_raw) <= MAX_ORDER_USD * 1_000_000:
+        raise TradingNotReady("Buy size must be between USD 1 and MAX_ORDER_USD (" + format(MAX_ORDER_USD, ".0f") + ")")
     if side == "buy":
         allowed, reason = state.can_open()
         if not allowed:
@@ -78,7 +95,8 @@ def submit_swap(mint, side, amount_raw, wallet_address):
         tracked = int(state._load()["positions"][mint]["token_amount_raw"])
         if int(amount_raw) != tracked:
             raise TradingNotReady("Sell amount must equal tracked position")
-    swap_amount = sol_for_ten_usd(wallet_address) if side == 'buy' else int(amount_raw)
+    order_usd = int(amount_raw) / 1_000_000 if side == "buy" else 0.0
+    swap_amount = sol_for_usd(wallet_address, order_usd) if side == 'buy' else int(amount_raw)
     order_id = uuid.uuid4().hex
     state.reserve(order_id, mint, side)
     # From this point, failures require explicit reconciliation; do not
@@ -87,7 +105,7 @@ def submit_swap(mint, side, amount_raw, wallet_address):
     try:
         before = get_token_balance(wallet_address, mint)
         before_sol = get_sol_balance(wallet_address)
-        state.annotate_pending(order_id, before_token_raw=before, before_sol_raw=before_sol, input_amount_raw=swap_amount, cost_usd=10.0 if side == "buy" else 0.0, stage="quoting")
+        state.annotate_pending(order_id, before_token_raw=before, before_sol_raw=before_sol, input_amount_raw=swap_amount, cost_usd=order_usd, stage="quoting")
         response = order(input_mint, output_mint, swap_amount, taker=wallet_address)
         state.annotate_pending(order_id, request_id=response["requestId"], stage="signing")
         signed = sign_order(response, os.environ["BOT_WALLET_ENCRYPTION_PASSPHRASE"])
