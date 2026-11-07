@@ -19,6 +19,7 @@ BASE="https://api.telegram.org/bot"+TOKEN
 session=requests.Session()
 seen=set()
 last=[]
+ALERTS_ENABLED=True
 def request_api(method,**params):
  if not TOKEN:return {}
  r=session.post(BASE+"/"+method,json=params,timeout=25);r.raise_for_status()
@@ -28,7 +29,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"⚙️ TP / SL","callback_data":"settings"},{"text":"📋 Ajuda","callback_data":"help"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🔔 Alertas","callback_data":"alerts"},{"text":"⚙️ TP / SL","callback_data":"settings"}]]
 def menu(chat):
  send(chat,"🤖 Solana MemeBot AI\nRadar de tokens, contratos para copiar e TP/SL indicativos. Nenhuma compra é executada.",keyboard())
 def fetch():
@@ -90,21 +91,21 @@ def qualifies(p):
 def scan(alert=False):
  global last
  rows=fetch();last=rows
- if alert and active_chat():
+ if alert and active_chat() and ALERTS_ENABLED:
   sent=0
   for p in reversed(rows):
    mint=p.get("baseToken",{}).get("address")
-   if mint in seen:continue
+   if not mint or mint in seen or not qualifies(p):continue
+   if sent>=MAX_ALERTS:break
+   send_coin(active_chat(),p,"🔔 Nova oportunidade para analisar (não é recomendação):\n")
    seen.add(mint)
-   if qualifies(p) and sent<MAX_ALERTS:
-    send_coin(active_chat(),p,"🔔 Token passou nos filtros (não é recomendação):\n")
-    sent+=1
+   sent+=1
   if len(seen)>2000:seen.clear()
  return rows
 def authorized(chat):
  return bool(active_chat()) and str(chat)==str(active_chat())
 def handle(update):
- global PRIVATE_CHAT
+ global PRIVATE_CHAT, ALERTS_ENABLED
  msg=update.get("message");cb=update.get("callback_query")
  if cb:
   chat=cb.get("message",{}).get("chat",{}).get("id");action=cb.get("data","")
@@ -131,6 +132,12 @@ def handle(update):
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
+ elif action in ("alerts","/alerts"):
+  send(chat,"🔔 Alertas automáticos: "+("ATIVADOS" if ALERTS_ENABLED else "PAUSADOS")+"\nVarredura a cada "+str(INTERVAL)+" segundos enquanto o serviço estiver ativo.\nUse /pausar ou /ativar.")
+ elif action=="/pausar":
+  ALERTS_ENABLED=False;send(chat,"🔕 Alertas pausados. Use /ativar para retomar.")
+ elif action=="/ativar":
+  ALERTS_ENABLED=True;send(chat,"🔔 Alertas automáticos ativados.")
  elif action in ("settings","/settings"):
   send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nLiquidez mínima: $"+str(MIN_LIQ)+"\nVolume 24h mínimo: $"+str(MIN_VOLUME)+"\nIdade mínima: "+str(MIN_AGE_HOURS)+" horas\nFDV/liquidez máximo: "+str(MAX_FDV_LIQ)+"\nAlertas por varredura: "+str(MAX_ALERTS)+"\nSem auditoria on-chain. Ajuste no Render.")
  else:menu(chat)
