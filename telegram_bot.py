@@ -269,7 +269,7 @@ def loop():
    time.sleep(15)
   except Exception:logging.exception("telegram worker error");time.sleep(10)
 
-EXPORT_HEADERS={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}
+EXPORT_HEADERS={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}
 def export_html(body):
  return Response('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Exportar carteira</title><style>body{background:#101626;color:#fff;font:16px system-ui;margin:20px auto;padding:16px;max-width:500px}input,button,textarea{display:block;box-sizing:border-box;width:100%;margin:14px 0;padding:14px;border-radius:8px}input,textarea{background:#26314a;color:#fff;border:1px solid #65728e}button{background:#6c86ff;color:#fff;border:0}textarea{height:130px;overflow-wrap:anywhere}small{color:#e6c77b}</style><h2>🔐 Exportar carteira Solana</h2>'+body+'</html>',mimetype="text/html",headers=EXPORT_HEADERS)
 @app.route("/exportar",methods=["GET","POST"])
@@ -291,7 +291,7 @@ def export_page():
     if state["attempts"]>=3:EXPORT_TOKENS.pop(token,None)
     return export_html("<p>Senha incorreta ou carteira indisponível. Volte e tente novamente.</p>"),403
    EXPORT_TOKENS.pop(token,None)
-   return export_html("<p><small>Não compartilhe nem faça captura de tela. Qualquer pessoa com esta chave controla os fundos. Importe na Phantom e depois feche esta página.</small></p><p>Endereço público:</p><textarea readonly>"+html.escape(address)+"</textarea><p>Chave privada (importar na Phantom):</p><textarea readonly>"+html.escape(private_key)+"</textarea>")
+   return export_html("<p><small>Não compartilhe nem faça captura de tela. Qualquer pessoa com esta chave controla os fundos. Importe na Phantom e depois feche esta página.</small></p><p>Endereço público:</p><textarea readonly>"+html.escape(address)+"</textarea><p>Chave privada (importar na Phantom):</p><textarea id="private-key" readonly>"+html.escape(private_key)+"</textarea><button type="button" onclick="copyKey()">📋 Copiar chave privada</button><p id="copy-status" role="status"></p><script>async function copyKey(){const el=document.getElementById("private-key");try{await navigator.clipboard.writeText(el.value);document.getElementById("copy-status").textContent="Chave copiada. Importe na Phantom e limpe a área de transferência depois.";}catch(e){el.focus();el.select();document.getElementById("copy-status").textContent="Selecione Copiar no menu do celular.";}}</script>")
  return export_html('<p>Link válido por 2 minutos. A senha é enviada apenas por HTTPS para descriptografar a carteira. Não abra em dispositivo compartilhado.</p><form method="post"><label>Senha da carteira</label><input type="password" name="password" required autocomplete="off" maxlength="512"><button type="submit">Mostrar minha chave privada</button></form><small>A chave nunca será enviada ao Telegram. Confirme o endereço após importar na Phantom.</small>')
 @app.get("/carteira")
 def wallet_page():
