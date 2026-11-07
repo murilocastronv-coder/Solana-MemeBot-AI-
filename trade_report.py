@@ -1,6 +1,7 @@
 """Plain-language trade history and per-strategy statistics for Telegram."""
-REASONS = {"stop_loss": "stop", "take_profit": "stop móvel", "time_stop": "tempo", "dead": "zerada", "?": "?"}
-MODES = {"normal": "Normal", "sniper": "Sniper", "pumpfun": "Pump.fun"}
+REASONS = {"stop_loss": "stop", "take_profit": "stop móvel", "time_stop": "tempo", "dead": "zerada", "?": "?",
+           "trailing": "stop móvel", "reversal": "virada", "liquidated": "LIQUIDADO"}
+MODES = {"normal": "Normal", "sniper": "Sniper", "pumpfun": "Pump.fun", "btc": "BTC"}
 
 
 def stats(trades):
@@ -44,4 +45,28 @@ def history_text(real_trades, sim):
                     ", " + format((sim["equity"] / sim["start"] - 1) * 100 if sim["start"] else 0, "+.1f") + "%) | abertas: " +
                     str(sim["open"]) + "/3", sim["history"])
     lines += ["", "N = normal, S = sniper, P = pump.fun. Avalie depois de 20–30 operações."]
+    return "\n".join(lines)
+
+
+def btc_history_text(btc):
+    trades = btc["history"]
+    closed = [t for t in trades if t.get("pnl_usd") is not None]
+    lines = ["📜 HISTÓRICO — ₿ BTC ALAVANCADO (simulação com preço real)",
+             "Saldo: $" + format(btc["equity"], ".2f") + " (início $" + format(btc["start"], ".2f") + ", " +
+             format((btc["equity"] / btc["start"] - 1) * 100 if btc["start"] else 0, "+.1f") + "%) | alavancagem " +
+             str(btc["leverage"]) + "x"]
+    if not closed:
+        return "\n".join(lines + ["Nenhuma operação fechada ainda. A estratégia de tendência pode levar dias para dar sinal."])
+    for side in ("LONG", "SHORT"):
+        s = stats([t for t in closed if side in t["symbol"]])
+        if s["n"]:
+            lines.append("• " + side + ": " + str(s["n"]) + " operações | acerto " + format(s["wins"] / s["n"] * 100, ".0f") +
+                         "% | P/L " + format(s["pnl"], "+.2f") + " USD | ganho médio " + format(s["avg_win"], "+.2f") +
+                         " | perda média " + format(s["avg_loss"], "+.2f"))
+    lines.append("Últimas:")
+    for t in closed[-10:][::-1]:
+        lines.append(("💰 " if t["pnl_usd"] > 0 else "🔻 ") + t["symbol"] + " " + format(t["pnl_usd"], "+.2f") + " USD (" +
+                     format(t["pnl_usd"] / t["cost_usd"] * 100 if t["cost_usd"] else 0, "+.0f") + "% garantia) · " +
+                     REASONS.get(t["reason"], t["reason"]) + " · " + format((t.get("minutes") or 0) / 60, ".1f") + " h")
+    lines.append("Em tendência, é normal acertar 35–45% e lucrar porque os ganhos são maiores que as perdas.")
     return "\n".join(lines)

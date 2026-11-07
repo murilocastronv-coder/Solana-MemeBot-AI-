@@ -55,3 +55,11 @@ Ligue/desligue com **🟣 Pump.fun ON / OFF** (o robô principal precisa estar l
 - Compra **5% da conta**, no máx. 2 posições pump.fun (dentro do limite total de 3).
 - Saída igual ao sniper: −12%; stop móvel 12% abaixo do topo a partir de +25%; vende após 30 min se não decolar.
 - Se não conseguir ler a lista, avisa no Telegram a cada hora.
+
+## ₿ Robô BTC alavancado (long + short) — atual
+O menu agora é só de BTC (memecoins removidas; posições antigas continuam com stop até vender).
+- **₿ BTC ON/OFF**, **⚙️ Alavancagem** (2x, 3x, 5x, 10x, 20x), **📊 Status BTC**, **📜 Histórico**.
+- Estratégia de tendência: velas de 1 h; LONG quando fecha acima da máxima das últimas 20 h e acima da EMA 200; SHORT quando fecha abaixo da mínima de 20 h e abaixo da EMA 200. Stop inicial 2×ATR(14), stop móvel 3×ATR do melhor preço, sinal oposto fecha e vira a mão.
+- 20% da conta como garantia por ordem; posição = garantia × alavancagem. Stop sempre antes da liquidação.
+- Taxas modeladas da Jupiter Perps (0,06% abrir + 0,06% fechar, ~0,01%/h de juros).
+- **Ainda em simulação com preço real** (Binance, fallback Coinbase); `/btc_reset` recomeça com US$ 100.
