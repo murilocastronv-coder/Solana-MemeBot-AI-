@@ -63,6 +63,8 @@ def sign_order(order_data, wallet_passphrase):
         raise OrderError("Wallet signer mismatch")
     signature = wallet.sign_message(to_bytes_versioned(unsigned.message))
     signatures = list(unsigned.signatures)
+    if len(signatures) != required:
+        raise OrderError("Invalid signer count")
     signatures[signer_indices[0]] = signature
     signed = VersionedTransaction.populate(unsigned.message, signatures)
     return base64.b64encode(bytes(signed)).decode("ascii")
@@ -77,7 +79,7 @@ def execute_signed(signed_transaction, request_id):
     response.raise_for_status()
     result = response.json()
     if result.get("status") != "Success" or not result.get("signature"):
-        raise OrderError("Swap was not confirmed successful by Jupiter")
+        raise OrderError("Swap execution uncertain or failed; reconcile requestId before retry")
     return {"signature": result["signature"],
             "total_input_amount": int(result["totalInputAmount"]),
             "total_output_amount": int(result["totalOutputAmount"])}
