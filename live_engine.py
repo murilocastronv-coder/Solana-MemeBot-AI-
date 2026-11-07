@@ -21,6 +21,7 @@ from live_exit_monitor import sell_signals
 from paper_auto import candidate
 
 import os
+import requests
 from live_swap_executor import rpc
 from jupiter_v2_executor import SOL_MINT
 
@@ -126,10 +127,11 @@ def account_value_usd(wallet):
     return sol * price + sum(float(p.get("cost_usd", 0)) for p in positions)
 
 
-def order_size_usd(wallet):
+def order_size_usd(wallet, fraction=None):
     value = account_value_usd(wallet)
     state.set_daily_loss_limit(value * DAILY_LOSS_FRACTION)
-    return round(min(value * ORDER_FRACTION, bridge.MAX_ORDER_USD), 2), value
+    fraction = ORDER_FRACTION if fraction is None else fraction
+    return round(min(value * fraction, bridge.MAX_ORDER_USD), 2), value
 
 
 def _skip_reasons(rows):
@@ -171,6 +173,50 @@ def _why_not_ready():
 REPORT_EVERY_SECONDS = 3600
 
 
+EXIT_TEXT = {
+    "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
+    "sniper": "🛑 Stop -15% | 🚀 a partir de +30% deixa correr (vende 15% abaixo do topo) | ⏱️ sai em 45 min se não decolar",
+}
+
+
+def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode):
+    try:
+        order_usd, value = order_size_usd(wallet, fraction)
+    except Exception as exc:
+        _notice(send, chat, "sizing", "⛔ Não consegui calcular o saldo: " + str(exc)[:150], REPORT_EVERY_SECONDS)
+        return None
+    pct = format(fraction * 100, ".0f") + "%"
+    if order_usd < MIN_ORDER_USD:
+        _notice(send, chat, "low_balance_" + mode, "💤 Saldo baixo: conta vale US$ " + format(value, ".2f") +
+                "; " + pct + " = US$ " + format(order_usd, ".2f") + " (mínimo US$ 3). Deposite SOL para operar.",
+                REPORT_EVERY_SECONDS)
+        return None
+    _tried[mint] = time.monotonic()
+    tag = "🎯 SNIPER " if mode == "sniper" else ""
+    send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
+         " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
+    try:
+        result = bridge.submit_swap(mint, "buy", int(round(order_usd * 1_000_000)), wallet)
+        settled = _settle(result["order_id"], wallet)
+    except Exception as exc:
+        _failure(send, chat, "compra", mint, exc)
+        return None
+    if settled.get("status") == "settled_buy":
+        state.set_position_label(mint, symbol, mode)
+        n = state.status()["positions"]
+        send(chat, "🟢 " + tag + "COMPROU " + symbol + "\n"
+             "💵 Valor: US$ " + format(order_usd, ".2f") + " (" + format(result["input_amount_raw"] / 1e9, ".4f") + " SOL)\n"
+             + EXIT_TEXT[mode] + "\n"
+             "🛡️ Anti-golpe OK\n"
+             "📦 Posições abertas: " + str(n) + "/3\n"
+             "📄 " + mint + "\n"
+             "🔗 https://solscan.io/tx/" + settled["signature"])
+    else:
+        send(chat, "⚠️ Compra enviada mas não conciliada (" + str(settled.get("reason", settled.get("status"))) +
+             "). Robô bloqueado.\nTx: https://solscan.io/tx/" + str(result["signature"]))
+    return settled
+
+
 def buy_cycle(rows, send, chat):
     """Buy at most one new token per scan (20% of account value)."""
     if not chat:
@@ -204,39 +250,7 @@ def buy_cycle(rows, send, chat):
         if not safe:
             unsafe.append(symbol + ": " + why)
             continue
-        try:
-            order_usd, value = order_size_usd(wallet)
-        except Exception as exc:
-            _notice(send, chat, "sizing", "⛔ Não consegui calcular o saldo: " + str(exc)[:150], REPORT_EVERY_SECONDS)
-            return None
-        if order_usd < MIN_ORDER_USD:
-            _notice(send, chat, "low_balance", "💤 Saldo baixo: conta vale US$ " + format(value, ".2f") +
-                    "; 20% = US$ " + format(order_usd, ".2f") + " (mínimo US$ 3). Deposite SOL para operar.",
-                    REPORT_EVERY_SECONDS)
-            return None
-        _tried[mint] = now
-        send(chat, "🟡 COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
-             " (20% da conta de US$ " + format(value, ".2f") + ")\n" + mint)
-        try:
-            result = bridge.submit_swap(mint, "buy", int(round(order_usd * 1_000_000)), wallet)
-            settled = _settle(result["order_id"], wallet)
-        except Exception as exc:
-            _failure(send, chat, "compra", mint, exc)
-            return None
-        if settled.get("status") == "settled_buy":
-            state.set_position_label(mint, symbol)
-            n = state.status()["positions"]
-            send(chat, "🟢 COMPROU " + symbol + "\n"
-                 "💵 Valor: US$ " + format(order_usd, ".2f") + " (" + format(result["input_amount_raw"] / 1e9, ".4f") + " SOL)\n"
-                 "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)\n"
-                 "🛡️ Anti-golpe OK (sem mint/freeze authority)\n"
-                 "📦 Posições abertas: " + str(n) + "/3\n"
-                 "📄 " + mint + "\n"
-                 "🔗 https://solscan.io/tx/" + settled["signature"])
-        else:
-            send(chat, "⚠️ Compra enviada mas não conciliada (" + str(settled.get("reason", settled.get("status"))) +
-                 "). Robô bloqueado.\nTx: https://solscan.io/tx/" + str(result["signature"]))
-        return settled
+        return _execute_buy(p, mint, symbol, send, chat, wallet, ORDER_FRACTION, "normal")
     reasons = sorted(_skip_reasons(rows).items(), key=lambda kv: -kv[1])
     detail = "\n".join("• " + str(n) + " com " + label for label, n in reasons if n)
     extra = " (já compradas, tentadas nas últimas 24h ou reprovadas no anti-golpe)" if qualified else ""
@@ -254,8 +268,8 @@ def buy_cycle(rows, send, chat):
 def sell_message(symbol, signal, settled):
     pnl = settled["pnl_usd"]
     pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0
-    why = ("🚀 Stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)"
-           if signal["reason"] == "take_profit" else "🛑 Stop loss")
+    why = {"take_profit": "🚀 Stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)",
+           "time_stop": "⏱️ Tempo esgotado (não decolou em 45 min)"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"
@@ -281,7 +295,7 @@ def exit_cycle(send, chat):
     if not wallet:
         return
     for mint, position, signal in sell_signals():
-        label = "🚀 STOP MÓVEL" if signal["reason"] == "take_profit" else "🛑 STOP LOSS"
+        label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO ESGOTADO"}.get(signal["reason"], "🛑 STOP LOSS")
         send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO\n" + mint)
         try:
             result = bridge.submit_swap(mint, "sell", int(position["token_amount_raw"]), wallet)
@@ -296,3 +310,114 @@ def exit_cycle(send, chat):
                  str(settled.get("reason", settled.get("status"))) + "). Robô pausado.\nTx: https://solscan.io/tx/" +
                  str(result["signature"]))
         return  # one order per cycle
+
+
+# ---------------------------------------------------------------- sniper mode
+# Brand-new tokens (< 60 min) with strong buying right now. Very high risk:
+# most new tokens go to zero; smaller size, wider stop, time stop.
+SNIPER_FRACTION = float(os.getenv("SNIPER_FRACTION", "0.05"))
+SNIPER_MAX_POSITIONS = 2
+SNIPER_MAX_AGE_MINUTES = 60
+SNIPER_MIN_LIQUIDITY = 10000
+SNIPER_FEEDS = ("https://api.dexscreener.com/token-profiles/latest/v1",
+                "https://api.dexscreener.com/token-boosts/latest/v1")
+_sniper_seen = {}  # mint -> monotonic time first evaluated
+_http = requests.Session()
+
+
+def _dex(url):
+    r = _http.get(url, timeout=12, headers={"Accept": "application/json", "User-Agent": "SolanaMemeBotSniper/1.0"})
+    r.raise_for_status()
+    return r.json()
+
+
+def sniper_fetch():
+    """Newest Solana tokens with pair data (DexScreener)."""
+    mints = []
+    for url in SNIPER_FEEDS:
+        try:
+            data = _dex(url)
+        except Exception:
+            continue
+        for x in data if isinstance(data, list) else []:
+            if isinstance(x, dict) and x.get("chainId") == "solana" and x.get("tokenAddress"):
+                mints.append(x["tokenAddress"])
+    mints = list(dict.fromkeys(mints))[:60]
+    pairs = []
+    for i in range(0, len(mints), 30):
+        try:
+            batch = _dex("https://api.dexscreener.com/tokens/v1/solana/" + ",".join(mints[i:i + 30]))
+            pairs += [p for p in batch if isinstance(p, dict)] if isinstance(batch, list) else []
+        except Exception:
+            continue
+    best = {}
+    for p in pairs:
+        mint = (p.get("baseToken") or {}).get("address")
+        liq = float((p.get("liquidity") or {}).get("usd") or 0)
+        if mint and (mint not in best or liq > float((best[mint].get("liquidity") or {}).get("usd") or 0)):
+            best[mint] = p
+    return list(best.values())
+
+
+def sniper_candidate(p):
+    try:
+        age_min = (time.time() * 1000 - float(p.get("pairCreatedAt") or 0)) / 60000
+        liq = float((p.get("liquidity") or {}).get("usd") or 0)
+        fdv = float(p.get("fdv") or 0)
+        ch = p.get("priceChange") or {}
+        m5 = ((p.get("txns") or {}).get("m5") or {})
+        buys, sells = int(m5.get("buys") or 0), int(m5.get("sells") or 0)
+        vol5 = float((p.get("volume") or {}).get("m5") or 0)
+        return (0 < age_min <= SNIPER_MAX_AGE_MINUTES and liq >= SNIPER_MIN_LIQUIDITY and
+                0 < fdv / liq <= 50 and float(p.get("priceUsd") or 0) > 0 and
+                float(ch.get("m5") or 0) > 0 and buys >= 15 and buys > sells * 1.3 and vol5 >= 5000)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return False
+
+
+def holders_ok(mint):
+    """Top 10 holders (excluding the biggest account = pool/curve) must own < 30%."""
+    try:
+        supply = int(rpc("getTokenSupply", [mint])["value"]["amount"])
+        largest = rpc("getTokenLargestAccounts", [mint])["value"]
+        amounts = sorted((int(a["amount"]) for a in largest), reverse=True)
+        if supply <= 0:
+            return False, "supply inválido"
+        share = sum(amounts[1:11]) / supply
+        if share >= 0.30:
+            return False, "10 maiores donos têm " + format(share * 100, ".0f") + "%"
+        return True, ""
+    except Exception:
+        return False, "não consegui ver os maiores donos"
+
+
+def sniper_cycle(send, chat):
+    """Fast cycle (~20 s): buy at most one brand-new token with strong momentum."""
+    if not chat or not state.sniper_enabled() or not ready():
+        return None
+    allowed, _ = state.can_open()
+    if not allowed or state.positions_by_mode("sniper") >= SNIPER_MAX_POSITIONS:
+        return None
+    wallet = get_address()
+    open_mints = set(state._load()["positions"])
+    now = time.monotonic()
+    for p in sniper_fetch():
+        mint = (p.get("baseToken") or {}).get("address")
+        if not mint or mint in open_mints or mint in _sniper_seen and now - _sniper_seen[mint] < 600:
+            continue
+        if not sniper_candidate(p):
+            continue
+        _sniper_seen[mint] = now  # evaluate each new token at most every 10 min
+        if now - _tried.get(mint, -RETRY_MINT_AFTER_SECONDS) < RETRY_MINT_AFTER_SECONDS:
+            continue
+        symbol = str((p.get("baseToken") or {}).get("symbol", "?"))[:20]
+        safe, why = token_safety(mint)
+        if safe:
+            safe, why = holders_ok(mint)
+        if not safe:
+            logging.info("Sniper skipped %s: %s", symbol, why)
+            continue
+        return _execute_buy(p, mint, symbol, send, chat, wallet, SNIPER_FRACTION, "sniper")
+    if len(_sniper_seen) > 5000:
+        _sniper_seen.clear()
+    return None

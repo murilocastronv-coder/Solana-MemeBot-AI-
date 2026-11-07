@@ -21,6 +21,7 @@ class LiveEngineTests(unittest.TestCase):
         self.env.start()
         live_engine._tried.clear()
         live_engine._safety.clear()
+        live_engine._sniper_seen.clear()
         live_engine._last_notice.clear()
         self.mint_info = SAFE_MINT
         self.sent = []
@@ -121,6 +122,67 @@ class LiveEngineTests(unittest.TestCase):
         self.assertFalse(state.can_open()[0])
         with self.assertRaises(RuntimeError):
             state.start()
+
+def new_pair(minutes=20):
+    return {"baseToken": {"address": MINT, "symbol": "NEW"}, "priceUsd": "0.0001",
+            "liquidity": {"usd": 25000}, "fdv": 300000, "pairCreatedAt": (time.time() - minutes * 60) * 1000,
+            "priceChange": {"m5": 12}, "volume": {"m5": 15000}, "txns": {"m5": {"buys": 90, "sells": 40}}}
+
+
+class SniperTests(LiveEngineTests):
+    def rpc(self, method, params):
+        if method == "getAccountInfo":
+            return self.mint_info
+        if method == "getTokenSupply":
+            return {"value": {"amount": "1000"}}
+        if method == "getTokenLargestAccounts":
+            return {"value": [{"amount": "700"}] + [{"amount": str(self.holder)}] * 10}
+
+    def setUp(self):
+        super().setUp()
+        self.holder = 1
+        p = patch("live_engine.rpc", side_effect=self.rpc)
+        p.start(); self.addCleanup(p.stop)
+
+    def test_candidate_rules(self):
+        self.assertTrue(live_engine.sniper_candidate(new_pair()))
+        self.assertFalse(live_engine.sniper_candidate(new_pair(minutes=90)))
+        weak = new_pair(); weak["txns"]["m5"] = {"buys": 30, "sells": 40}
+        self.assertFalse(live_engine.sniper_candidate(weak))
+
+    def test_sniper_off_by_default(self):
+        live_engine.start()
+        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
+            self.assertIsNone(live_engine.sniper_cycle(self.send, "1"))
+
+    def test_sniper_buys_5pct_and_marks_position(self):
+        live_engine.start(); state.set_sniper(True); self.side = "buy"
+        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
+            result = live_engine.sniper_cycle(self.send, "1")
+        self.assertEqual(result["status"], "settled_buy")
+        pos = state._load()["positions"][MINT]
+        self.assertEqual((pos["mode"], pos["cost_usd"]), ("sniper", 10.0))  # 5% of US$ 200
+        self.assertIn("SNIPER COMPROU NEW", self.sent[-1])
+
+    def test_sniper_skips_concentrated_holders(self):
+        live_engine.start(); state.set_sniper(True); self.holder = 40  # 10 x 4% = 40%
+        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
+            self.assertIsNone(live_engine.sniper_cycle(self.send, "1"))
+        self.assertEqual(state.status()["positions"], 0)
+
+    def test_time_stop_and_wide_stop(self):
+        import live_exit_monitor as m
+        live_engine.start(); state.set_sniper(True); self.side = "buy"
+        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
+            live_engine.sniper_cycle(self.send, "1")
+        def evaluate(value_usd):
+            with patch("live_exit_monitor.order", side_effect=[{"outAmount": "1"}, {"outAmount": str(int(value_usd * 1e6))}]):
+                return [s for _, _, s in m._evaluate()][0]
+        self.assertEqual(evaluate(9.0)["action"], "hold")          # -10%: inside sniper -15% stop
+        self.assertEqual(evaluate(8.4)["reason"], "stop_loss")     # -16%
+        data = state._load(); data["positions"][MINT]["opened_at"] -= 3600; state._save(data)
+        self.assertEqual(evaluate(10.5)["reason"], "time_stop")    # 1h, never took off
+
 
 if __name__ == "__main__":
     unittest.main()

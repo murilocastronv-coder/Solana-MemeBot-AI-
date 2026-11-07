@@ -10,7 +10,8 @@ import live_trade_state
 from jupiter_v2_executor import order, SOL_MINT, USDC_MINT
 
 _last_alert = {}
-CHECK_INTERVAL_SECONDS = 30
+CHECK_INTERVAL_SECONDS = 20
+SNIPER_MAX_HOLD_SECONDS = 45 * 60  # sniper trade that never took off is closed
 
 def _evaluate():
     state = _load()
@@ -28,7 +29,15 @@ def _evaluate():
                 raise ValueError("No executable SOL quote")
             usd_quote = order(SOL_MINT, USDC_MINT, sol_out)
             proceeds = int(usd_quote["outAmount"]) / 1_000_000
-            signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0))
+            if position.get("mode") == "sniper":
+                signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0),
+                                              stop_loss="0.15", arm="1.30", drop="0.15")
+                held = time.time() - float(position.get("opened_at") or time.time())
+                if (signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS
+                        and signal["reason"] != "trailing"):
+                    signal.update(action="sell", reason="time_stop")
+            else:
+                signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0))
             if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
                 live_trade_state.update_peak(mint, signal["peak_ratio"])
             yield mint, position, signal

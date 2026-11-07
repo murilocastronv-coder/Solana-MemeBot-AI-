@@ -68,12 +68,29 @@ def pnl_summary():
                 "trades_closed": int(state.get("trades_closed", 0)),
                 "trades_won": int(state.get("trades_won", 0))}
 
-def set_position_label(mint, symbol):
+def set_position_label(mint, symbol, mode="normal"):
+    import time as _time
     with _LOCK:
         state = _load()
         if mint in state["positions"]:
             state["positions"][mint]["symbol"] = str(symbol)[:20]
+            state["positions"][mint]["mode"] = mode
+            state["positions"][mint]["opened_at"] = _time.time()
             _save(state)
+
+def set_sniper(enabled):
+    with _LOCK:
+        state = _load()
+        state["sniper_enabled"] = bool(enabled)
+        _save(state)
+
+def sniper_enabled():
+    with _LOCK:
+        return bool(_load().get("sniper_enabled", False))
+
+def positions_by_mode(mode):
+    with _LOCK:
+        return sum(1 for p in _load()["positions"].values() if p.get("mode", "normal") == mode)
 
 def stop():
     with _LOCK:

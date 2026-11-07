@@ -45,18 +45,20 @@ TRAIL_ARM = Decimal("1.15")   # trailing stop activates at +15%
 TRAIL_DROP = Decimal("0.10")  # then sells after a 10% drop from the best value
 
 
-def trailing_exit_signal(cost_usd, executable_proceeds_usd, peak_ratio=0):
-    """SL -8% always; above +15% let profit run and sell 10% below the peak."""
+def trailing_exit_signal(cost_usd, executable_proceeds_usd, peak_ratio=0,
+                         stop_loss=STOP_LOSS, arm=TRAIL_ARM, drop=TRAIL_DROP):
+    """SL always; above `arm` let profit run and sell `drop` below the peak."""
+    stop_loss, arm, drop = Decimal(str(stop_loss)), Decimal(str(arm)), Decimal(str(drop))
     cost = _positive(cost_usd)
     ratio = _positive(executable_proceeds_usd) / cost
     peak = max(ratio, Decimal(str(peak_ratio or 0)))
     change = float((ratio - 1) * 100)
     result = {"action": "hold", "reason": "inside_range", "change_pct": change,
               "peak_ratio": float(peak), "peak_pct": float((peak - 1) * 100)}
-    if ratio <= 1 - STOP_LOSS:
+    if ratio <= 1 - stop_loss:
         result.update(action="sell", reason="stop_loss")
-    elif peak >= TRAIL_ARM and ratio <= peak * (1 - TRAIL_DROP):
+    elif peak >= arm and ratio <= peak * (1 - drop):
         result.update(action="sell", reason="take_profit")
-    elif peak >= TRAIL_ARM:
+    elif peak >= arm:
         result["reason"] = "trailing"
     return result
