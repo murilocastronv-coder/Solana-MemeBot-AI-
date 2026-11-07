@@ -43,8 +43,42 @@ def send(chat,text,keyboard=None):
  return request_api("sendMessage",**args)
 def keyboard():
  return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"📊 Status trading real","callback_data":"live_status"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+def trading_readiness():
+ """Report observed switches and ledger state; never imply real trading works."""
+ st=trade_state.status()
+ checks={
+  "Permissão Render":os.getenv("LIVE_TRADING_ENABLED")=="true",
+  "Proprietário privado":bool(telegram_owner.get_owner()),
+  "Jupiter API":bool(os.getenv("JUPITER_API_KEY")),
+  "RPC Solana dedicado":bool(os.getenv("SOLANA_RPC_URL")) and os.getenv("SOLANA_RPC_URL")!="https://api.mainnet-beta.solana.com",
+  "Carteira criptografada":bool(get_address()) and bool(os.getenv("BOT_WALLET_ENCRYPTION_PASSPHRASE")),
+  "Sem ordens pendentes":st["pending"]==0,
+  "Compras automáticas integradas":False,
+  "Vendas TP/SL automáticas integradas":False,
+  "Recuperação e PnL validados":False,
+ }
+ running=False  # Never claim active until a working autonomous engine is implemented.
+ return st,checks,running
+
+def trading_status_text():
+ st,checks,running=trading_readiness()
+ lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
+        "🔴 ROBÔ DESLIGADO" if not running else "🟢 ROBÔ LIGADO",
+        "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
+        "Compras automáticas: NÃO",
+        "Vendas automáticas TP/SL: NÃO",
+        "Posições registradas: "+str(st["positions"])+" / 3",
+        "Ordens pendentes: "+str(st["pending"]),
+        "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ 3.00",
+        "",
+        "VERIFICAÇÕES:"]
+ lines += [("✅ " if ok else "❌ ")+name for name,ok in checks.items()]
+ lines += ["","⚠️ Chave geral ligada não significa trading em execução.",
+           "Nenhuma compra é iniciada pelo botão enquanto o ciclo real não estiver concluído."]
+ return "\n".join(lines)
+
 def menu(chat):
- send(chat,"🤖 Solana MemeBot AI\nCarteira Solana mainnet. Trading real permanece DESATIVADO até a integração e validação de compras e vendas on-chain. Nenhuma operação é executada ao tocar em Iniciar enquanto não estiver pronto.",keyboard())
+ send(chat,"🤖 Solana MemeBot AI\n"+trading_status_text(),keyboard())
 def market_json(url):
  last_error=None
  for attempt in range(3):
@@ -231,7 +265,7 @@ def handle(update):
    st=trade_state.status()
    if st["pending"]:
     raise RuntimeError("Há transação pendente de reconciliação")
-   send(chat,"⛔ Trading real ainda indisponível: o executor Jupiter está instalado, mas o ciclo de compra, liquidação, venda automática TP/SL e recuperação não está concluído. Nenhuma ordem foi enviada. Não é seguro ativar apenas pelo botão.")
+   send(chat,"⛔ Não foi possível ligar o robô.\n"+trading_status_text(),keyboard())
   except Exception as exc:
    send(chat,"⛔ Não foi possível iniciar trading real. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada. Use /id para verificar o proprietário e configure as credenciais somente nos segredos do Render.")
  elif action in ("live_stop","/parar","/live_off"):
@@ -243,8 +277,7 @@ def handle(update):
    logging.exception("persistent trading stop failed")
    send(chat,"⚠️ Falha ao salvar parada no disco. Trading real permanece bloqueado no executor; verifique o Render.")
  elif action in ("live_status","/status_real"):
-  checks=live_status()
-  send(chat,"📊 TRADING REAL\nStatus: DESATIVADO\nCarteira: "+(get_address() or "não configurada")+"\nJupiter V2: módulo instalado\nExecutor ligado ao controle de ordens: SIM (não ativado)\nAssinatura/envio: BLOQUEADOS até testes e verificações\nCompras e vendas reais automáticas: NÃO ATIVADAS\nTP +15% | SL -8% | US$ 10 por ordem.")
+  send(chat,trading_status_text(),keyboard())
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\nCompra: US$ 10 | TP: +15% | SL: -8%\nSaldo fictício livre: $"+fmt(st["balance"])+"\nPosições automáticas: "+str(st["open"])+" / 3\nResultado realizado: $"+fmt(st["realized"])+"\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
