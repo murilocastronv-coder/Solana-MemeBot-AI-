@@ -109,64 +109,34 @@ def signal(candles):
     return None, a, last["c"]
 
 
-# ------------------------------------------------------------------ "Compra no fundo" (dip buying with up to 3 buys)
-# Long only. On 5m candles: after a big drop, buy US$ 25 at 5x; if it keeps falling a good distance,
-# buy US$ 25 more (max 3 buys). One buy: close at +US$ 2.50 net of fees. 2-3 buys: close as soon as the
-# whole position reaches DIP_TP_MULTI net. Emergency stop before liquidation.
-DIP_USD = 20.0
-DIP_LEV = 3
-DIP_MAX_BUYS = 2
-DIP_DROP = 0.015          # price >= 1.5% below the highest high of the last 2 hours (24 candles)
-DIP_LOOKBACK = 24
-DIP_RSI = 30              # RSI 14 below 30 (oversold) ...
-DIP_GAP = 0.04            # re-buy only after a big further drop: 4% below the first buy
-DIP_TREND_EMA = 200       # only buy dips while BTC is above its 200-hour EMA (uptrend)
-DIP_TP_FIRST = 2.50       # net profit target (US$) with a single buy
-DIP_TP_MULTI = 3.00       # net profit target (US$) with 2-3 buys
-DIP_EMERGENCY = 0.07      # close all if price falls 7% below the average price (3x liquidates ~30%)
+# ------------------------------------------------------------------ LONG DCA M5 (see dca_strategy.py)
+import dca_strategy as DCA
+
+DCA_CFG = DCA.Config()        # spec defaults: $25 x 10x, max 3 buys, TP +$2.50 net, H1 filter, emergency stop
+_h1_cache = [0.0, None]
 
 
-def rsi(closes, length=14):
-    gains = losses = 0.0
-    for a, b in zip(closes[-length - 1:-1], closes[-length:]):
-        d = b - a
-        gains += max(d, 0); losses += max(-d, 0)
-    if losses == 0:
-        return 100.0
-    rs = (gains / length) / (losses / length)
-    return 100 - 100 / (1 + rs)
+def h1_state():
+    """(strong_downtrend?, ATR14) of the last closed hour; cached 5 minutes."""
+    if time.time() - _h1_cache[0] > 300 or _h1_cache[1] is None:
+        h1 = fetch_candles("1h")
+        closes = [c["c"] for c in h1]
+        down = DCA.h1_strong_down_list(closes)
+        atr_v = DCA.atr_list([c["h"] for c in h1], [c["l"] for c in h1], closes)
+        _h1_cache[:] = [time.time(), (down[-1] if down else None, atr_v[-1] if atr_v else None)]
+    return _h1_cache[1]
 
 
-def trend_up(hourly_closes):
-    """Uptrend filter: last closed 1h price above its 200-hour EMA."""
-    if len(hourly_closes) < DIP_TREND_EMA + 1:
-        return False
-    return hourly_closes[-1] > ema(hourly_closes, DIP_TREND_EMA)
-
-
-_hourly_cache = [0.0, []]
-
-
-def hourly_closes():
-    if time.time() - _hourly_cache[0] > 600:
-        _hourly_cache[:] = [time.time(), [c["c"] for c in fetch_candles("1h")]]
-    return _hourly_cache[1]
-
-
-def dip_signal(candles, drop=None, rsi_max=None):
-    """(buy?, info) on the last closed 5m candle: big drop from the 2-hour high, oversold RSI, and the
-    first green candle (sign of a bottom)."""
-    drop = DIP_DROP if drop is None else drop
-    rsi_max = DIP_RSI if rsi_max is None else rsi_max
-    if len(candles) < DIP_LOOKBACK + 16:
-        return False, {"drop": 0.0, "rsi": 50.0}
+def dca_signal(candles, cfg=None):
+    """Entry signal on the last closed 5m candle. Returns (ok, info)."""
+    cfg = cfg or DCA_CFG
     closes = [c["c"] for c in candles]
-    last = candles[-1]
-    high = max(c["h"] for c in candles[-DIP_LOOKBACK - 1:-1])
-    fall = 1 - last["c"] / high
-    r = min(rsi(closes), rsi(closes[:-1]))
-    ok = fall >= drop and r < rsi_max and last["c"] > last["o"]
-    return ok, {"drop": fall, "rsi": r}
+    highs = [c["h"] for c in candles]
+    rsi_v = DCA.rsi_list(closes)
+    i = len(candles) - 1
+    ok = i > 0 and DCA.entry_signal(cfg, closes, highs, rsi_v, i)
+    hi4 = max(highs[-cfg.lookback:]) if highs else 0
+    return ok, {"rsi": rsi_v[i] if i >= 0 else 50.0, "drop": (1 - closes[-1] / hi4) if hi4 else 0.0}
 
 
 # ------------------------------------------------------------------ simulated account
@@ -459,62 +429,76 @@ def _account_value(data):
     return base + (pos["collateral"] if pos else 0)
 
 
-def _dip_add(data, price, send, chat):
-    """One buy of US$ 25 at DIP_LEV x (first buy or re-buy). Returns True if it went through."""
+def _dca_view(pos):
+    """Adapter from the stored position to dca_strategy's position dict."""
+    return {"entries": [e["price"] for e in pos["entries"]], "size": pos["size_usd"],
+            "coins": sum(e["size"] / e["price"] for e in pos["entries"]), "margin": pos["collateral"],
+            "avg": pos["entry"]}
+
+
+def _dip_add(data, price, send, chat, atr_h1=None):
+    """One DCA buy ($25 margin x 10x). Returns True if it went through."""
+    cfg = DCA_CFG
     real = data["mode"] == "real"
     pos_key, _ = _keys(data)
     pos = data[pos_key]
     n = len(pos["entries"]) + 1 if pos else 1
-    collateral, size = DIP_USD, DIP_USD * DIP_LEV
+    collateral, size = cfg.margin, cfg.margin * cfg.leverage
     entry, signature = price, None
     if real:
         import jupiter_perps as jp
         try:
             ensure_usdc(collateral)
-            onchain = jp.open_position("long", collateral, DIP_LEV, price,
+            onchain = jp.open_position("long", collateral, cfg.leverage, price,
                                        min_size=(pos["size_usd"] if pos else 0))
         except Exception as exc:
             send(chat, "⛔ Compra " + str(n) + " não executada: " + str(exc)[:300])
             return False
         signature = onchain.get("signature")
-        entry = price
     else:
         if data["balance"] < collateral:
-            send(chat, "💤 Saldo simulado insuficiente para a compra " + str(n) + " ($" + format(DIP_USD, ".0f") + ").")
+            send(chat, "💤 Saldo simulado insuficiente para a compra " + str(n) + " ($" + format(collateral, ".0f") + ").")
             return False
         data["balance"] -= collateral
     if not pos:
         pos = data[pos_key] = {"side": "long", "entry": entry, "collateral": 0.0, "size_usd": 0.0,
-                               "leverage": DIP_LEV, "stop": 0.0, "best": entry, "atr": 0.0,
-                               "opened_at": time.time(), "timeframe": "5m", "strategy": "dip", "entries": []}
+                               "leverage": cfg.leverage, "stop": 0.0, "best": entry, "atr": 0.0,
+                               "opened_at": time.time(), "timeframe": "5m", "strategy": "dip", "entries": [],
+                               "atr_h1": atr_h1}
     pos["entries"].append({"price": entry, "size": size, "collateral": collateral, "at": time.time()})
     pos["entry"] = sum(e["size"] for e in pos["entries"]) / sum(e["size"] / e["price"] for e in pos["entries"])
     pos["size_usd"] += size
     pos["collateral"] += collateral
-    target = DIP_TP_FIRST if n == 1 else DIP_TP_MULTI
-    send(chat, ("🟢 COMPRA NO FUNDO" if n == 1 else "🔁 RECOMPRA " + str(n) + "/" + str(DIP_MAX_BUYS)) +
-         " — BTC LONG " + str(DIP_LEV) + "x " + ("💵 REAL" if real else "(simulado)") + "\nPreço: $" + format(entry, ",.0f") +
-         " · garantia $" + format(DIP_USD, ".0f") + " → posição $" + format(size, ".0f") + "\nTotal: " + str(n) + " compra(s), $" + format(pos["collateral"], ".0f") +
-         " de garantia, preço médio $" + format(pos["entry"], ",.0f") +
-         "\n🎯 Fecha tudo com lucro líquido ≥ $" + format(target, ".2f") +
-         (" · próxima recompra em $" + format(entry * (1 - DIP_GAP), ",.0f") if n < DIP_MAX_BUYS else " · sem mais recompras") +
-         "\n🛑 Stop de emergência: $" + format(pos["entry"] * (1 - DIP_EMERGENCY), ",.0f") +
+    view = _dca_view(pos)
+    hours = (time.time() - pos["opened_at"]) / 3600
+    nxt = DCA.rebuy_price(cfg, view, pos.get("atr_h1"))
+    send(chat, ("🟢 COMPRA 1/" if n == 1 else "🔁 RECOMPRA " + str(n) + "/") + str(cfg.max_buys) +
+         " — BTC LONG " + str(cfg.leverage) + "x " + ("💵 REAL" if real else "(simulado)") +
+         "\nPreço: $" + format(entry, ",.0f") + " · margem $" + format(collateral, ".0f") + " → posição $" +
+         format(size, ".0f") + "\nTotal: $" + format(pos["collateral"], ".0f") + " de margem · posição $" +
+         format(pos["size_usd"], ".0f") + " · preço médio $" + format(pos["entry"], ",.0f") +
+         "\n🎯 Fecha 100% com +$" + format(cfg.tp_usd, ".2f") + " líquido (≈ $" + format(DCA.tp_price(cfg, view, hours), ",.0f") + ")" +
+         ("\n🔁 Próxima recompra: $" + format(nxt, ",.0f") if nxt else "\nSem mais recompras") +
+         "\n🛑 Stop de emergência: $" + format(DCA.stop_price(cfg, view, hours), ",.0f") +
+         " · liquidação ≈ $" + format(DCA.liq_price(cfg, view), ",.0f") +
          ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
     return True
 
 
 def _dip_step(data, price, send, chat, candles):
-    """Manage the open dip position every ~10 s; look for a new bottom at each closed 5m candle."""
+    """Every ~10 s: manage the open DCA cycle. At each closed 5m candle: look for a new entry."""
+    cfg = DCA_CFG
     pos_key, _ = _keys(data)
     pos = data[pos_key]
     if pos and pos.get("strategy") == "dip":
-        net = _pnl(pos, price)
-        n = len(pos["entries"])
-        if net >= (DIP_TP_FIRST if n == 1 else DIP_TP_MULTI):
+        view = _dca_view(pos)
+        hours = (time.time() - pos["opened_at"]) / 3600
+        rb = DCA.rebuy_price(cfg, view, pos.get("atr_h1"))
+        if DCA.net_pnl(cfg, view, price, hours) >= cfg.tp_usd:
             _close(data, price, "take_profit", send, chat)
-        elif DIP_EMERGENCY and price <= pos["entry"] * (1 - DIP_EMERGENCY):
+        elif price <= DCA.stop_price(cfg, view, hours):
             _close(data, price, "emergency", send, chat)
-        elif n < DIP_MAX_BUYS and price <= pos["entries"][-1]["price"] * (1 - DIP_GAP):
+        elif rb is not None and price <= rb:
             _dip_add(data, price, send, chat)
         return
     if pos:
@@ -522,22 +506,22 @@ def _dip_step(data, price, send, chat, candles):
     if not candles or candles[-1]["t"] == data.get("last_candle"):
         return
     data["last_candle"] = candles[-1]["t"]
-    ok, info = dip_signal(candles)
+    ok, info = dca_signal(candles)
     try:
-        trend = trend_up(hourly_closes())
+        down, atr_h1 = h1_state()
     except Exception:
-        trend = False
-    info["trend"] = trend
-    ok = ok and trend
+        down, atr_h1 = None, None
+    blocked = cfg.h1_filter and down is not False
     data["dip_last"] = info
     if time.time() - data.get("dip_report_at", 0) >= 3600:
         data["dip_report_at"] = time.time()
-        send(chat, "🎯 Compra no fundo ligada: esperando queda. Agora o BTC está " + format(info["drop"] * 100, ".2f") +
-             "% abaixo da máxima de 2 h (precisa ≥ " + format(DIP_DROP * 100, ".1f") + "%), RSI " +
-             format(info["rsi"], ".0f") + " (precisa < " + str(DIP_RSI) + "), tendência de 200 h: " +
-             ("ALTA ✅" if trend else "BAIXA ❌ (não compra quedas em mercado de baixa)") + ".")
-    if ok:
-        _dip_add(data, price, send, chat)
+        send(chat, "📉 Long DCA M5 ligado (" + ("💵 real" if data["mode"] == "real" else "🧪 simulação") +
+             "): esperando queda forte. Agora: RSI " + format(info["rsi"], ".0f") + " (precisa < " +
+             format(cfg.rsi_max, "g") + "), queda de " + format(info["drop"] * 100, ".2f") +
+             "% em 4 h (precisa ≥ " + format(cfg.drop_4h * 100, "g") + "%), filtro H1: " +
+             ("tendência de baixa forte ❌" if down else "ok ✅" if down is False else "sem dados") + ".")
+    if ok and not blocked:
+        _dip_add(data, price, send, chat, atr_h1)
 
 
 def test_real_order(send, chat, price=None):
@@ -587,7 +571,7 @@ def status_text(price=None):
     real = s["mode"] == "real"
     lines = ["₿ ROBÔ BTC ALAVANCADO — " + ("🟢 LIGADO" if s["enabled"] else "🔴 DESLIGADO"),
              "Modo: " + ("💵 DINHEIRO REAL (carteira do bot, Jupiter Perps)" if real else "🧪 SIMULAÇÃO com preço real"),
-             ("Estratégia: 🎯 COMPRA NO FUNDO (só long, $" + format(DIP_USD, ".0f") + " × " + str(DIP_LEV) + "x, até " + str(DIP_MAX_BUYS) + " compras, recompra a −" + format(DIP_GAP * 100, ".0f") + "%)" if s.get("strategy") == "dip" else
+             ("Estratégia: 📉 LONG DCA M5 ($25 × 10x, até 3 compras, TP +$2,50 líquido)" if s.get("strategy") == "dip" else
               "Estratégia: 📈 Tendência · gráfico " + s["timeframe"]),
              "Alavancagem: " + str(s["leverage"]) + "x | 20% da conta por ordem",
              ("Conta real" if real else "Saldo simulado") + ": $" + format(s["equity"], ".2f") +
