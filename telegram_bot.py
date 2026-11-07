@@ -4,6 +4,7 @@ from flask import Flask,Response,request
 import paper_positions as paper
 import paper_auto as auto
 from live_preflight import live_status, risk_settings
+import live_trade_state as trade_state
 from live_swap_executor import configured as swap_configured
 from bot_wallet_service import create_or_get, get_address, export_private_key
 from datetime import datetime,timezone
@@ -221,7 +222,12 @@ def handle(update):
   send(chat,"⛔ TRADING REAL BLOQUEADO — diagnóstico\nNão executei nenhuma compra.\nPendências:\n• "+"\n• ".join(missing)+"\n\nParâmetros aprovados: US$ 10/compra, TP +15%, SL -8%, 3 posições, perdas máximas US$ 3/dia.\nO botão só poderá iniciar após testes completos. Não envie chaves ou senhas pelo Telegram.")
  elif action in ("live_stop","/parar","/live_off"):
   auto.set_enabled(chat,False)
-  send(chat,"⏹️ Trading automático desativado. Nenhuma compra ou venda real estava habilitada.")
+  try:
+   trade_state.stop()
+   send(chat,"⏹️ Novas operações bloqueadas no estado persistente. Posições eventualmente abertas precisam continuar monitoradas até liquidação.")
+  except Exception:
+   logging.exception("persistent trading stop failed")
+   send(chat,"⚠️ Falha ao salvar parada no disco. Trading real permanece bloqueado no executor; verifique o Render.")
  elif action in ("live_status","/status_real"):
   checks=live_status()
   send(chat,"📊 TRADING REAL\nStatus: DESATIVADO\nCarteira: "+(get_address() or "não configurada")+"\nAPI de swaps: "+("configurada" if swap_configured() else "não configurada")+"\nAssinatura/envio: BLOQUEADOS até testes e verificações\nCompras e vendas reais: 0 executadas por este bot\nTP +15% | SL -8% | US$ 10 por ordem.")
