@@ -53,7 +53,7 @@ def keyboard():
   [{"text":"⏱️ Gráfico 1h","callback_data":"tf_1h"},{"text":"⚡ Gráfico 5m","callback_data":"tf_5m"}],
   [{"text":"💵 Modo REAL","callback_data":"mode_real"},{"text":"🧪 Modo simulação","callback_data":"mode_sim"}],
   [{"text":"🧪 Teste real $5","callback_data":"btc_test"}],
-  [{"text":"📜 Histórico","callback_data":"history"}],
+  [{"text":"📜 Histórico","callback_data":"history"},{"text":"📊 Backtest","callback_data":"backtest"}],
   [{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}]]
 def leverage_keyboard():
@@ -306,6 +306,15 @@ def handle(update):
   btc_perps.set_enabled(True);lev=btc_perps.summary()["leverage"]
   st=btc_perps.summary()
   send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x · "+("💵 DINHEIRO REAL" if st["mode"]=="real" else "🧪 SIMULAÇÃO com preço real")+" · gráfico "+st["timeframe"]+"\nRompimento de 20 velas a favor da média de 200 + stop por ATR e stop móvel. LONG e SHORT, 20% da conta por ordem. Decide a cada vela fechada e controla o stop a cada ~20 s.",keyboard())
+ elif action in ("backtest","/backtest"):
+  send(chat,"⏳ Rodando backtest dos últimos 30 dias (baixando ~9 mil velas do BTC)... leva até 1 minuto.")
+  def run_bt():
+   try:
+    import backtest
+    send(chat,backtest.run(),keyboard())
+   except Exception as exc:
+    logging.exception("backtest failed");send(chat,"❌ Backtest falhou: "+type(exc).__name__+": "+str(exc)[:200])
+  threading.Thread(target=run_bt,daemon=True).start()
  elif action in ("strat_scalp","strat_scalp_ok"):
   st=btc_perps.summary()
   if st["mode"]=="real" and action=="strat_scalp":
