@@ -70,19 +70,68 @@ def _failure(send, chat, side, mint, exc):
                 "⛔ " + side.capitalize() + " não enviada: " + str(exc)[:200])
 
 
+def _skip_reasons(rows):
+    """Count why scanned tokens did not qualify (for the hourly report)."""
+    counts = {"liquidez < US$ 50 mil": 0, "volume 24h < US$ 20 mil": 0, "idade < 24h": 0,
+              "FDV/liquidez > 100": 0, "variação 24h fora de -20%..+80%": 0}
+    now_ms = time.time() * 1000
+    for p in rows:
+        try:
+            liq = float(p.get("liquidity", {}).get("usd") or 0)
+            vol = float(p.get("volume", {}).get("h24") or 0)
+            fdv = float(p.get("fdv") or 0)
+            age = (now_ms - float(p.get("pairCreatedAt") or now_ms)) / 3_600_000
+            change = float(p.get("priceChange", {}).get("h24") or 0)
+        except (TypeError, ValueError):
+            continue
+        if liq < 50000: counts["liquidez < US$ 50 mil"] += 1
+        if vol < 20000: counts["volume 24h < US$ 20 mil"] += 1
+        if age < 24: counts["idade < 24h"] += 1
+        if not (fdv > 0 and liq > 0 and fdv / liq <= 100): counts["FDV/liquidez > 100"] += 1
+        if not -20 <= change <= 80: counts["variação 24h fora de -20%..+80%"] += 1
+    return counts
+
+
+def _why_not_ready():
+    st = state.status()
+    if not st["enabled"] or st["halted"]:
+        return None  # owner switched it off (or a limit halted it): nothing to report
+    try:
+        bridge.preflight()
+    except Exception as exc:
+        return str(exc)[:200]
+    if not get_address():
+        return "Carteira do bot não encontrada"
+    return None
+
+
+REPORT_EVERY_SECONDS = 3600
+
+
 def buy_cycle(rows, send, chat):
     """Buy at most one new token per scan (US$ 10)."""
-    if not chat or not ready():
+    if not chat:
+        return None
+    if not ready():
+        problem = _why_not_ready()
+        if problem:
+            _notice(send, chat, "not_ready", "⚠️ Robô ligado mas bloqueado: " + problem, REPORT_EVERY_SECONDS)
         return None
     allowed, reason = state.can_open()
     if not allowed:
+        labels = {"Position limit": "3 posições abertas; espera vender para comprar de novo",
+                  "Daily loss limit": "limite de perda do dia (US$ 3) atingido",
+                  "Unreconciled transaction": "transação pendente de conferência"}
+        _notice(send, chat, "cannot_open", "⏸️ Sem novas compras: " + labels.get(reason, reason), REPORT_EVERY_SECONDS)
         return None
     wallet = get_address()
     open_mints = set(state._load()["positions"])
     now = time.monotonic()
+    qualified = 0
     for p in rows:
         if not candidate(p):
             continue
+        qualified += 1
         mint = p["baseToken"]["address"]
         if mint in open_mints or now - _tried.get(mint, -RETRY_MINT_AFTER_SECONDS) < RETRY_MINT_AFTER_SECONDS:
             continue
@@ -108,6 +157,13 @@ def buy_cycle(rows, send, chat):
             send(chat, "⚠️ Compra enviada mas não conciliada (" + str(settled.get("reason", settled.get("status"))) +
                  "). Robô bloqueado.\nTx: https://solscan.io/tx/" + str(result["signature"]))
         return settled
+    reasons = sorted(_skip_reasons(rows).items(), key=lambda kv: -kv[1])
+    detail = "\n".join("• " + str(n) + " com " + label for label, n in reasons if n)
+    extra = " (já compradas ou tentadas nas últimas 24h)" if qualified else ""
+    _notice(send, chat, "no_candidate",
+            "🔎 Robô ligado e procurando. Última varredura: " + str(len(rows)) + " moedas, " +
+            str(qualified) + " passaram nos filtros" + extra + ".\nMotivos de recusa:\n" + (detail or "• nenhuma moeda recebida") +
+            "\nPróximo resumo em 1 hora.", REPORT_EVERY_SECONDS)
     return None
 
 
