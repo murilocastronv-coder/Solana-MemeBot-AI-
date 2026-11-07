@@ -16,7 +16,7 @@ TIMEOUT=18
 class SwapError(RuntimeError): pass
 
 def configured():
-    return bool(os.getenv("SOLANA_RPC_URL") and os.getenv("LIVE_TRADING_ENABLED")=="true")
+    return bool(os.getenv("LIVE_TRADING_ENABLED")=="true")
 
 def _headers():
     key=os.getenv("JUPITER_API_KEY","")
@@ -47,8 +47,7 @@ def build_swap(quote_response,public_address):
     return payload
 
 def rpc(method,params):
-    url=os.getenv("SOLANA_RPC_URL")
-    if not url:raise SwapError("SOLANA_RPC_URL missing")
+    url=os.getenv("SOLANA_RPC_URL","https://api.mainnet-beta.solana.com")
     r=requests.post(url,json={"jsonrpc":"2.0","id":1,"method":method,"params":params},timeout=TIMEOUT)
     r.raise_for_status()
     data=r.json()
