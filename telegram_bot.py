@@ -10,7 +10,11 @@ PRIVATE_CHAT=None  # First private /start after process startup; resets on resta
 INTERVAL=max(60,int(os.getenv("SCAN_INTERVAL_SECONDS","300")))
 TP=float(os.getenv("TP_PERCENT","15"))
 SL=float(os.getenv("SL_PERCENT","8"))
-MIN_LIQ=float(os.getenv("MIN_LIQUIDITY_USD","25000"))
+MIN_LIQ=float(os.getenv("MIN_LIQUIDITY_USD","50000"))
+MIN_VOLUME=float(os.getenv("MIN_VOLUME_24H_USD","20000"))
+MIN_AGE_HOURS=float(os.getenv("MIN_TOKEN_AGE_HOURS","24"))
+MAX_FDV_LIQ=float(os.getenv("MAX_FDV_LIQ_RATIO","100"))
+MAX_ALERTS=int(os.getenv("MAX_ALERTS_PER_SCAN","5"))
 BASE="https://api.telegram.org/bot"+TOKEN
 session=requests.Session()
 seen=set()
@@ -73,16 +77,28 @@ def message(p):
 def active_chat():
  return CHAT or PRIVATE_CHAT
 
+def qualifies(p):
+ try:
+  liq=float(p.get("liquidity",{}).get("usd") or 0)
+  vol=float(p.get("volume",{}).get("h24") or 0)
+  fdv=float(p.get("fdv") or 0)
+  created=float(p.get("pairCreatedAt") or 0)
+  age=(time.time()*1000-created)/3600000 if created else -1
+  return liq>=MIN_LIQ and vol>=MIN_VOLUME and age>=MIN_AGE_HOURS and liq>0 and 0<fdv/liq<=MAX_FDV_LIQ and float(p.get("priceUsd") or 0)>0
+ except (TypeError,ValueError,ZeroDivisionError):return False
+
 def scan(alert=False):
  global last
  rows=fetch();last=rows
  if alert and active_chat():
+  sent=0
   for p in reversed(rows):
    mint=p.get("baseToken",{}).get("address")
    if mint in seen:continue
    seen.add(mint)
-   if float(p.get("liquidity",{}).get("usd") or 0)>=MIN_LIQ:
-    send_coin(active_chat(),p,"🔔 Token detectado (não é recomendação):\n")
+   if qualifies(p) and sent<MAX_ALERTS:
+    send_coin(active_chat(),p,"🔔 Token passou nos filtros (não é recomendação):\n")
+    sent+=1
   if len(seen)>2000:seen.clear()
  return rows
 def authorized(chat):
@@ -108,14 +124,15 @@ def handle(update):
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("scan","/scan"):
   try:
-   rows=scan(False);send(chat,"🔎 "+str(len(rows))+" tokens nesta amostra. Exibindo até 5 recém-detectados.")
-   for p in rows[:5]:send_coin(chat,p)
+   rows=scan(False);selected=[p for p in rows if qualifies(p)];send(chat,"🔎 "+str(len(rows))+" tokens nesta amostra; "+str(len(selected))+" passaram nos filtros. Exibindo até 5.")
+   for p in selected[:5]:send_coin(chat,p)
+   if not selected:send(chat,"Nenhum token passou nos filtros; não vou sugerir tokens sem dados suficientes.")
   except Exception:logging.exception("scan failed");send(chat,"Falha temporária ao consultar DexScreener.")
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
  elif action in ("settings","/settings"):
-  send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nAlertas: liquidez mínima $"+str(MIN_LIQ)+"\nValores indicativos, não ordens. Ajuste TP_PERCENT e SL_PERCENT no Render.")
+  send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nLiquidez mínima: $"+str(MIN_LIQ)+"\nVolume 24h mínimo: $"+str(MIN_VOLUME)+"\nIdade mínima: "+str(MIN_AGE_HOURS)+" horas\nFDV/liquidez máximo: "+str(MAX_FDV_LIQ)+"\nAlertas por varredura: "+str(MAX_ALERTS)+"\nSem auditoria on-chain. Ajuste no Render.")
  else:menu(chat)
 def loop():
  offset=None;next_scan=0
