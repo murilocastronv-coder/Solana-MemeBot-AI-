@@ -28,7 +28,7 @@ def candidate(p):
   age=(time.time()*1000-float(p.get("pairCreatedAt") or 0))/3600000
   change=float(p.get("priceChange",{}).get("h24") or 0)
   return (bool(mint) and bool(paper.MINT.fullmatch(mint)) and math.isfinite(price) and price>0 and
-    liq>=50000 and volume>=20000 and age>=24 and fdv>0 and fdv/liq<=100 and
+    liq>=30000 and volume>=20000 and age>=24 and fdv>0 and fdv/liq<=100 and
     -20<=change<=80)
  except (TypeError,ValueError,ZeroDivisionError):return False
 def enter(chat,rows,send,fmt):

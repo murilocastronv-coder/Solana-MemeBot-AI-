@@ -72,7 +72,7 @@ def _failure(send, chat, side, mint, exc):
 
 def _skip_reasons(rows):
     """Count why scanned tokens did not qualify (for the hourly report)."""
-    counts = {"liquidez < US$ 50 mil": 0, "volume 24h < US$ 20 mil": 0, "idade < 24h": 0,
+    counts = {"liquidez < US$ 30 mil": 0, "volume 24h < US$ 20 mil": 0, "idade < 24h": 0,
               "FDV/liquidez > 100": 0, "variação 24h fora de -20%..+80%": 0}
     now_ms = time.time() * 1000
     for p in rows:
@@ -84,7 +84,7 @@ def _skip_reasons(rows):
             change = float(p.get("priceChange", {}).get("h24") or 0)
         except (TypeError, ValueError):
             continue
-        if liq < 50000: counts["liquidez < US$ 50 mil"] += 1
+        if liq < 30000: counts["liquidez < US$ 30 mil"] += 1
         if vol < 20000: counts["volume 24h < US$ 20 mil"] += 1
         if age < 24: counts["idade < 24h"] += 1
         if not (fdv > 0 and liq > 0 and fdv / liq <= 100): counts["FDV/liquidez > 100"] += 1
