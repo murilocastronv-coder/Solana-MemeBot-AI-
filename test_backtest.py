@@ -64,44 +64,54 @@ def dip_series(after, t0=1_700_000_000):
 
 
 class DipBacktestTests(unittest.TestCase):
+    def run_plain(self, c, **kw):
+        return bt.run_dip(c, bt.dip_signals(c, trend=False), **kw)       # trend filter tested separately
+
     def test_signal_fires_at_bottom(self):
         c = dip_series([])
         self.assertTrue(b.dip_signal(c)[0])
         self.assertFalse(b.dip_signal(c[:-1])[0])                       # red candle: wait for green
 
     def test_single_buy_closes_at_2_50(self):
-        c = dip_series([])
-        bottom = c[-1]["c"]
-        c = dip_series([bottom * 1.006, bottom * 1.012, bottom * 1.024])
-        r = bt.run_dip(c)
-        self.assertEqual((r["cycles"], r["by_buys"][1]), (1, 1))
-        self.assertAlmostEqual(r["pnl_usd"], 2.50, places=2)
-
-    def test_three_buys_close_at_3(self):
         bottom = dip_series([])[-1]["c"]
-        path = [bottom * 0.99, bottom * 0.979, bottom * 0.968, bottom * 0.958, bottom * 0.975, bottom * 0.99, bottom * 1.005]
-        r = bt.run_dip(dip_series(path))
-        self.assertEqual((r["cycles"], r["by_buys"][3]), (1, 1))
-        self.assertAlmostEqual(r["pnl_usd"] - r["open_pnl"], 3.00, places=2)   # closed cycle = +$3 net
-        self.assertEqual(r["max_used"], 75)
+        r = self.run_plain(dip_series([bottom * 1.02, bottom * 1.04, bottom * 1.06]))
+        self.assertEqual((r["cycles"], r["by_buys"][1]), (1, 1))
+        self.assertAlmostEqual(r["pnl_usd"] - r["open_pnl"], 2.50, places=2)
+
+    def test_two_buys_close_at_3_max_two(self):
+        bottom = dip_series([])[-1]["c"]
+        path = [bottom * 0.98, bottom * 0.959, bottom * 0.93, bottom * 0.95, bottom * 0.99, bottom * 1.01]
+        r = self.run_plain(dip_series(path))
+        self.assertEqual((r["cycles"], r["by_buys"][2]), (1, 1))
+        self.assertAlmostEqual(r["pnl_usd"] - r["open_pnl"], 3.00, places=2)
+        self.assertEqual(r["max_used"], 40)                                # 2 x $20, never a 3rd buy
 
     def test_emergency_stop_and_liquidation(self):
         bottom = dip_series([])[-1]["c"]
-        path = [bottom * (1 - 0.01 * k) for k in range(1, 30)]           # keeps falling 29%
-        with_stop = bt.run_dip(dip_series(path))
+        path = [bottom * (1 - 0.01 * k) for k in range(1, 45)]           # keeps falling 44%
+        with_stop = self.run_plain(dip_series(path))
         self.assertEqual((with_stop["emergency"], with_stop["liquidated"]), (1, 0))
-        self.assertTrue(-35 < with_stop["pnl_usd"] < -20)                 # ~-$27 with 5x (was ~-$55 with 10x)
-        no_stop = bt.run_dip(dip_series(path), emergency=False)
+        self.assertTrue(-12 < with_stop["pnl_usd"] < -7)                   # ~-$9 with $20 x 3x x 2
+        no_stop = self.run_plain(dip_series(path), emergency=False)
         self.assertEqual(no_stop["liquidated"], 1)
         self.assertLess(no_stop["pnl_usd"], with_stop["pnl_usd"])
+
+    def test_trend_filter_blocks_dips_in_downtrend(self):
+        down = walk(3000, 300, drift=-0.0004, vol=0.002, seed=4)
+        up = walk(3000, 300, drift=0.0004, vol=0.002, seed=4)
+        self.assertFalse(any(bt.trend_flags(down)[-500:]))
+        self.assertTrue(all(bt.trend_flags(up)[-500:]))
+        self.assertFalse(any(bt.trend_flags(up)[:2000]))                   # not ready before 200 closed hours
 
     def test_one_year_is_fast_and_report(self):
         m5 = walk(365 * 288, 300, vol=0.0025, seed=11)
         t = time.time()
         text = bt.report_text(m5)
-        self.assertLess(time.time() - t, 60)
-        for part in ("COMPRA NO FUNDO", "P/L TOTAL", "Resultado por mês", "Sem stop de emergência", "taxas e deslize dobrados"):
+        self.assertLess(time.time() - t, 90)
+        for part in ("COMPRA NO FUNDO", "P/L TOTAL", "Resultado por mês", "Sem filtro de tendência",
+                     "Sem stop de emergência", "taxas e deslize dobrados", "juros"):
             self.assertIn(part, text)
+        self.assertGreaterEqual(text.count("  20"), 12)                     # every month listed
 
 
 if __name__ == "__main__":

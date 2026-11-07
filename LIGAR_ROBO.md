@@ -74,12 +74,13 @@ O menu agora é só de BTC (memecoins removidas; posições antigas continuam co
 ### ⚡ Gráfico 5m (operações rápidas o dia todo)
 Mesma lógica de rompimento a favor da tendência em velas de 5 min (canal de 100 min, tendência de ~16 h), stop 1,5×ATR e stop móvel 2,5×ATR. Pula sinais em que o stop é menor que 0,35% (as taxas comeriam mais de 1/3 do risco).
 
-### 🎯 Compra no fundo (só long, até 3 compras)
+### 🎯 Compra no fundo (só long, até 2 compras)
 Botões **📈 Estratégia tendência** / **🎯 Compra no fundo** (no modo real pede confirmação).
-- Compra **$25 × 5x** (posição $125) quando, no gráfico de 5 min, o BTC está ≥ 1,5% abaixo da máxima das últimas 2 h, RSI 14 < 30 e fecha a primeira vela verde.
-- Se cair mais 2% abaixo da última compra, **recompra $25 × 5x**, no máximo **3 compras** ($75 de garantia).
-- **1 compra**: fecha com **+$2,50 de lucro líquido** (taxas incluídas). **2–3 compras**: fecha tudo com **+$3,00 líquido**.
-- Nunca faz short. **Stop de emergência** em −7% do preço médio (com 5x a liquidação fica perto de −18%).
+- Só opera quando o BTC está em **tendência de alta** (último fechamento de 1 h acima da média de 200 h).
+- Compra **$20 × 3x** (posição $60) quando, no gráfico de 5 min, o BTC está ≥ 1,5% abaixo da máxima das últimas 2 h, RSI 14 < 30 e fecha a primeira vela verde.
+- Se cair mais **4%** abaixo da 1ª compra, compra mais **$20 × 3x** — no máximo **2 compras** ($40).
+- **1 compra**: fecha com **+$2,50 líquido**. **2 compras**: fecha tudo com **+$3,00 líquido**.
+- Nunca faz short. **Stop de emergência** em −7% do preço médio (com 3x a liquidação fica perto de −30%).
 
 ### 📊 Backtest (1 ano)
-Roda a Compra no fundo em 365 dias de velas de 5 min: P/L total, ciclos com lucro/perda, quantos usaram 1/2/3 compras, stops de emergência, liquidações, custos, queda máxima, resultado por mês, comparação com comprar e segurar, versão sem stop e com custos dobrados.
+Roda a Compra no fundo em 365 dias de velas de 5 min (+ ~8 dias de aquecimento para a média de 200 h): P/L total, ciclos com lucro/perda, quantos usaram 1/2 compras, stops de emergência, liquidações, custos (com juros separados), queda máxima, aviso se a conta ficou sem saldo, **todos os meses**, comparação com comprar e segurar, versão sem filtro de tendência, sem stop e com custos dobrados. Juros estimados em ~0,003%/h.

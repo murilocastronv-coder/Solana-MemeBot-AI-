@@ -318,10 +318,10 @@ def handle(update):
  elif action in ("strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok"):
   st=btc_perps.summary()
   if st["mode"]=="real" and action in ("strat_dip","strat_scalp"):
-   send(chat,"⚠️ COMPRA NO FUNDO COM DINHEIRO REAL\nCada compra usa $25 de garantia com 5x (posição de $125), até 3 compras ($75), recompra a cada −2%. Com 3 compras, uma queda de ~7% abaixo do preço médio aciona o stop de emergência (perda ~$27).\nRode o 📊 Backtest (1 ano) antes. Precisa de pelo menos ~$80 na carteira.",[[{"text":"✅ Confirmar compra no fundo REAL","callback_data":"strat_dip_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
+   send(chat,"⚠️ COMPRA NO FUNDO COM DINHEIRO REAL\nCada compra usa $20 de garantia com 3x (posição de $60), no máximo 2 compras ($40); a 2ª só depois de cair mais 4%. Com 2 compras, o stop de emergência (−7% do preço médio) custa ~$9.\nSó compra quedas quando o BTC está acima da média de 200 h. Rode o 📊 Backtest (1 ano) antes.",[[{"text":"✅ Confirmar compra no fundo REAL","callback_data":"strat_dip_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
   else:
    btc_perps.set_option("strategy","dip")
-   send(chat,"🎯 COMPRA NO FUNDO ATIVA ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+") — só compra, nunca short\n• Compra $25 × 5x quando o BTC cai ≥ 1,5% da máxima de 2 h, RSI < 30 e aparece a primeira vela verde de 5 min.\n• Se cair mais 2% abaixo da última compra, recompra $25 × 5x (máx. 3 compras).\n• 1 compra: fecha com +$2,50 de lucro líquido. 2–3 compras: fecha tudo com +$3,00 líquido.\n• Stop de emergência: −7% abaixo do preço médio.",keyboard())
+   send(chat,"🎯 COMPRA NO FUNDO ATIVA ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+") — só compra, nunca short\n• Só opera com o BTC em tendência de alta (acima da média de 200 h).\n• Compra $20 × 3x quando o BTC cai ≥ 1,5% da máxima de 2 h, RSI < 30 e aparece a primeira vela verde de 5 min.\n• Se cair mais 4% abaixo da 1ª compra, compra mais $20 × 3x (máx. 2 compras).\n• 1 compra: fecha com +$2,50 líquido (precisa o BTC subir ~4,4%). 2 compras: fecha tudo com +$3,00 líquido.\n• Stop de emergência: −7% abaixo do preço médio.",keyboard())
  elif action=="strat_trend":
   btc_perps.set_option("strategy","trend");send(chat,"📈 Estratégia de tendência ativa (rompimento + stop móvel).",keyboard())
  elif action in ("tf_1h","tf_5m"):

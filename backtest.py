@@ -100,9 +100,28 @@ SLIPPAGE = 0.0002   # 0.02% per side (spread + slippage), on top of the 0.06% fe
 DIP_START = 150.0   # needs up to 3 x $25 of collateral; close to the bot's real account
 
 
-def dip_signals(candles):
+def trend_flags(candles):
+    """For each 5m candle: was the last CLOSED hour above its 200-hour EMA? (no look-ahead)"""
+    k = 2 / (b.DIP_TREND_EMA + 1)
+    flags, closes, ema_v, cur_hour, last_close = [], [], None, None, None
+    for c in candles:
+        hour = c["t"] // 3600
+        if cur_hour is not None and hour != cur_hour:          # previous hour just closed
+            closes.append(last_close)
+            if len(closes) == b.DIP_TREND_EMA:
+                ema_v = sum(closes) / b.DIP_TREND_EMA
+            elif len(closes) > b.DIP_TREND_EMA:
+                ema_v = last_close * k + ema_v * (1 - k)
+        cur_hour, last_close = hour, c["c"]
+        flags.append(ema_v is not None and len(closes) > b.DIP_TREND_EMA and closes[-1] > ema_v)
+    return flags
+
+
+def dip_signals(candles, trend=True):
     warm = b.DIP_LOOKBACK + 16
-    return [b.dip_signal(candles[i - warm + 1:i + 1])[0] if i >= warm - 1 else False for i in range(len(candles))]
+    tf = trend_flags(candles) if trend else [True] * len(candles)
+    return [tf[i] and b.dip_signal(candles[i - warm + 1:i + 1])[0] if i >= warm - 1 else False
+            for i in range(len(candles))]
 
 
 def run_dip(candles, sigs=None, start=DIP_START, emergency=True, fee_mult=1.0, slip_mult=1.0,
@@ -116,7 +135,7 @@ def run_dip(candles, sigs=None, start=DIP_START, emergency=True, fee_mult=1.0, s
     tp_first = b.DIP_TP_FIRST if tp_first is None else tp_first
     tp_multi = b.DIP_TP_MULTI if tp_multi is None else tp_multi
     fee, slip = b.FEE_RATE * fee_mult, SLIPPAGE * slip_mult
-    cash, fees_paid = start, 0.0
+    cash, fees_paid, borrow_paid, broke_at = start, 0.0, 0.0, None
     pos = None
     cycles, max_used, peak, max_dd = [], 0.0, start, 0.0
     monthly = {}
@@ -126,13 +145,17 @@ def run_dip(candles, sigs=None, start=DIP_START, emergency=True, fee_mult=1.0, s
         cost = p["size"] * (fee * 2 + slip * 2 + b.BORROW_RATE_HOUR * hours)
         return p["size"] * move - cost, cost
 
+    def borrow_of(p, hours):
+        return p["size"] * b.BORROW_RATE_HOUR * hours
+
     def close(p, price, reason, t):
-        nonlocal cash, pos, fees_paid
+        nonlocal cash, pos, fees_paid, borrow_paid
         hours = (t - p["t0"]) / 3600
         pnl, cost = pnl_at(p, price, hours)
         pnl = max(pnl, -p["coll"])
         cash += p["coll"] + pnl
         fees_paid += cost
+        borrow_paid += borrow_of(p, hours)
         cycles.append({"pnl": pnl, "buys": p["n"], "reason": reason, "hours": hours})
         m = time.strftime("%Y-%m", time.gmtime(t))
         monthly[m] = monthly.get(m, 0.0) + pnl
@@ -175,6 +198,8 @@ def run_dip(candles, sigs=None, start=DIP_START, emergency=True, fee_mult=1.0, s
     for i in range(len(candles) - 1):
         c = candles[i + 1]
         if pos is None and sigs[i]:
+            if cash < b.DIP_USD and broke_at is None:
+                broke_at = c["t"]
             buy(c["o"], c["t"])
         if pos is not None:
             if c["c"] >= c["o"]:
@@ -192,9 +217,10 @@ def run_dip(candles, sigs=None, start=DIP_START, emergency=True, fee_mult=1.0, s
     return {"start": start, "final": final, "pnl_usd": final - start, "pnl_pct": (final / start - 1) * 100,
             "cycles": len(cycles), "wins": len(wins), "losses": len(cycles) - len(wins),
             "by_buys": {k: sum(1 for x in cycles if x["buys"] == k) for k in (1, 2, 3)},
+            "first_t": candles[0]["t"] if candles else 0, "last_t": candles[-1]["t"] if candles else 0,
             "emergency": sum(1 for x in cycles if x["reason"] == "emergency"),
             "liquidated": sum(1 for x in cycles if x["reason"] == "liquidated"),
-            "fees": fees_paid, "max_dd": max_dd * 100, "max_used": max_used,
+            "fees": fees_paid, "borrow": borrow_paid, "broke_at": broke_at, "max_dd": max_dd * 100, "max_used": max_used,
             "worst": min((x["pnl"] for x in cycles), default=0.0), "open": bool(pos), "open_pnl": open_pnl,
             "avg_hours": sum(x["hours"] for x in cycles) / len(cycles) if cycles else 0.0, "monthly": monthly}
 
@@ -240,45 +266,62 @@ def _money(v):
     return ("+" if v >= 0 else "−") + "$" + format(abs(v), ".2f")
 
 
+def _months(r):
+    out, t = [], r["first_t"]
+    while t <= r["last_t"] + 86400:
+        m = time.strftime("%Y-%m", time.gmtime(t))
+        if not out or out[-1] != m:
+            out.append(m)
+        t += 86400 * 27
+    return out
+
+
 def report_text(m5, h1=None, days=365):
     lines = ["📊 BACKTEST — 🎯 COMPRA NO FUNDO (só long), " + str(days) + " dias de BTC em velas de 5 min",
-             "Conta inicial $" + format(DIP_START, ".0f") + " · cada compra $25 × " + str(b.DIP_LEV) + "x · até 3 compras · "
-             "1 compra fecha com +$2,50 líquido, 2–3 compras com +$3,00 líquido",
+             "Conta inicial $" + format(DIP_START, ".0f") + " · cada compra $" + format(b.DIP_USD, ".0f") + " × " +
+             str(b.DIP_LEV) + "x · até " + str(b.DIP_MAX_BUYS) + " compras · 1 compra fecha com +$" +
+             format(b.DIP_TP_FIRST, ".2f") + " líquido, 2+ compras com +$" + format(b.DIP_TP_MULTI, ".2f") + " líquido",
              "Compra quando cai ≥ " + format(b.DIP_DROP * 100, ".1f") + "% da máxima de 2 h + RSI < " + str(b.DIP_RSI) +
-             " + primeira vela verde · recompra a cada −" + format(b.DIP_GAP * 100, ".0f") + "%",
-             "Custos: taxa 0,06% + deslize 0,02% por lado + juros por hora.", ""]
+             " + primeira vela verde + BTC acima da média de 200 h · recompra a −" + format(b.DIP_GAP * 100, ".0f") + "%",
+             "Custos: taxa 0,06% + deslize 0,02% por lado + juros ~" + format(b.BORROW_RATE_HOUR * 100, ".3f") + "%/h.", ""]
     if not m5:
         return "\n".join(lines + ["Sem dados de preço."])
-    sigs = dip_signals(m5)
+    sigs = dip_signals(m5, trend=True)
     r = run_dip(m5, sigs)
     win = r["pnl_usd"] > 0
     move = (m5[-1]["c"] / m5[0]["c"] - 1) * 100
     lines += ["💵 P/L TOTAL: " + ("🟢 LUCRO " if win else "🔴 PREJUÍZO ") + _money(r["pnl_usd"]) +
               " (" + format(r["pnl_pct"], "+.1f") + "%) · $" + format(r["start"], ".0f") + " → $" + format(r["final"], ".2f"),
               "Ciclos fechados: " + str(r["cycles"]) + " (" + str(r["wins"]) + " com lucro / " + str(r["losses"]) + " com perda)",
-              "Usou 1 compra: " + str(r["by_buys"][1]) + " · 2 compras: " + str(r["by_buys"][2]) + " · 3 compras: " + str(r["by_buys"][3]),
+              "Usou 1 compra: " + str(r["by_buys"][1]) + " · 2 compras: " + str(r["by_buys"][2]),
               "🛑 Stops de emergência: " + str(r["emergency"]) + " · 💀 liquidações: " + str(r["liquidated"]) +
               " · pior ciclo: " + _money(r["worst"]),
-              "Custos totais: $" + format(r["fees"], ".2f") + " · queda máx da conta: " + format(r["max_dd"], ".1f") +
-              "% · garantia máx em uso: $" + format(r["max_used"], ".0f") + " · tempo médio por ciclo: " +
-              format(r["avg_hours"], ".1f") + " h"]
+              "Custos: $" + format(r["fees"], ".2f") + " (juros $" + format(r["borrow"], ".2f") + ") · queda máx da conta: " +
+              format(r["max_dd"], ".1f") + "% · tempo médio por ciclo: " + format(r["avg_hours"], ".1f") + " h"]
+    if r["broke_at"]:
+        lines.append("⚠️ A conta ficou sem saldo para comprar a partir de " +
+                     time.strftime("%d/%m/%Y", time.gmtime(r["broke_at"])))
     if r["open"]:
         lines.append("Posição ainda aberta no fim: " + _money(r["open_pnl"]) + " (já incluído no P/L)")
     lines.append("Comparação: BTC no período " + format(move, "+.1f") + "% (comprar e segurar $" + format(DIP_START, ".0f") +
                  " → $" + format(DIP_START * (1 + move / 100), ".2f") + ")")
-    if r["monthly"]:
-        lines += ["", "📅 Resultado por mês:"]
-        lines += ["  " + m + ": " + ("🟢 " if v > 0 else "🔴 ") + _money(v) for m, v in sorted(r["monthly"].items())]
+    lines += ["", "📅 Resultado por mês:"]
+    for m in _months(r):
+        v = r["monthly"].get(m)
+        lines.append("  " + m + ": " + ("sem operação" if v is None else ("🟢 " if v > 0 else "🔴 ") + _money(v)))
+    no_trend = run_dip(m5, dip_signals(m5, trend=False))
     no_stop = run_dip(m5, sigs, emergency=False)
     stress = run_dip(m5, sigs, fee_mult=2, slip_mult=2)
     lines += ["", "🧪 Comparações:",
+              "  Sem filtro de tendência: " + ("🟢 " if no_trend["pnl_usd"] > 0 else "🔴 ") + _money(no_trend["pnl_usd"]) +
+              " · " + str(no_trend["cycles"]) + " ciclos",
               "  Sem stop de emergência: " + ("🟢 " if no_stop["pnl_usd"] > 0 else "🔴 ") + _money(no_stop["pnl_usd"]) +
               " · liquidações: " + str(no_stop["liquidated"]),
               "  Com taxas e deslize dobrados: " + ("🟢 " if stress["pnl_usd"] > 0 else "🔴 ") + _money(stress["pnl_usd"]),
-              "", "⚠️ Resultado passado não garante o futuro. Com alavancagem e recompras, uma queda forte do BTC pode levar "
-              "boa parte da garantia de um ciclo ($75)."]
+              "", "⚠️ Resultado passado não garante o futuro."]
     return "\n".join(lines)
 
 
 def run(days=365):
-    return report_text(fetch_history("5m", days, extra=60), None, days)
+    # +2,500 candles of warm-up so the 200-hour trend filter is ready on day one
+    return report_text(fetch_history("5m", days, extra=2500), None, days)

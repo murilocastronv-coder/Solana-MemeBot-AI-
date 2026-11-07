@@ -32,7 +32,7 @@ ORDER_FRACTION = 0.20
 LEVERAGES = (2, 3, 5, 10, 20)
 DEFAULT_LEVERAGE = 3
 FEE_RATE = 0.0006          # per side, on position size
-BORROW_RATE_HOUR = 0.0001  # on position size
+BORROW_RATE_HOUR = 0.00003  # ~0.003%/hour on position size (Jupiter borrow fee estimate, conservative)
 LIQ_LOSS = 0.90            # liquidated when loss >= 90% of collateral
 EMA_LEN, CHANNEL, ATR_LEN = 200, 20, 14
 STOP_ATR, TRAIL_ATR = 2.0, 3.0
@@ -113,16 +113,17 @@ def signal(candles):
 # Long only. On 5m candles: after a big drop, buy US$ 25 at 5x; if it keeps falling a good distance,
 # buy US$ 25 more (max 3 buys). One buy: close at +US$ 2.50 net of fees. 2-3 buys: close as soon as the
 # whole position reaches DIP_TP_MULTI net. Emergency stop before liquidation.
-DIP_USD = 25.0
-DIP_LEV = 5
-DIP_MAX_BUYS = 3
+DIP_USD = 20.0
+DIP_LEV = 3
+DIP_MAX_BUYS = 2
 DIP_DROP = 0.015          # price >= 1.5% below the highest high of the last 2 hours (24 candles)
 DIP_LOOKBACK = 24
 DIP_RSI = 30              # RSI 14 below 30 (oversold) ...
-DIP_GAP = 0.02            # re-buy when price is 2% below the last buy
+DIP_GAP = 0.04            # re-buy only after a big further drop: 4% below the first buy
+DIP_TREND_EMA = 200       # only buy dips while BTC is above its 200-hour EMA (uptrend)
 DIP_TP_FIRST = 2.50       # net profit target (US$) with a single buy
 DIP_TP_MULTI = 3.00       # net profit target (US$) with 2-3 buys
-DIP_EMERGENCY = 0.07      # close all if price falls 7% below the average price (5x liquidates ~18%)
+DIP_EMERGENCY = 0.07      # close all if price falls 7% below the average price (3x liquidates ~30%)
 
 
 def rsi(closes, length=14):
@@ -134,6 +135,22 @@ def rsi(closes, length=14):
         return 100.0
     rs = (gains / length) / (losses / length)
     return 100 - 100 / (1 + rs)
+
+
+def trend_up(hourly_closes):
+    """Uptrend filter: last closed 1h price above its 200-hour EMA."""
+    if len(hourly_closes) < DIP_TREND_EMA + 1:
+        return False
+    return hourly_closes[-1] > ema(hourly_closes, DIP_TREND_EMA)
+
+
+_hourly_cache = [0.0, []]
+
+
+def hourly_closes():
+    if time.time() - _hourly_cache[0] > 600:
+        _hourly_cache[:] = [time.time(), [c["c"] for c in fetch_candles("1h")]]
+    return _hourly_cache[1]
 
 
 def dip_signal(candles, drop=None, rsi_max=None):
@@ -463,7 +480,7 @@ def _dip_add(data, price, send, chat):
         entry = price
     else:
         if data["balance"] < collateral:
-            send(chat, "💤 Saldo simulado insuficiente para a compra " + str(n) + " ($25).")
+            send(chat, "💤 Saldo simulado insuficiente para a compra " + str(n) + " ($" + format(DIP_USD, ".0f") + ").")
             return False
         data["balance"] -= collateral
     if not pos:
@@ -477,7 +494,7 @@ def _dip_add(data, price, send, chat):
     target = DIP_TP_FIRST if n == 1 else DIP_TP_MULTI
     send(chat, ("🟢 COMPRA NO FUNDO" if n == 1 else "🔁 RECOMPRA " + str(n) + "/" + str(DIP_MAX_BUYS)) +
          " — BTC LONG " + str(DIP_LEV) + "x " + ("💵 REAL" if real else "(simulado)") + "\nPreço: $" + format(entry, ",.0f") +
-         " · garantia $25 → posição $" + format(size, ".0f") + "\nTotal: " + str(n) + " compra(s), $" + format(pos["collateral"], ".0f") +
+         " · garantia $" + format(DIP_USD, ".0f") + " → posição $" + format(size, ".0f") + "\nTotal: " + str(n) + " compra(s), $" + format(pos["collateral"], ".0f") +
          " de garantia, preço médio $" + format(pos["entry"], ",.0f") +
          "\n🎯 Fecha tudo com lucro líquido ≥ $" + format(target, ".2f") +
          (" · próxima recompra em $" + format(entry * (1 - DIP_GAP), ",.0f") if n < DIP_MAX_BUYS else " · sem mais recompras") +
@@ -506,12 +523,19 @@ def _dip_step(data, price, send, chat, candles):
         return
     data["last_candle"] = candles[-1]["t"]
     ok, info = dip_signal(candles)
+    try:
+        trend = trend_up(hourly_closes())
+    except Exception:
+        trend = False
+    info["trend"] = trend
+    ok = ok and trend
     data["dip_last"] = info
     if time.time() - data.get("dip_report_at", 0) >= 3600:
         data["dip_report_at"] = time.time()
         send(chat, "🎯 Compra no fundo ligada: esperando queda. Agora o BTC está " + format(info["drop"] * 100, ".2f") +
              "% abaixo da máxima de 2 h (precisa ≥ " + format(DIP_DROP * 100, ".1f") + "%), RSI " +
-             format(info["rsi"], ".0f") + " (precisa < " + str(DIP_RSI) + ").")
+             format(info["rsi"], ".0f") + " (precisa < " + str(DIP_RSI) + "), tendência de 200 h: " +
+             ("ALTA ✅" if trend else "BAIXA ❌ (não compra quedas em mercado de baixa)") + ".")
     if ok:
         _dip_add(data, price, send, chat)
 
@@ -563,7 +587,7 @@ def status_text(price=None):
     real = s["mode"] == "real"
     lines = ["₿ ROBÔ BTC ALAVANCADO — " + ("🟢 LIGADO" if s["enabled"] else "🔴 DESLIGADO"),
              "Modo: " + ("💵 DINHEIRO REAL (carteira do bot, Jupiter Perps)" if real else "🧪 SIMULAÇÃO com preço real"),
-             ("Estratégia: 🎯 COMPRA NO FUNDO (só long, $25 × " + str(DIP_LEV) + "x, até 3 compras, recompra a cada −" + format(DIP_GAP * 100, ".0f") + "%)" if s.get("strategy") == "dip" else
+             ("Estratégia: 🎯 COMPRA NO FUNDO (só long, $" + format(DIP_USD, ".0f") + " × " + str(DIP_LEV) + "x, até " + str(DIP_MAX_BUYS) + " compras, recompra a −" + format(DIP_GAP * 100, ".0f") + "%)" if s.get("strategy") == "dip" else
               "Estratégia: 📈 Tendência · gráfico " + s["timeframe"]),
              "Alavancagem: " + str(s["leverage"]) + "x | 20% da conta por ordem",
              ("Conta real" if real else "Saldo simulado") + ": $" + format(s["equity"], ".2f") +
