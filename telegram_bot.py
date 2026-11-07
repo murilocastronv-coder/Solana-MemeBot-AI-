@@ -32,7 +32,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💸 Sacar","callback_data":"wallet_withdraw"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"}]]
 def menu(chat):
  send(chat,"🤖 Solana MemeBot AI\nRadar de tokens e simulação automática. Use /auto_on para iniciar operações fictícias de US$ 10. Nenhuma compra real é executada.",keyboard())
 def market_json(url):
@@ -156,6 +156,8 @@ def handle(update):
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
+ elif action in ("wallet_export","/exportar_chave"):
+  send(chat,"🔑 EXPORTAR CHAVE PRIVADA\\nA exportação deve ser feita no dispositivo confiável onde a carteira criptografada foi criada, usando export_wallet.py e a senha do arquivo bot_wallet.enc.\\nO exportador confirma que a chave corresponde ao endereço público de depósito.\\nNunca envie sua chave privada ou 12 palavras pelo Telegram. Importar a chave na Phantom dá acesso aos mesmos fundos.\\n⚠️ Exportação diretamente pelo Telegram está desativada por segurança.")
  elif action in ("wallet_create","/criar_carteira"):
   send(chat,"➕ CRIAR CARTEIRA SOLANA\\nA carteira ainda não é gerada dentro do Telegram. Para proteger seus fundos, a chave deve ser criada e guardada em armazenamento seguro e persistente.\\nO gerador já está no GitHub: provision_wallet.py. Execute-o em um dispositivo confiável, faça backup da carteira criptografada e da senha, e use /connect ENDERECO_PUBLICO para consultar saldo.\\n⚠️ Não deposite até concluir a configuração e testar recuperação e saques. Não envie sua chave privada ou 12 palavras pelo Telegram.")
  elif action in ("wallet_connect","/carteira","/wallet","/depositar","/deposito","/sacar","wallet_deposit","wallet_withdraw"):
