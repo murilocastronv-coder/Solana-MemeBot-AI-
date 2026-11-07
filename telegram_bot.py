@@ -1,9 +1,9 @@
 """Telegram Solana token radar. Read-only, no wallet credentials or trades."""
-import os,time,logging,threading,requests,re
-from flask import Flask,Response
+import os,time,logging,threading,requests,re,secrets,html
+from flask import Flask,Response,request
 import paper_positions as paper
 import paper_auto as auto
-from bot_wallet_service import create_or_get, get_address
+from bot_wallet_service import create_or_get, get_address, export_private_key
 from datetime import datetime,timezone
 app=Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -11,6 +11,8 @@ TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
 CHAT=os.getenv("TELEGRAM_CHAT_ID","")
 PRIVATE_CHAT=None  # First private /start after process startup; resets on restart.
 CONNECTED_WALLETS={}  # Public addresses only; temporary, never seed phrases.
+EXPORT_TOKENS={}
+EXPORT_LOCK=threading.Lock()
 INTERVAL=max(60,int(os.getenv("SCAN_INTERVAL_SECONDS","300")))
 TP=float(os.getenv("TP_PERCENT","15"))
 SL=float(os.getenv("SL_PERCENT","8"))
@@ -158,7 +160,14 @@ def handle(update):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
  elif action in ("wallet_export","/exportar_chave"):
-  send(chat,"🔑 EXPORTAR CHAVE PRIVADA\nA exportação deve ser feita no dispositivo confiável onde a carteira criptografada foi criada, usando export_wallet.py e a senha do arquivo bot_wallet.enc.\\nO exportador confirma que a chave corresponde ao endereço público de depósito.\\nNunca envie sua chave privada ou 12 palavras pelo Telegram. Importar a chave na Phantom dá acesso aos mesmos fundos.\\n⚠️ Exportação diretamente pelo Telegram está desativada por segurança.")
+  if not get_address():
+   send(chat,"Crie uma carteira primeiro.");return
+  token=secrets.token_urlsafe(32)
+  with EXPORT_LOCK:
+   EXPORT_TOKENS.clear()
+   EXPORT_TOKENS[token]={"expires":time.monotonic()+120,"attempts":0,"chat":str(chat)}
+  url="https://solana-memebot-telegram.onrender.com/exportar?token="+token
+  send(chat,"🔑 Exportação privada (link válido por 2 minutos, uma única utilização). Abra somente no seu celular e informe a senha da carteira. Não encaminhe o link. Depois de importar na Phantom, confira o endereço público.",[[{"text":"🔐 Abrir exportação segura","url":url}]])
  elif action in ("wallet_create","/criar_carteira"):
   try:
    address,created=create_or_get()
@@ -259,6 +268,31 @@ def loop():
    else:logging.exception("telegram HTTP error")
    time.sleep(15)
   except Exception:logging.exception("telegram worker error");time.sleep(10)
+
+EXPORT_HEADERS={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}
+def export_html(body):
+ return Response('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Exportar carteira</title><style>body{background:#101626;color:#fff;font:16px system-ui;margin:20px auto;padding:16px;max-width:500px}input,button,textarea{display:block;box-sizing:border-box;width:100%;margin:14px 0;padding:14px;border-radius:8px}input,textarea{background:#26314a;color:#fff;border:1px solid #65728e}button{background:#6c86ff;color:#fff;border:0}textarea{height:130px;overflow-wrap:anywhere}small{color:#e6c77b}</style><h2>🔐 Exportar carteira Solana</h2>'+body+'</html>',mimetype="text/html",headers=EXPORT_HEADERS)
+@app.route("/exportar",methods=["GET","POST"])
+def export_page():
+ token=request.args.get("token","")
+ with EXPORT_LOCK:
+  state=EXPORT_TOKENS.get(token)
+  if not state or time.monotonic()>state["expires"] or state["attempts"]>=3:
+   EXPORT_TOKENS.pop(token,None)
+   return export_html("<p>Link expirado ou inválido. Gere outro no Telegram.</p>"),403
+  if request.method=="POST":
+   state["attempts"]+=1
+   password=request.form.get("password","")
+   if len(password)>512:
+    return export_html("<p>Senha inválida.</p>"),400
+   try:
+    address,private_key=export_private_key(password)
+   except Exception:
+    if state["attempts"]>=3:EXPORT_TOKENS.pop(token,None)
+    return export_html("<p>Senha incorreta ou carteira indisponível. Volte e tente novamente.</p>"),403
+   EXPORT_TOKENS.pop(token,None)
+   return export_html("<p><small>Não compartilhe nem faça captura de tela. Qualquer pessoa com esta chave controla os fundos. Importe na Phantom e depois feche esta página.</small></p><p>Endereço público:</p><textarea readonly>"+html.escape(address)+"</textarea><p>Chave privada (importar na Phantom):</p><textarea readonly>"+html.escape(private_key)+"</textarea>")
+ return export_html('<p>Link válido por 2 minutos. A senha é enviada apenas por HTTPS para descriptografar a carteira. Não abra em dispositivo compartilhado.</p><form method="post"><label>Senha da carteira</label><input type="password" name="password" required autocomplete="off" maxlength="512"><button type="submit">Mostrar minha chave privada</button></form><small>A chave nunca será enviada ao Telegram. Confirme o endereço após importar na Phantom.</small>')
 @app.get("/carteira")
 def wallet_page():
  return Response("""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Carteira de teste</title><style>body{background:#101626;color:#f5f7ff;font:16px system-ui;margin:0;padding:25px}main{max-width:460px;margin:auto}input,button{box-sizing:border-box;width:100%;padding:14px;margin:10px 0;border-radius:9px;border:1px solid #576179;background:#202a40;color:white}button{background:#4669ef;border:0;font-weight:bold}small{color:#b7c5da}#result{padding:12px}</style></head><body><main><h2>🔐 Carteira — teste local</h2><p>Este campo aceita texto de uma chave apenas para testar a interface. <b>Não conecta sua Phantom nem autoriza operações.</b></p><label for="secret">Chave privada de carteira de teste</label><input id="secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Não use a chave da carteira principal"><button id="check">Verificar campo localmente</button><button id="clear">Apagar campo</button><p id="result" role="status"></p><small>O conteúdo nunca é enviado ao servidor, nem guardado no navegador. Não insira frases de recuperação ou chaves com fundos. Trading real desativado.</small></main><script>const input=document.getElementById('secret'),result=document.getElementById('result');document.getElementById('check').onclick=()=>{result.textContent=input.value.trim()?'Campo preenchido localmente. Nenhuma chave foi importada, validada ou enviada.':'Campo vazio.'};document.getElementById('clear').onclick=()=>{input.value='';result.textContent='Campo apagado.'};</script></body></html>""",mimetype="text/html",headers={"Cache-Control":"no-store","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff"})
