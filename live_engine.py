@@ -96,13 +96,36 @@ def buy_cycle(rows, send, chat):
             _failure(send, chat, "compra", mint, exc)
             return None
         if settled.get("status") == "settled_buy":
-            send(chat, "✅ COMPRA CONFIRMADA: " + symbol + "\nValor: US$ 10\nTP +15% | SL -8% (venda automática)"
-                 "\nTx: https://solscan.io/tx/" + settled["signature"])
+            state.set_position_label(mint, symbol)
+            n = state.status()["positions"]
+            send(chat, "🟢 COMPROU " + symbol + "\n"
+                 "💵 Valor: US$ 10 (" + format(result["input_amount_raw"] / 1e9, ".4f") + " SOL)\n"
+                 "🎯 Vende sozinho em +15% | 🛑 -8%\n"
+                 "📦 Posições abertas: " + str(n) + "/3\n"
+                 "📄 " + mint + "\n"
+                 "🔗 https://solscan.io/tx/" + settled["signature"])
         else:
             send(chat, "⚠️ Compra enviada mas não conciliada (" + str(settled.get("reason", settled.get("status"))) +
                  "). Robô bloqueado.\nTx: https://solscan.io/tx/" + str(result["signature"]))
         return settled
     return None
+
+
+def sell_message(symbol, signal, settled):
+    pnl = settled["pnl_usd"]
+    pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0
+    why = "🎯 Take profit" if signal["reason"] == "take_profit" else "🛑 Stop loss"
+    summary = state.pnl_summary()
+    won, closed = summary["trades_won"], summary["trades_closed"]
+    return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"
+            + why + "\n"
+            "💵 Comprou: US$ " + format(settled["cost_usd"], ".2f") +
+            " → Vendeu: US$ " + format(settled["proceeds_usd"], ".2f") + "\n"
+            "📊 P/L: " + format(pnl, "+.2f") + " USD (" + format(pct, "+.1f") + "%)\n"
+            "📅 P/L hoje: " + format(summary["day_pnl_usd"], "+.2f") + " USD\n"
+            "🏦 P/L total: " + format(summary["total_pnl_usd"], "+.2f") + " USD (" +
+            str(won) + "/" + str(closed) + " operações no lucro)\n"
+            "🔗 https://solscan.io/tx/" + settled["signature"])
 
 
 def exit_cycle(send, chat):
@@ -126,8 +149,7 @@ def exit_cycle(send, chat):
             _failure(send, chat, "venda", mint, exc)
             return
         if settled.get("status") == "settled_sell":
-            send(chat, "✅ VENDA CONFIRMADA\nResultado: " + format(settled["pnl_usd"], "+.2f") +
-                 " USD\nTx: https://solscan.io/tx/" + settled["signature"])
+            send(chat, sell_message(position.get("symbol") or mint[:6], signal, settled))
         else:
             send(chat, "⚠️ Venda enviada, conferir manualmente (" +
                  str(settled.get("reason", settled.get("status"))) + "). Robô pausado.\nTx: https://solscan.io/tx/" +

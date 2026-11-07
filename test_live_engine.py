@@ -72,7 +72,11 @@ class LiveEngineTests(unittest.TestCase):
         st = state.status()
         self.assertEqual((st["positions"], st["pending"], st["daily_loss_usd"]), (0, 0, 0.0))
         self.assertTrue(st["enabled"])
-        self.assertIn("+2.00", self.sent[-1])
+        msg = self.sent[-1]
+        for part in ("LUCRO", "VENDEU BONK", "US$ 10.00", "US$ 12.00", "+2.00 USD (+20.0%)", "P/L total: +2.00", "1/1"):
+            self.assertIn(part, msg)
+        self.assertIn("COMPROU BONK", self.sent[1])
+        self.assertEqual(state.pnl_summary()["total_pnl_usd"], 2.0)
 
     def test_uncertain_buy_blocks_robot(self):
         live_engine.start()

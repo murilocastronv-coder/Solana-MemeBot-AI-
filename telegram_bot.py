@@ -61,6 +61,8 @@ def trading_readiness():
 
 def trading_status_text():
  st,checks,running=trading_readiness()
+ try:pnl=trade_state.pnl_summary()
+ except Exception:pnl={"day_pnl_usd":0.0,"total_pnl_usd":0.0,"trades_closed":0,"trades_won":0}
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
         "🔴 ROBÔ DESLIGADO" if not running else "🟢 ROBÔ LIGADO",
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
@@ -69,6 +71,8 @@ def trading_status_text():
         "Posições registradas: "+str(st["positions"])+" / 3",
         "Ordens pendentes: "+str(st["pending"]),
         "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ 3.00",
+        "P/L hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD | P/L total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD",
+        "Operações fechadas: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)",
         "",
         "VERIFICAÇÕES:"]
  lines += [("✅ " if ok else "❌ ")+name for name,ok in checks.items()]

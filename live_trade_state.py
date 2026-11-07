@@ -56,6 +56,25 @@ def status():
                 "positions": len(state["positions"]), "pending": len(state["pending"]),
                 "daily_loss_usd": float(state["daily_loss_usd"])}
 
+def pnl_summary():
+    """Realized profit/loss from confirmed sells (USD)."""
+    with _LOCK:
+        state = _load()
+        if state["day"] != datetime.now(timezone.utc).date().isoformat():
+            day = 0.0
+        else:
+            day = float(state.get("day_pnl_usd", 0.0))
+        return {"day_pnl_usd": day, "total_pnl_usd": float(state.get("total_pnl_usd", 0.0)),
+                "trades_closed": int(state.get("trades_closed", 0)),
+                "trades_won": int(state.get("trades_won", 0))}
+
+def set_position_label(mint, symbol):
+    with _LOCK:
+        state = _load()
+        if mint in state["positions"]:
+            state["positions"][mint]["symbol"] = str(symbol)[:20]
+            _save(state)
+
 def stop():
     with _LOCK:
         state = _load()
@@ -84,6 +103,7 @@ def can_open():
                 return False, "Pending transactions need reconciliation"
             state["day"] = datetime.now(timezone.utc).date().isoformat()
             state["daily_loss_usd"] = 0.0
+            state["day_pnl_usd"] = 0.0
             _save(state)
         if not state["enabled"] or state["halted"]:
             return False, "Trading disabled"
@@ -110,7 +130,7 @@ def reserve(order_id, mint, side):
             "created_at": datetime.now(timezone.utc).isoformat()}
         _save(state)
 
-def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0):
+def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0, pnl_usd=None):
     """Call only after independently verifying finalized on-chain outcome."""
     with _LOCK:
         state = _load()
@@ -122,6 +142,11 @@ def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0)
         if pending["side"] == "sell":
             state["positions"].pop(pending["mint"], None)
         state["daily_loss_usd"] += max(0.0, float(realized_loss_usd))
+        if pnl_usd is not None:
+            state["day_pnl_usd"] = float(state.get("day_pnl_usd", 0.0)) + float(pnl_usd)
+            state["total_pnl_usd"] = float(state.get("total_pnl_usd", 0.0)) + float(pnl_usd)
+            state["trades_closed"] = int(state.get("trades_closed", 0)) + 1
+            state["trades_won"] = int(state.get("trades_won", 0)) + (1 if pnl_usd > 0 else 0)
         del state["pending"][order_id]
         if state["daily_loss_usd"] >= MAX_DAILY_LOSS_USD:
             state["enabled"] = False
@@ -202,8 +227,10 @@ def reconcile_known_signature(order_id, owner):
             _save(data)
             return {"status": "settled_sell_review_pnl", "reason": "PnL not valued", "signature": signature}
         pnl = proceeds_usd - cost
-        record_settlement(order_id, signature, realized_loss_usd=max(0.0, -pnl))
-        return {"status": "settled_sell", "signature": signature, "pnl_usd": pnl}
+        record_settlement(order_id, signature, realized_loss_usd=max(0.0, -pnl), pnl_usd=pnl)
+        return {"status": "settled_sell", "signature": signature, "pnl_usd": pnl,
+                "cost_usd": cost, "proceeds_usd": proceeds_usd,
+                "sol_received": (after_sol - int(before_sol)) / 1_000_000_000}
 
 def _sol_to_usd(lamports):
     """Value SOL received from a sale with an executable Jupiter SOL->USDC quote."""
