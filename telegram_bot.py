@@ -49,6 +49,7 @@ def send(chat,text,keyboard=None):
 def keyboard():
  return [[{"text":"₿ BTC ON","callback_data":"btc_on"},{"text":"₿ BTC OFF","callback_data":"btc_off"}],
   [{"text":"⚙️ Alavancagem","callback_data":"lev"},{"text":"📊 Status BTC","callback_data":"btc_status"}],
+  [{"text":"📈 Estratégia tendência","callback_data":"strat_trend"},{"text":"⚡ Scalping M5","callback_data":"strat_scalp"}],
   [{"text":"⏱️ Gráfico 1h","callback_data":"tf_1h"},{"text":"⚡ Gráfico 5m","callback_data":"tf_5m"}],
   [{"text":"💵 Modo REAL","callback_data":"mode_real"},{"text":"🧪 Modo simulação","callback_data":"mode_sim"}],
   [{"text":"🧪 Teste real $5","callback_data":"btc_test"}],
@@ -305,6 +306,16 @@ def handle(update):
   btc_perps.set_enabled(True);lev=btc_perps.summary()["leverage"]
   st=btc_perps.summary()
   send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x · "+("💵 DINHEIRO REAL" if st["mode"]=="real" else "🧪 SIMULAÇÃO com preço real")+" · gráfico "+st["timeframe"]+"\nRompimento de 20 velas a favor da média de 200 + stop por ATR e stop móvel. LONG e SHORT, 20% da conta por ordem. Decide a cada vela fechada e controla o stop a cada ~20 s.",keyboard())
+ elif action in ("strat_scalp","strat_scalp_ok"):
+  st=btc_perps.summary()
+  if st["mode"]=="real" and action=="strat_scalp":
+   lev=st["leverage"]
+   send(chat,"⚠️ SCALPING M5 COM DINHEIRO REAL ("+str(lev)+"x)\nCada operação dura ~5 min. Taxa da Jupiter por ida e volta ≈ 0,12% da posição = ~"+format(0.12*lev,".1f")+"% da garantia. O movimento médio de uma vela de 5 min do BTC é parecido com isso: as taxas podem comer o lucro e a conta pode cair mesmo acertando mais da metade.\nProteções: só opera com sinal + volatilidade suficiente, stop 1×ATR, mantém se a vela seguinte confirmar (economiza taxa), pausa no dia se perder 10%.\nRecomendado: testar antes no 🧪 Modo simulação ou usar 2–3x.",[[{"text":"✅ Confirmar scalping REAL","callback_data":"strat_scalp_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
+  else:
+   btc_perps.set_option("strategy","scalp")
+   send(chat,"⚡ SCALPING M5 ATIVO ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+")\nA cada vela de 5 min fechada: se a tendência (EMA 20/50) e a vela anterior mostram força (corpo ≥ ½ ATR, fechou perto da ponta, RSI sem exagero) e o BTC está se mexendo o bastante, abre LONG/SHORT e FECHA no fim da vela. Se a próxima vela confirmar a mesma direção, mantém (economiza taxa). Stop de proteção 1×ATR. Pausa no dia se perder 10%. Resumo a cada 1 hora.",keyboard())
+ elif action=="strat_trend":
+  btc_perps.set_option("strategy","trend");send(chat,"📈 Estratégia de tendência ativa (rompimento + stop móvel).",keyboard())
  elif action in ("tf_1h","tf_5m"):
   try:
    tf=btc_perps.set_option("timeframe",action[3:])
@@ -425,13 +436,13 @@ def startup_notice():
   "\n📦 Posições abertas: "+str(st["positions"])+"/3 (stop e venda automática continuam)"+
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 def loop():
- offset=None;next_scan=0;next_positions=0;next_sniper=0;last_recovery_notice=time.monotonic()
+ offset=None;next_scan=0;next_positions=0;next_sniper=0;next_btc=0;last_recovery_notice=time.monotonic()
  try:startup_notice()
  except Exception:logging.exception("startup notice failed")
  while True:
   try:
-   if active_chat() and time.monotonic()>=next_sniper:
-    next_sniper=time.monotonic()+20
+   if active_chat() and time.monotonic()>=next_btc:
+    next_btc=time.monotonic()+10
     try:btc_perps.cycle(send,active_chat())
     except Exception:logging.exception("btc cycle failed")
    if active_chat() and time.monotonic()-last_recovery_notice>3600:

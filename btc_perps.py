@@ -107,6 +107,45 @@ def signal(candles):
     return None, a, last["c"]
 
 
+# ------------------------------------------------------------------ M5 momentum scalping
+SCALP_MIN_ATR_PCT = 0.0015   # BTC must move >= 0.15% per 5m candle on average, or fees eat the edge
+SCALP_STOP_ATR = 1.0
+SCALP_DAILY_LOSS = 0.10      # pause scalping for the day after losing 10% of the account
+
+
+def rsi(closes, length=14):
+    gains = losses = 0.0
+    for a, b in zip(closes[-length - 1:-1], closes[-length:]):
+        d = b - a
+        gains += max(d, 0); losses += max(-d, 0)
+    if losses == 0:
+        return 100.0
+    rs = (gains / length) / (losses / length)
+    return 100 - 100 / (1 + rs)
+
+
+def scalp_signal(candles):
+    """M5 momentum: trend (EMA20 vs EMA50 and price vs EMA50) + strong last candle in that direction,
+    RSI not overextended, enough volatility to pay Jupiter's fees. Returns (side|None, atr, why)."""
+    if len(candles) < 60:
+        return None, 0.0, "histórico curto"
+    closes = [c["c"] for c in candles]
+    last = candles[-1]
+    a = atr(candles)
+    price = last["c"]
+    if a / price < SCALP_MIN_ATR_PCT:
+        return None, a, "BTC parado (volatilidade baixa para cobrir as taxas)"
+    e20, e50 = ema(closes, 20), ema(closes, 50)
+    body = last["c"] - last["o"]
+    rng = max(last["h"] - last["l"], 1e-9)
+    r = rsi(closes)
+    if e20 > e50 and price > e50 and body >= 0.5 * a and (last["c"] - last["l"]) / rng >= 0.7 and 50 <= r <= 70:
+        return "long", a, ""
+    if e20 < e50 and price < e50 and -body >= 0.5 * a and (last["h"] - last["c"]) / rng >= 0.7 and 30 <= r <= 50:
+        return "short", a, ""
+    return None, a, "sem força a favor da tendência"
+
+
 # ------------------------------------------------------------------ simulated account
 def _path():
     import live_trade_state
@@ -116,7 +155,9 @@ def _path():
 def _default():
     return {"enabled": False, "leverage": DEFAULT_LEVERAGE, "balance": START_USD, "start": START_USD,
             "position": None, "history": [], "last_candle": 0, "mode": "sim", "timeframe": "1h",
-            "real_position": None, "real_history": [], "real_start": None}
+            "real_position": None, "real_history": [], "real_start": None,
+            "strategy": "trend", "scalp_day": "", "scalp_day_start": 0.0, "scalp_paused_day": "",
+            "scalp_stats": {"candles": 0, "signals": 0, "last_reason": ""}}
 
 
 def _load():
@@ -150,7 +191,7 @@ def set_leverage(value):
 
 
 def set_option(name, value):
-    allowed = {"mode": ("sim", "real"), "timeframe": tuple(TIMEFRAMES)}
+    allowed = {"mode": ("sim", "real"), "timeframe": tuple(TIMEFRAMES), "strategy": ("trend", "scalp")}
     if value not in allowed[name]:
         raise ValueError("Opção inválida")
     with _LOCK:
@@ -165,7 +206,7 @@ def set_option(name, value):
             except Exception:
                 pass
         data[name] = value
-        if name == "timeframe":
+        if name in ("timeframe", "strategy"):
             data["last_candle"] = 0
         _save(data)
     return value
@@ -242,9 +283,10 @@ def ensure_usdc(amount):
     raise RuntimeError("Troca SOL→USDC não confirmou a tempo")
 
 
-def _open(data, side, price, a, send, chat):
+def _open(data, side, price, a, send, chat, exit_at=None):
     lev = int(data["leverage"])
-    tf = data.get("timeframe", "1h")
+    scalp = exit_at is not None
+    tf = "5m" if scalp else data.get("timeframe", "1h")
     real = data["mode"] == "real"
     pos_key, _ = _keys(data)
     try:
@@ -259,8 +301,8 @@ def _open(data, side, price, a, send, chat):
         return
     size = collateral * lev
     max_dist = MAX_STOP_OF_LIQ * LIQ_LOSS / lev   # keep the stop well before liquidation
-    dist = min(_tf(data)["stop_atr"] * a / price, max_dist)
-    if dist < MIN_STOP_PCT[tf]:
+    dist = min((SCALP_STOP_ATR if scalp else _tf(data)["stop_atr"]) * a / price, max_dist)
+    if not scalp and dist < MIN_STOP_PCT[tf]:
         logging.info("BTC %s signal skipped: stop %.3f%% too small vs fees", tf, dist * 100)
         return
     entry, signature = price, None
@@ -278,14 +320,16 @@ def _open(data, side, price, a, send, chat):
         data["balance"] -= collateral
     stop = entry * (1 - dist if side == "long" else 1 + dist)
     data[pos_key] = {"side": side, "entry": entry, "collateral": collateral, "size_usd": size, "leverage": lev,
-                     "stop": stop, "best": entry, "atr": a, "opened_at": time.time(), "timeframe": tf}
+                     "stop": stop, "best": entry, "atr": a, "opened_at": time.time(), "timeframe": tf,
+                     "trail": not scalp, "exit_at": exit_at, "strategy": "scalp" if scalp else "trend"}
     pos = data[pos_key]
     send(chat, ("🟢 LONG" if side == "long" else "🔴 SHORT") + " BTC " + str(lev) + "x " +
          ("💵 DINHEIRO REAL" if real else "(SIMULADO, preço real)") + " · gráfico " + tf + "\n"
          "Entrada: $" + format(entry, ",.0f") + "\nGarantia: $" + format(collateral, ".2f") + " (20% da conta) → posição $" +
          format(size, ",.2f") + "\n🛑 Stop: $" + format(stop, ",.0f") + " (" + format(dist * 100, ".2f") + "% no preço = −" +
          format(dist * lev * 100, ".1f") + "% da garantia)\n💀 Liquidação ≈ $" + format(_liq_price(pos), ",.0f") +
-         "\n📈 Stop móvel por ATR" + ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
+         ("\n⏱️ Fecha no fim da vela: " + time.strftime("%H:%M", time.gmtime(exit_at)) + " UTC" if scalp else
+          "\n📈 Stop móvel por ATR") + ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
 
 
 def _close(data, price, reason, send, chat):
@@ -314,7 +358,8 @@ def _close(data, price, reason, send, chat):
                            "closed_at": time.time(), "minutes": round((time.time() - pos["opened_at"]) / 60, 1),
                            "mint": "BTC", "timeframe": pos.get("timeframe", "1h")})
     data[hist_key] = data[hist_key][-300:]
-    names = {"stop_loss": "stop", "trailing": "stop móvel", "reversal": "virada de tendência", "liquidated": "LIQUIDADO"}
+    names = {"stop_loss": "stop", "trailing": "stop móvel", "reversal": "virada de tendência", "liquidated": "LIQUIDADO",
+             "candle_close": "fim da vela"}
     send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — FECHOU " + pos["side"].upper() + " BTC " +
          str(pos["leverage"]) + "x " + ("💵 REAL" if real else "(simulado)") + " (" + names.get(reason, reason) + ")\nEntrada $" +
          format(pos["entry"], ",.0f") + " → saída $" + format(price, ",.0f") + "\nP/L: " + format(pnl, "+.2f") + " USD (" +
@@ -338,14 +383,16 @@ def manage(data, price, send, chat):
     if _pnl(pos, price) <= -LIQ_LOSS * pos["collateral"]:
         _close(data, price, "liquidated", send, chat)
         return
-    trail = TIMEFRAMES[pos.get("timeframe", "1h")]["trail_atr"]
+    trail = TIMEFRAMES[pos.get("timeframe", "1h")]["trail_atr"] if pos.get("trail", True) else None
     if pos["side"] == "long":
         pos["best"] = max(pos["best"], price)
-        pos["stop"] = max(pos["stop"], pos["best"] - trail * pos["atr"])
+        if trail:
+            pos["stop"] = max(pos["stop"], pos["best"] - trail * pos["atr"])
         hit = price <= pos["stop"]
     else:
         pos["best"] = min(pos["best"], price)
-        pos["stop"] = min(pos["stop"], pos["best"] + trail * pos["atr"])
+        if trail:
+            pos["stop"] = min(pos["stop"], pos["best"] + trail * pos["atr"])
         hit = price >= pos["stop"]
     if hit:
         trailed = (pos["side"] == "long" and pos["stop"] > pos["entry"]) or (pos["side"] == "short" and pos["stop"] < pos["entry"])
@@ -363,6 +410,10 @@ def cycle(send, chat, candles=None, price=None):
         pos_key, _ = _keys(data)
         price = price if price is not None else fetch_price()
         manage(data, price, send, chat)
+        if data.get("strategy") == "scalp":
+            _scalp_step(data, price, send, chat, candles if candles is not None else fetch_candles("5m"))
+            _save(data)
+            return
         candles = candles if candles is not None else fetch_candles(data.get("timeframe", "1h"))
         if candles and candles[-1]["t"] != data.get("last_candle"):
             data["last_candle"] = candles[-1]["t"]
@@ -374,6 +425,63 @@ def cycle(send, chat, candles=None, price=None):
             if side and not pos and a > 0:
                 _open(data, side, price, a, send, chat)
         _save(data)
+
+
+def _account_value(data):
+    pos_key, _ = _keys(data)
+    pos = data[pos_key]
+    base = real_equity() if data["mode"] == "real" else data["balance"]
+    return base + (pos["collateral"] if pos else 0)
+
+
+def _scalp_step(data, price, send, chat, candles):
+    """At each closed M5 candle: close the trade that belonged to it, then enter on a fresh signal."""
+    pos_key, hist_key = _keys(data)
+    pos = data[pos_key]
+    now = time.time()
+    if pos and pos.get("strategy") == "scalp" and now > (pos.get("exit_at") or now) + 60:
+        _close(data, price, "candle_close", send, chat)   # safety: candle feed late, still exit on time
+        pos = data[pos_key]
+    if now - data.get("scalp_report_at", 0) >= 3600:
+        data["scalp_report_at"] = now
+        st = data["scalp_stats"]
+        send(chat, "⚡ Scalping M5 ligado: " + str(st["candles"]) + " velas analisadas, " + str(st["signals"]) +
+             " sinais na última hora.\nÚltima leitura: " + (st["last_reason"] or "aguardando primeira vela"))
+        data["scalp_stats"] = {"candles": 0, "signals": 0, "last_reason": st["last_reason"]}
+    if not candles or candles[-1]["t"] == data.get("last_candle"):
+        return
+    data["last_candle"] = candles[-1]["t"]
+    stats = data["scalp_stats"]
+    stats["candles"] += 1
+    exit_at = candles[-1]["t"] + 600          # end of the candle that is starting now
+    side, a, why = scalp_signal(candles)
+    stats["last_reason"] = why if not side else "sinal " + side
+    if side:
+        stats["signals"] += 1
+    if pos and pos.get("strategy") == "scalp" and now >= (pos.get("exit_at") or 0) - 15:
+        if side == pos["side"]:
+            pos["exit_at"] = exit_at          # same direction again: keep it and save a round of fees
+            return
+        if not _close(data, price, "candle_close", send, chat):
+            return
+        pos = None
+    if pos or not side:
+        return
+    today = time.strftime("%Y-%m-%d", time.gmtime(now))
+    try:
+        value = _account_value(data)
+    except Exception:
+        return
+    if data.get("scalp_day") != today:
+        data.update(scalp_day=today, scalp_day_start=value)
+    if data.get("scalp_paused_day") == today:
+        return
+    if value <= data["scalp_day_start"] * (1 - SCALP_DAILY_LOSS):
+        data["scalp_paused_day"] = today
+        send(chat, "⏸️ Scalping pausado até amanhã (00:00 UTC): perdeu 10% da conta hoje. "
+             "Proteção contra dia ruim.")
+        return
+    _open(data, side, price, a, send, chat, exit_at=exit_at)
 
 
 def test_real_order(send, chat, price=None):
@@ -413,7 +521,8 @@ def summary():
             equity = data["balance"] + (pos["collateral"] if pos else 0)
             start = data["start"]
         return {"enabled": data.get("enabled", False), "leverage": data.get("leverage", DEFAULT_LEVERAGE),
-                "mode": data["mode"], "timeframe": data.get("timeframe", "1h"),
+                "mode": data["mode"], "timeframe": data.get("timeframe", "1h"), "strategy": data.get("strategy", "trend"),
+                "scalp_stats": dict(data.get("scalp_stats", {})),
                 "balance": data["balance"], "equity": equity, "start": start, "position": pos,
                 "history": list(data[hist_key])}
 
@@ -423,7 +532,8 @@ def status_text(price=None):
     real = s["mode"] == "real"
     lines = ["₿ ROBÔ BTC ALAVANCADO — " + ("🟢 LIGADO" if s["enabled"] else "🔴 DESLIGADO"),
              "Modo: " + ("💵 DINHEIRO REAL (carteira do bot, Jupiter Perps)" if real else "🧪 SIMULAÇÃO com preço real"),
-             "Gráfico: " + s["timeframe"] + (" (tendência)" if s["timeframe"] == "1h" else " (operações rápidas o dia todo)"),
+             ("Estratégia: ⚡ SCALPING M5 (momentum, fecha no fim da vela)" if s.get("strategy") == "scalp" else
+              "Estratégia: 📈 Tendência · gráfico " + s["timeframe"]),
              "Alavancagem: " + str(s["leverage"]) + "x | 20% da conta por ordem",
              ("Conta real" if real else "Saldo simulado") + ": $" + format(s["equity"], ".2f") +
              ("" if real else " (início $" + format(s["start"], ".2f") + ", " +
