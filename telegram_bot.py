@@ -9,6 +9,8 @@ import live_exit_monitor
 import telegram_owner
 import live_order_bridge
 import live_engine
+import sim_engine
+import trade_report
 from live_swap_executor import configured as swap_configured
 from jupiter_v2_executor import headers as jupiter_headers
 from bot_wallet_service import create_or_get, get_address, export_private_key
@@ -43,7 +45,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"📊 Status trading real","callback_data":"live_status"},{"text":"🔧 Destravar robô","callback_data":"unstick"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"🧪 Simulação ON","callback_data":"sim_on"},{"text":"🧪 Simulação OFF","callback_data":"sim_off"}],[{"text":"📜 Histórico","callback_data":"history"}],[{"text":"📊 Status trading real","callback_data":"live_status"},{"text":"🔧 Destravar robô","callback_data":"unstick"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
 def trading_readiness():
  """Report observed switches and ledger state; never imply real trading works."""
  st=trade_state.status()
@@ -179,6 +181,8 @@ def scan(alert=False):
  if alert and active_chat():
   try:live_engine.buy_cycle(rows,send,active_chat())
   except Exception:logging.exception("live buy cycle failed")
+  try:sim_engine.buy_cycle(rows,send,active_chat())
+  except Exception:logging.exception("sim buy cycle failed")
  if alert and active_chat() and ALERTS_ENABLED:
   sent=0
   for p in reversed(rows):
@@ -279,6 +283,16 @@ def handle(update):
    send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura compra até 2 moedas em alta e aprovada no anti-golpe, usando 10% da conta (máx. 3 posições). Vende sozinho: stop -8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para ao perder 15% da conta no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
   except Exception as exc:
    send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
+ elif action in ("history","/historico"):
+  try:send(chat,trade_report.history_text(trade_state.history(),sim_engine.summary()),keyboard())
+  except Exception as exc:logging.exception("history failed");send(chat,"⚠️ Histórico indisponível: "+str(exc)[:150])
+ elif action in ("sim_on","/sim_on"):
+  sim_engine.set_enabled(True);st=sim_engine.summary()
+  send(chat,"🧪 SIMULAÇÃO LIGADA\nRoda as MESMAS estratégias (normal + sniper) com preços reais da Jupiter e dinheiro de mentira (saldo simulado: US$ "+format(st["equity"],".2f")+"). Inclui 1% de custo por lado. Não mexe na carteira.\nVeja os resultados em 📜 Histórico. /sim_reset recomeça do zero.",keyboard())
+ elif action in ("sim_off","/sim_off"):
+  sim_engine.set_enabled(False);send(chat,"🧪 Simulação desligada. O histórico simulado fica salvo.",keyboard())
+ elif action=="/sim_reset":
+  sim_engine.reset();send(chat,"🧪 Simulação reiniciada com US$ "+format(sim_engine.START_USD,".2f")+".")
  elif action in ("unstick","/destravar"):
   try:live_engine.unstick(send,chat)
   except Exception as exc:
@@ -287,7 +301,7 @@ def handle(update):
   try:
    trade_state.set_sniper(True)
    extra="" if live_engine.ready() else "\n⚠️ O robô principal está desligado: toque em ▶️ Iniciar trading real para o sniper operar."
-   send(chat,"🎯 SNIPER LIGADO — RISCO MUITO ALTO\nA cada ~20 s procura moedas com menos de 60 min, liquidez ≥ US$ 10 mil e compras fortes nos últimos 5 min. Só compra se passar no anti-golpe e se os 10 maiores donos tiverem < 30%.\nCompra 5% da conta (máx. 2 posições sniper).\nSaída: stop -15%; a partir de +30% deixa o lucro correr e vende 15% abaixo do topo; se não decolar em 45 min, vende.\n⚠️ A maioria das moedas novas vai a zero. Quedas rápidas podem passar muito do stop."+extra,keyboard())
+   send(chat,"🎯 SNIPER LIGADO — RISCO MUITO ALTO\nA cada ~20 s procura moedas de 5 a 60 min, liquidez ≥ US$ 15 mil, compras fortes e espalhadas (sem já ter disparado). Só compra se passar no anti-golpe, se os 10 maiores donos tiverem < 25% e no TESTE DE VENDA (comprar e vender de volta tem que devolver ≥ 92%).\nCompra 5% da conta (máx. 2 posições sniper).\nSaída: stop -12%; a partir de +25% deixa o lucro correr e vende 12% abaixo do topo; se não decolar em 30 min, vende.\n⚠️ A maioria das moedas novas vai a zero. Quedas rápidas podem passar muito do stop."+extra,keyboard())
   except Exception:
    logging.exception("sniper switch failed");send(chat,"⚠️ Não consegui salvar a configuração do sniper.")
  elif action in ("sniper_off","/sniper_off"):
@@ -364,6 +378,8 @@ def loop():
     next_sniper=time.monotonic()+20
     try:live_engine.sniper_cycle(send,active_chat())
     except Exception:logging.exception("sniper cycle failed")
+    try:sim_engine.sniper_cycle(send,active_chat())
+    except Exception:logging.exception("sim sniper cycle failed")
    if active_chat() and time.monotonic()-last_recovery_notice>3600:
     last_recovery_notice=time.monotonic()
     try:
@@ -374,6 +390,8 @@ def loop():
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+20
 
+    try:sim_engine.exit_cycle(send,active_chat())
+    except Exception:logging.exception("sim exit cycle failed")
     try:live_engine.recover(send,active_chat())
     except Exception:logging.exception("pending order recovery failed")
     try:
