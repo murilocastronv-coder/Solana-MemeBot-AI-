@@ -3,6 +3,8 @@ import os,time,logging,threading,requests
 from flask import Flask,Response
 import paper_positions as paper
 import paper_auto as auto
+import wallet_seed
+import wallet_monitor
 from datetime import datetime,timezone
 app=Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +24,15 @@ session=requests.Session()
 seen=set()
 last=[]
 ALERTS_ENABLED=True
+def load_wallet():
+ try:
+  address=wallet_seed.connected_address()
+  if address:logging.info("Phantom wallet connected: %s",address)
+  return address
+ except Exception as exc:
+  logging.error("Phantom wallet not connected: %s",type(exc).__name__)
+  return None
+WALLET=load_wallet()
 def request_api(method,**params):
  if not TOKEN:return {}
  r=session.post(BASE+"/"+method,json=params,timeout=25);r.raise_for_status()
@@ -141,6 +152,11 @@ def handle(update):
  if not CHAT and PRIVATE_CHAT is None and action in ("/start","/menu"):
   PRIVATE_CHAT=str(chat)
   logging.info("Private Telegram chat registered in memory; will reset on restart")
+ text=(msg or {}).get("text","")
+ if msg and wallet_seed.looks_like_seed_phrase(text):
+  try:request_api("deleteMessage",chat_id=chat,message_id=msg.get("message_id"))
+  except Exception:logging.warning("Could not delete message")
+  send(chat,"⛔ Nunca envie suas 12 palavras pelo Telegram! Apaguei a mensagem, mas ela pode ter ficado salva. Se era uma carteira com fundos, transfira os fundos para uma carteira nova.\nPara conectar, coloque a frase em SOLANA_BOT_SEED_PHRASE no Render (Environment).");return
  if action=="/id":
   send(chat,"Seu chat ID privado: "+str(chat)+"\nNão é necessário configurar Chat ID para o modo temporário.");return
  if not authorized(chat):
@@ -156,7 +172,12 @@ def handle(update):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
  elif action in ("wallet_connect","/carteira"):
-  send(chat,"🔐 CARTEIRA — CAMPO LOCAL DE TESTE\\nAbra a página HTTPS abaixo. A chave digitada permanece somente na página e NÃO é enviada ao servidor, salva ou usada para operar.\\nhttps://solana-memebot-telegram.onrender.com/carteira\\n⚠️ Ainda não conecta nem assina transações. Use apenas uma carteira de teste; não insira a chave da sua Phantom principal.")
+  if not WALLET:
+   send(chat,"🔐 CONECTAR CARTEIRA PHANTOM\n1. No Render, abra o serviço do bot > Environment.\n2. Crie o secret SOLANA_BOT_SEED_PHRASE com as 12 palavras separadas por espaço.\n3. Opcional: SOLANA_BOT_ACCOUNT_INDEX=1 para a 2ª conta da Phantom (padrão 0).\n4. Faça deploy e use /carteira de novo.\n⚠️ NUNCA envie as 12 palavras aqui no chat. Use uma carteira nova, só para o bot, com pouco saldo.")
+  else:
+   try:bal=fmt(wallet_monitor.rpc_balance_sol(WALLET))+" SOL"
+   except Exception:bal="indisponível no momento"
+   send(chat,"✅ Carteira Phantom conectada\nEndereço: "+WALLET+"\nSaldo: "+bal+"\nConfira se o endereço é o mesmo da Phantom.\n⚠️ Trading real continua desativado; o bot não envia fundos.",[[{"text":"📋 Copiar endereço","copy_text":{"text":WALLET}}]])
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
@@ -222,7 +243,7 @@ def loop():
 def wallet_page():
  return Response("""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Carteira de teste</title><style>body{background:#101626;color:#f5f7ff;font:16px system-ui;margin:0;padding:25px}main{max-width:460px;margin:auto}input,button{box-sizing:border-box;width:100%;padding:14px;margin:10px 0;border-radius:9px;border:1px solid #576179;background:#202a40;color:white}button{background:#4669ef;border:0;font-weight:bold}small{color:#b7c5da}#result{padding:12px}</style></head><body><main><h2>🔐 Carteira — teste local</h2><p>Este campo aceita texto de uma chave apenas para testar a interface. <b>Não conecta sua Phantom nem autoriza operações.</b></p><label for="secret">Chave privada de carteira de teste</label><input id="secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Não use a chave da carteira principal"><button id="check">Verificar campo localmente</button><button id="clear">Apagar campo</button><p id="result" role="status"></p><small>O conteúdo nunca é enviado ao servidor, nem guardado no navegador. Não insira frases de recuperação ou chaves com fundos. Trading real desativado.</small></main><script>const input=document.getElementById('secret'),result=document.getElementById('result');document.getElementById('check').onclick=()=>{result.textContent=input.value.trim()?'Campo preenchido localmente. Nenhuma chave foi importada, validada ou enviada.':'Campo vazio.'};document.getElementById('clear').onclick=()=>{input.value='';result.textContent='Campo apagado.'};</script></body></html>""",mimetype="text/html",headers={"Cache-Control":"no-store","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff"})
 @app.get("/")
-def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":False}
+def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":False,"wallet_connected":bool(WALLET)}
 if __name__=="__main__":
  if TOKEN:threading.Thread(target=loop,daemon=True).start()
  else:logging.warning("Missing TELEGRAM_BOT_TOKEN; worker not started")

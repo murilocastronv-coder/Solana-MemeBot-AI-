@@ -12,3 +12,14 @@
 ## Testes locais
 
 `python -m unittest discover -p "test_*.py"`
+
+## Conectar a Phantom pelas 12 palavras (bot do Telegram)
+
+1. Crie na Phantom uma **carteira nova** (nova frase de recuperação) só para o bot e deposite pouco saldo.
+2. No Render, serviço do bot do Telegram > **Environment**, crie o secret `SOLANA_BOT_SEED_PHRASE` com as 12 palavras separadas por espaço.
+3. Opcional: `SOLANA_BOT_ACCOUNT_INDEX` (0 = 1ª conta da Phantom, 1 = 2ª conta...).
+4. Faça deploy e envie `/carteira` no Telegram. O bot mostra o endereço e o saldo — confira se é o mesmo endereço da Phantom.
+
+- A frase **nunca** deve ser enviada no chat do Telegram. Se alguém enviar, o bot apaga a mensagem e avisa.
+- A frase não é salva nem registrada em log; o bot guarda só o endereço público.
+- Trading real e saques continuam desativados.
