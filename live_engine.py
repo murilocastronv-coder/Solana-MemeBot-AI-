@@ -4,7 +4,7 @@ Runs only when ALL of these hold:
 - LIVE_TRADING_ENABLED=true and every live_order_bridge.preflight() check passes;
 - the owner pressed "Iniciar trading real" (persistent state enabled, not halted).
 
-Rules: each buy uses ORDER_FRACTION (20%) of account value (SOL + open
+Rules: each buy uses ORDER_FRACTION (10%) of account value (SOL + open
 positions), capped by MAX_ORDER_USD; at most 3 positions. Buys only tokens
 in an uptrend with buy pressure whose mint/freeze authority is revoked.
 Exits: SL -8%; from +15% a trailing stop sells 10% below the best value.
@@ -25,7 +25,7 @@ import requests
 from live_swap_executor import rpc
 from jupiter_v2_executor import SOL_MINT
 
-ORDER_FRACTION = float(os.getenv("ORDER_FRACTION", "0.20"))
+ORDER_FRACTION = float(os.getenv("ORDER_FRACTION", "0.10"))
 DAILY_LOSS_FRACTION = 0.15
 MIN_ORDER_USD = 3.0
 _safety = {}  # mint -> (ok, reason) cache for anti-rug checks
@@ -218,7 +218,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode):
 
 
 def buy_cycle(rows, send, chat):
-    """Buy at most one new token per scan (20% of account value)."""
+    """Buy at most one new token per scan (10% of account value)."""
     if not chat:
         return None
     if not ready():
