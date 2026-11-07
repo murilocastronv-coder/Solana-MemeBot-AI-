@@ -74,9 +74,12 @@ O menu agora é só de BTC (memecoins removidas; posições antigas continuam co
 ### ⚡ Gráfico 5m (operações rápidas o dia todo)
 Mesma lógica de rompimento a favor da tendência em velas de 5 min (canal de 100 min, tendência de ~16 h), stop 1,5×ATR e stop móvel 2,5×ATR. Pula sinais em que o stop é menor que 0,35% (as taxas comeriam mais de 1/3 do risco).
 
-### ⚡ Scalping M5 (fecha no fim da vela)
+### ⚡ Scalping M5 (fecha no fim da vela) — estratégia EMA 9/21 + RSI + Volume + ATR
 Botões **📈 Estratégia tendência** / **⚡ Scalping M5** (no modo real pede confirmação).
-- A cada vela de 5 min fechada: tendência pela EMA 20 vs EMA 50 (e preço do lado certo da EMA 50) + vela anterior forte a favor (corpo ≥ ½ ATR, fechou nos 30% da ponta) + RSI 50–70 (long) / 30–50 (short) + volatilidade ≥ 0,15% por vela (senão as taxas comem o ganho).
-- Abre LONG/SHORT com 20% da conta × alavancagem e **fecha no fim da vela**. Se a vela seguinte der sinal na mesma direção, mantém (economiza ~0,12% de taxa).
-- Stop de proteção 1×ATR (sempre antes da liquidação); pausa até o dia seguinte se perder 10% da conta no dia; resumo a cada hora.
-- Robô confere a cada ~10 s.
+- **COMPRA**: EMA 9 > EMA 21, RSI 14 entre 52 e 70, volume da vela acima da média das 20 anteriores, vela de alta que fechou acima da anterior, ATR ≥ 0,15% do preço, preço a no máximo 0,3% da EMA 9.
+- **VENDA (short)**: EMA 9 < EMA 21, RSI 30–48, volume acima da média, vela de baixa que fechou abaixo da anterior, ATR suficiente.
+- 10% da conta por operação, uma posição por vez, sem martingale. Stop 0,25%, alvo 0,40%, **sempre fecha no fim da vela** (nunca passa para a próxima).
+- Para de abrir no dia ao perder 3% da conta; pausa 1 h depois de 3 perdas seguidas.
+
+### 📊 Backtest
+Só a estratégia M5 acima, últimos 30 dias, sem alavancagem, $10 por operação, taxa 0,06% + deslize 0,02% por lado, entrada na abertura da vela seguinte. Mostra **P/L total**, operações, acerto, lucro bruto, custos, queda máxima, comparação com comprar e segurar, outras combinações de stop/alvo e o resultado com custos dobrados.

@@ -13,25 +13,33 @@ def walk(n, secs, drift=0.0, vol=0.002, seed=1, start=60000.0):
         c = o * (1 + drift + rnd.gauss(0, vol))
         h = max(o, c) * (1 + abs(rnd.gauss(0, vol / 2)))
         l = min(o, c) * (1 - abs(rnd.gauss(0, vol / 2)))
-        out.append({"t": t0 + i * secs, "o": o, "h": h, "l": l, "c": c}); p = c
+        out.append({"t": t0 + i * secs, "o": o, "h": h, "l": l, "c": c, "v": rnd.uniform(50, 150)}); p = c
     return out
 
 
 class BacktestTests(unittest.TestCase):
-    def test_scalp_runs_fast_on_30_days_and_charges_fees(self):
-        m5 = walk(30 * 288 + 150, 300, vol=0.0025)
+    def test_scalp_runs_fast_on_30_days_and_charges_costs(self):
+        m5 = walk(30 * 288 + 80, 300, vol=0.0025)
         t = time.time()
-        sigs = bt.scalp_signals(m5)
-        results = [bt.run_scalp(m5, lev, sigs=sigs) for lev in bt.LEVERAGES]
+        text = bt.report_text(m5)
         self.assertLess(time.time() - t, 30)
-        r3 = results[1]
-        self.assertGreater(r3["trades"], 0)
-        self.assertGreater(r3["fees"], 0)
-        self.assertGreater(results[3]["fees"], r3["fees"])      # more leverage, more fees
-        self.assertGreater(r3["final"], 0)
+        r = bt.run_scalp(m5, 1)
+        self.assertGreater(r["trades"], 0)
+        self.assertAlmostEqual(r["gross_usd"] - r["fees"], r["pnl_usd"], places=6)
+        stress = bt.run_scalp(m5, 1, fee_mult=2, slip_mult=2)
+        self.assertLess(stress["pnl_usd"], r["pnl_usd"])           # higher costs, worse result
+        self.assertIn("P/L TOTAL", text)
+
+    def test_stop_counts_first_when_both_touched(self):
+        c = [{"t": i * 300, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1} for i in range(70)]
+        sigs = [(None, 0, "")] * 69 + [("long", 1, "")]
+        sigs[60] = ("long", 1.0, "")
+        r = bt.run_scalp(c, 1, sigs=sigs)
+        self.assertEqual(r["trades"], 1)
+        self.assertLess(r["pnl_usd"], 0)                            # worst case assumed
 
     def test_flat_market_no_trades(self):
-        flat = [{"t": i * 300, "o": 60000.0, "h": 60001.0, "l": 59999.0, "c": 60000.0} for i in range(600)]
+        flat = [{"t": i * 300, "o": 60000.0, "h": 60001.0, "l": 59999.0, "c": 60000.0, "v": 100.0} for i in range(600)]
         self.assertEqual(bt.run_scalp(flat, 3)["trades"], 0)
         self.assertEqual(bt.run_trend(flat, 3)["trades"], 0)
 
@@ -49,10 +57,9 @@ class BacktestTests(unittest.TestCase):
         self.assertAlmostEqual(acc.trades[0], -pos["size"] * b.FEE_RATE * 2)   # flat trade only pays fees
 
     def test_report_text(self):
-        text = bt.report_text(walk(1000, 300, vol=0.0025), walk(600, 3600, vol=0.004), days=3)
-        self.assertIn("SCALPING M5", text)
-        self.assertIn("TENDÊNCIA 1h", text)
-        self.assertIn("10x:", text)
+        text = bt.report_text(walk(1000, 300, vol=0.0025), days=3)
+        for part in ("ESTRATÉGIA M5", "P/L TOTAL", "SL 0.15% / TP", "taxas e deslize dobrados", "BTC no período"):
+            self.assertIn(part, text)
 
     def test_fetch_history_paginates_binance(self):
         now = int(time.time()) // 300 * 300
@@ -60,7 +67,7 @@ class BacktestTests(unittest.TestCase):
         def fake_get(url):
             calls.append(url)
             end = int(url.split("endTime=")[1]) // 1000 // 300 * 300 if "endTime" in url else now
-            return [[(end - (999 - k) * 300 - 600) * 1000, "1", "2", "0.5", "1.5"] for k in range(1000)]
+            return [[(end - (999 - k) * 300 - 600) * 1000, "1", "2", "0.5", "1.5", "10"] for k in range(1000)]
         with patch("btc_perps._get", side_effect=fake_get):
             rows = bt.fetch_history("5m", days=7, extra=100)
         self.assertEqual(len(rows), 7 * 288 + 100)
