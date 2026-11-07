@@ -280,13 +280,20 @@ def handle(update):
   send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nLiquidez mínima: $"+str(MIN_LIQ)+"\nVolume 24h mínimo: $"+str(MIN_VOLUME)+"\nIdade mínima: "+str(MIN_AGE_HOURS)+" horas\nFDV/liquidez máximo: "+str(MAX_FDV_LIQ)+"\nAlertas por varredura: "+str(MAX_ALERTS)+"\nSem auditoria on-chain. Ajuste no Render.")
  else:menu(chat)
 def loop():
- offset=None;next_scan=0;next_positions=0
+ offset=None;next_scan=0;next_positions=0;last_recovery_notice=0
  while True:
   try:
    if time.monotonic()>=next_scan:
     next_scan=time.monotonic()+INTERVAL
     try:scan(True)
     except Exception:logging.exception("automatic opportunity scan failed")
+   if active_chat() and time.monotonic()-last_recovery_notice>3600:
+    last_recovery_notice=time.monotonic()
+    try:
+     pending=trade_state.pending_orders()
+     if pending:
+      send(active_chat(),"⚠️ "+str(len(pending))+" operação(ões) pendente(s) após reinício ou falha. Trading bloqueado para evitar duplicidade. Verifique assinaturas e saldos on-chain antes de liberar novas ordens.")
+    except Exception:logging.exception("recovery pending inspection failed")
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+60
 
