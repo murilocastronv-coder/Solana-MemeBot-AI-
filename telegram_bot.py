@@ -1,4 +1,4 @@
-"""Telegram Solana token radar. Read-only, no wallet credentials or trades."""
+"""Telegram Solana token radar with optional real-money auto trading (live_engine)."""
 import os,time,logging,threading,requests,re,secrets,html
 from flask import Flask,Response,request
 import paper_positions as paper
@@ -8,6 +8,7 @@ import live_trade_state as trade_state
 import live_exit_monitor
 import telegram_owner
 import live_order_bridge
+import live_engine
 from live_swap_executor import configured as swap_configured
 from jupiter_v2_executor import headers as jupiter_headers
 from bot_wallet_service import create_or_get, get_address, export_private_key
@@ -53,11 +54,9 @@ def trading_readiness():
   "RPC Solana dedicado":bool(os.getenv("SOLANA_RPC_URL")) and os.getenv("SOLANA_RPC_URL")!="https://api.mainnet-beta.solana.com",
   "Carteira criptografada":bool(get_address()) and bool(os.getenv("BOT_WALLET_ENCRYPTION_PASSPHRASE")),
   "Sem ordens pendentes":st["pending"]==0,
-  "Compras automáticas integradas":False,
-  "Vendas TP/SL automáticas integradas":False,
-  "Recuperação e PnL validados":False,
+  "Robô ligado pelo botão":st["enabled"] and not st["halted"],
  }
- running=False  # Never claim active until a working autonomous engine is implemented.
+ running=live_engine.ready()
  return st,checks,running
 
 def trading_status_text():
@@ -65,16 +64,15 @@ def trading_status_text():
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
         "🔴 ROBÔ DESLIGADO" if not running else "🟢 ROBÔ LIGADO",
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
-        "Compras automáticas: NÃO",
-        "Vendas automáticas TP/SL: NÃO",
+        "Compras automáticas (US$ 10): "+("SIM" if running else "NÃO"),
+        "Vendas automáticas TP +15% / SL -8%: "+("SIM" if running else "NÃO"),
         "Posições registradas: "+str(st["positions"])+" / 3",
         "Ordens pendentes: "+str(st["pending"]),
         "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ 3.00",
         "",
         "VERIFICAÇÕES:"]
  lines += [("✅ " if ok else "❌ ")+name for name,ok in checks.items()]
- lines += ["","⚠️ Chave geral ligada não significa trading em execução.",
-           "Nenhuma compra é iniciada pelo botão enquanto o ciclo real não estiver concluído."]
+ lines += ["","⚠️ DINHEIRO REAL. Memecoins podem cair a zero; o SL pode não segurar em quedas bruscas."]
  return "\n".join(lines)
 
 def menu(chat):
@@ -162,7 +160,9 @@ def qualifies(p):
 def scan(alert=False):
  global last
  rows=fetch();last=rows
- 
+ if alert and active_chat():
+  try:live_engine.buy_cycle(rows,send,active_chat())
+  except Exception:logging.exception("live buy cycle failed")
  if alert and active_chat() and ALERTS_ENABLED:
   sent=0
   for p in reversed(rows):
@@ -222,7 +222,7 @@ def handle(update):
   try:
    address,created=create_or_get()
    CONNECTED_WALLETS[str(chat)]=address
-   send(chat,("✅ CARTEIRA SOLANA GERADA" if created else "✅ CARTEIRA SOLANA EXISTENTE")+"\nEndereço público (Solana mainnet):\n"+address+"\n\n🔐 Chave privada criptografada no disco persistente. Faça backup seguro do arquivo e da senha antes de depositar. Saques e trades reais não estão implementados.")
+   send(chat,("✅ CARTEIRA SOLANA GERADA" if created else "✅ CARTEIRA SOLANA EXISTENTE")+"\nEndereço público (Solana mainnet):\n"+address+"\n\n🔐 Chave privada criptografada no disco persistente. Faça backup seguro do arquivo e da senha antes de depositar. Deposite SOL e use ▶️ Iniciar trading real para o robô operar.")
   except Exception:
    logging.warning("Wallet creation unavailable (check persistent disk and secrets)")
    send(chat,"⚠️ Não foi possível criar a carteira. Configure BOT_WALLET_FILE no disco persistente e BOT_WALLET_ENCRYPTION_PASSPHRASE nos segredos do Render. Nenhum endereço foi criado.")
@@ -258,16 +258,11 @@ def handle(update):
   CONNECTED_WALLETS.pop(str(chat),None)
   send(chat,"Carteira pública desvinculada desta sessão.")
  elif action in ("live_start","/iniciar","/live_on"):
-  # Never acknowledge live activation without an operational and reconciled
-  # trading engine. The bridge alone is not an autonomous trading loop.
   try:
-   live_order_bridge.preflight()
-   st=trade_state.status()
-   if st["pending"]:
-    raise RuntimeError("Há transação pendente de reconciliação")
-   send(chat,"⛔ Não foi possível ligar o robô.\n"+trading_status_text(),keyboard())
+   live_engine.start()
+   send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura ele compra até 1 token que passar nos filtros (US$ 10 por compra, máx. 3 posições) e vende sozinho em TP +15% ou SL -8%. Para ao perder US$ 3 no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
   except Exception as exc:
-   send(chat,"⛔ Não foi possível iniciar trading real. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada. Use /id para verificar o proprietário e configure as credenciais somente nos segredos do Render.")
+   send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
  elif action in ("live_stop","/parar","/live_off"):
   auto.set_enabled(chat,False)
   try:
@@ -330,8 +325,10 @@ def loop():
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+60
 
-    try:live_exit_monitor.monitor(send,active_chat())
-    except Exception:logging.exception("live exit quote monitoring failed")
+    try:
+     if os.getenv("LIVE_TRADING_ENABLED")=="true":live_engine.exit_cycle(send,active_chat())
+     else:live_exit_monitor.monitor(send,active_chat())
+    except Exception:logging.exception("live exit cycle failed")
     try:paper.check(active_chat(),send,fmt)
     except Exception:logging.exception("paper position monitoring failed")
    if TOKEN:
@@ -392,7 +389,7 @@ async function copyKey() {
 def wallet_page():
  return Response("""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Carteira de teste</title><style>body{background:#101626;color:#f5f7ff;font:16px system-ui;margin:0;padding:25px}main{max-width:460px;margin:auto}input,button{box-sizing:border-box;width:100%;padding:14px;margin:10px 0;border-radius:9px;border:1px solid #576179;background:#202a40;color:white}button{background:#4669ef;border:0;font-weight:bold}small{color:#b7c5da}#result{padding:12px}</style></head><body><main><h2>🔐 Carteira — teste local</h2><p>Este campo aceita texto de uma chave apenas para testar a interface. <b>Não conecta sua Phantom nem autoriza operações.</b></p><label for="secret">Chave privada de carteira de teste</label><input id="secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Não use a chave da carteira principal"><button id="check">Verificar campo localmente</button><button id="clear">Apagar campo</button><p id="result" role="status"></p><small>O conteúdo nunca é enviado ao servidor, nem guardado no navegador. Não insira frases de recuperação ou chaves com fundos. Trading real desativado.</small></main><script>const input=document.getElementById('secret'),result=document.getElementById('result');document.getElementById('check').onclick=()=>{result.textContent=input.value.trim()?'Campo preenchido localmente. Nenhuma chave foi importada, validada ou enviada.':'Campo vazio.'};document.getElementById('clear').onclick=()=>{input.value='';result.textContent='Campo apagado.'};</script></body></html>""",mimetype="text/html",headers={"Cache-Control":"no-store","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff"})
 @app.get("/")
-def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":False}
+def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":live_engine.ready()}
 if __name__=="__main__":
  if TOKEN:threading.Thread(target=loop,daemon=True).start()
  else:logging.warning("Missing TELEGRAM_BOT_TOKEN; worker not started")

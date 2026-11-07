@@ -64,6 +64,17 @@ def stop():
         _save(state)
         return status()
 
+def start():
+    """Owner pressed start. Refuses while any order is unreconciled."""
+    with _LOCK:
+        state = _load()
+        if state["pending"]:
+            raise RuntimeError("Há transação pendente de conciliação")
+        state["enabled"] = True
+        state["halted"] = False
+        _save(state)
+        return status()
+
 def can_open():
     with _LOCK:
         state = _load()
@@ -177,11 +188,26 @@ def reconcile_known_signature(order_id, owner):
         sold = int(before_token) - after_token
         if sold != int(pending.get("input_amount_raw", -1)) or after_sol <= int(before_sol):
             return {"status": "manual_review", "reason": "Sell balance mismatch", "signature": signature}
-        # No reliable realized USD PnL without a verified execution-time USD valuation.
-        # Keep halted for review rather than silently bypassing daily loss limits.
-        record_settlement(order_id, signature)
-        data = _load()
-        data["enabled"] = False
-        data["halted"] = True
-        _save(data)
-        return {"status": "settled_sell_review_pnl", "signature": signature}
+        cost = float(data["positions"].get(mint, {}).get("cost_usd", 0) or 0)
+        try:
+            proceeds_usd = _sol_to_usd(after_sol - int(before_sol))
+        except Exception:
+            proceeds_usd = None
+        if proceeds_usd is None or cost <= 0:
+            # Cannot value the sale: settle tokens but halt for manual PnL review.
+            record_settlement(order_id, signature)
+            data = _load()
+            data["enabled"] = False
+            data["halted"] = True
+            _save(data)
+            return {"status": "settled_sell_review_pnl", "reason": "PnL not valued", "signature": signature}
+        pnl = proceeds_usd - cost
+        record_settlement(order_id, signature, realized_loss_usd=max(0.0, -pnl))
+        return {"status": "settled_sell", "signature": signature, "pnl_usd": pnl}
+
+def _sol_to_usd(lamports):
+    """Value SOL received from a sale with an executable Jupiter SOL->USDC quote."""
+    from jupiter_v2_executor import order, SOL_MINT, USDC_MINT
+    if int(lamports) <= 0:
+        return 0.0
+    return int(order(SOL_MINT, USDC_MINT, int(lamports))["outAmount"]) / 1_000_000

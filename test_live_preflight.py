@@ -11,7 +11,7 @@ class LivePreflightTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             require_live_ready()
     def test_limits(self):
-        self.assertEqual(risk_settings()["order_usd"], 2)
+        self.assertEqual(risk_settings()["order_usd"], 10)
         self.assertEqual(risk_settings()["daily_loss_limit_usd"], 3)
 if __name__ == "__main__":
     unittest.main()
