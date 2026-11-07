@@ -1,6 +1,6 @@
 """Telegram Solana token radar. Read-only, no wallet credentials or trades."""
 import os,time,logging,threading,requests
-from flask import Flask
+from flask import Flask,Response
 import paper_positions as paper
 import paper_auto as auto
 from datetime import datetime,timezone
@@ -156,7 +156,7 @@ def handle(update):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
  elif action in ("wallet_connect","/carteira"):
-  send(chat,"🔐 CONECTAR CARTEIRA PHANTOM\\nA conexão de carteira para trading real ainda não está habilitada.\\nNunca envie sua chave privada ou frase de recuperação como mensagem ao bot.\\nUma futura conexão segura exigirá assinatura protegida e confirmação antes de ativar ordens reais.\\n🧪 Por enquanto, use /auto_on para simulação de US$ 10, TP +15% e SL -8%.")
+  send(chat,"🔐 CARTEIRA — CAMPO LOCAL DE TESTE\\nAbra a página HTTPS abaixo. A chave digitada permanece somente na página e NÃO é enviada ao servidor, salva ou usada para operar.\\nhttps://solana-memebot-telegram.onrender.com/carteira\\n⚠️ Ainda não conecta nem assina transações. Use apenas uma carteira de teste; não insira a chave da sua Phantom principal.")
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
@@ -218,6 +218,9 @@ def loop():
    else:logging.exception("telegram HTTP error")
    time.sleep(15)
   except Exception:logging.exception("telegram worker error");time.sleep(10)
+@app.get("/carteira")
+def wallet_page():
+ return Response("""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Carteira de teste</title><style>body{background:#101626;color:#f5f7ff;font:16px system-ui;margin:0;padding:25px}main{max-width:460px;margin:auto}input,button{box-sizing:border-box;width:100%;padding:14px;margin:10px 0;border-radius:9px;border:1px solid #576179;background:#202a40;color:white}button{background:#4669ef;border:0;font-weight:bold}small{color:#b7c5da}#result{padding:12px}</style></head><body><main><h2>🔐 Carteira — teste local</h2><p>Este campo aceita texto de uma chave apenas para testar a interface. <b>Não conecta sua Phantom nem autoriza operações.</b></p><label for="secret">Chave privada de carteira de teste</label><input id="secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Não use a chave da carteira principal"><button id="check">Verificar campo localmente</button><button id="clear">Apagar campo</button><p id="result" role="status"></p><small>O conteúdo nunca é enviado ao servidor, nem guardado no navegador. Não insira frases de recuperação ou chaves com fundos. Trading real desativado.</small></main><script>const input=document.getElementById('secret'),result=document.getElementById('result');document.getElementById('check').onclick=()=>{result.textContent=input.value.trim()?'Campo preenchido localmente. Nenhuma chave foi importada, validada ou enviada.':'Campo vazio.'};document.getElementById('clear').onclick=()=>{input.value='';result.textContent='Campo apagado.'};</script></body></html>""",mimetype="text/html",headers={"Cache-Control":"no-store","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff"})
 @app.get("/")
 def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":False}
 if __name__=="__main__":
