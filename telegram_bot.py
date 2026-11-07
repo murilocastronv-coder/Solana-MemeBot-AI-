@@ -31,7 +31,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}],[{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}]]
 def menu(chat):
  send(chat,"🤖 Solana MemeBot AI\nRadar de tokens e simulação automática. Use /auto_on para iniciar operações fictícias de US$ 10. Nenhuma compra real é executada.",keyboard())
 def market_json(url):
@@ -155,6 +155,8 @@ def handle(update):
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
+ elif action in ("wallet_connect","/carteira"):
+  send(chat,"🔐 CONECTAR CARTEIRA PHANTOM\\nA conexão de carteira para trading real ainda não está habilitada.\\nNunca envie sua chave privada ou frase de recuperação como mensagem ao bot.\\nUma futura conexão segura exigirá assinatura protegida e confirmação antes de ativar ordens reais.\\n🧪 Por enquanto, use /auto_on para simulação de US$ 10, TP +15% e SL -8%.")
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
