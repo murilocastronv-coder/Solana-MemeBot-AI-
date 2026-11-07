@@ -340,8 +340,20 @@ def handle(update):
  elif action in ("settings","/settings"):
   send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nLiquidez mínima: $"+str(MIN_LIQ)+"\nVolume 24h mínimo: $"+str(MIN_VOLUME)+"\nIdade mínima: "+str(MIN_AGE_HOURS)+" horas\nFDV/liquidez máximo: "+str(MAX_FDV_LIQ)+"\nAlertas por varredura: "+str(MAX_ALERTS)+"\nSem auditoria on-chain. Ajuste no Render.")
  else:menu(chat)
+def startup_notice():
+ """After a deploy/restart: say what state the robot resumed in."""
+ chat=active_chat()
+ if not chat:return
+ st=trade_state.status()
+ reason=live_engine.why_stopped()
+ send(chat,"🔄 Bot reiniciado (deploy). Estado salvo recuperado:\n"+
+  ("🟢 Robô LIGADO e operando" if reason is None else "🔴 Robô parado: "+reason)+
+  "\n📦 Posições abertas: "+str(st["positions"])+"/3 (stop e venda automática continuam)"+
+  ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 def loop():
- offset=None;next_scan=0;next_positions=0;next_sniper=0;last_recovery_notice=0
+ offset=None;next_scan=0;next_positions=0;next_sniper=0;last_recovery_notice=time.monotonic()
+ try:startup_notice()
+ except Exception:logging.exception("startup notice failed")
  while True:
   try:
    if time.monotonic()>=next_scan:
