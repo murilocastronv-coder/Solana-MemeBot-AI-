@@ -35,12 +35,20 @@ function render(){
  const contract=document.createElement("div");contract.className="contract";contract.textContent="Contrato (mint): "+mint;card.append(contract);
  const actions=document.createElement("div");actions.className="coin-actions";const copy=document.createElement("button");copy.textContent="Copiar contrato";copy.onclick=async()=>{try{await navigator.clipboard.writeText(mint);copy.textContent="✓ Copiado";setTimeout(()=>copy.textContent="Copiar contrato",1600);}catch{copy.textContent="Falhou: copie o texto acima";}};actions.append(copy);
  if(typeof p.url==="string"&&p.url.startsWith("https://dexscreener.com/")){const a=document.createElement("a");a.href=p.url;a.target="_blank";a.rel="noopener noreferrer";a.className="link secondary";a.textContent="Ver gráfico";actions.append(a);}
- const risk=document.createElement("p");risk.className="risk";risk.textContent="⚠️ Não auditado: mint/freeze authority, holders, honeypot e risco de rug pull não verificados.";card.append(actions,risk);root.append(card);
+ const target=document.createElement("div");target.className="targets-inline";
+const entry=Number(p.priceUsd);const tp=Number($("tpPct").value),sl=Number($("slPct").value);
+const fmt=n=>n.toLocaleString("en-US",{maximumSignificantDigits:10});
+target.textContent=Number.isFinite(entry)&&entry>0&&tp>0&&sl>0&&sl<100?"TP +"+tp+"%: $"+fmt(entry*(1+tp/100))+"  |  SL -"+sl+"%: $"+fmt(entry*(1-sl/100)):"TP/SL: preço de referência indisponível";
+const risk=document.createElement("div");risk.className="risk";risk.textContent="⚠️ Risco não verificado. Nenhuma análise garante segurança.";
+const inspect=document.createElement("button");inspect.className="secondary";inspect.textContent="Verificar scam / rug pull / holders";
+const report=document.createElement("div");report.className="risk-report";report.textContent="Análise externa sob demanda. Carteiras de pools podem aparecer entre os maiores holders.";
+inspect.onclick=()=>inspectToken(mint,report,inspect);
+card.append(target,actions,risk,inspect,report);root.append(card);
  }
 }
 $("refresh").onclick=load;for(const id of ["type","liquidity","search"])$(id).addEventListener(id==="search"?"input":"change",render);
 load();setInterval(()=>{if(!document.hidden)load();},60000);document.addEventListener("visibilitychange",()=>{if(!document.hidden)load();});
 
 function calculateTargets(){const price=Number($("entryPrice").value),tp=Number($("tpPct").value),sl=Number($("slPct").value);if(!Number.isFinite(price)||price<=0||!Number.isFinite(tp)||tp<=0||tp>1000||!Number.isFinite(sl)||sl<=0||sl>=100){$("targets").textContent="Informe preço positivo, TP entre 0,1% e 1000% e SL entre 0,1% e 99%.";return;}const fmt=n=>n.toLocaleString("en-US",{maximumSignificantDigits:10});$("targets").textContent="TP: $"+fmt(price*(1+tp/100))+" (+"+tp+"%) | SL: $"+fmt(price*(1-sl/100))+" (-"+sl+"%). Valores indicativos; slippage pode alterar a execução.";}
-for(const id of ["entryPrice","tpPct","slPct"])$(id).addEventListener("input",calculateTargets);
+for(const id of ["entryPrice","tpPct","slPct"])$(id).addEventListener("input",()=>{calculateTargets();if(id!=="entryPrice")render();});
 $("type").value="latest";render();
