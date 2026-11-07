@@ -32,15 +32,35 @@ def keyboard():
  return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🔔 Alertas","callback_data":"alerts"},{"text":"⚙️ TP / SL","callback_data":"settings"}]]
 def menu(chat):
  send(chat,"🤖 Solana MemeBot AI\nRadar de tokens, contratos para copiar e TP/SL indicativos. Nenhuma compra é executada.",keyboard())
+def market_json(url):
+ last_error=None
+ for attempt in range(3):
+  try:
+   response=session.get(url,timeout=20,headers={"Accept":"application/json","User-Agent":"SolanaMemeBotRadar/1.1"})
+   response.raise_for_status()
+   if "json" not in response.headers.get("Content-Type","").lower():
+    raise ValueError("Market API returned non-JSON content")
+   return response.json()
+  except (requests.RequestException,ValueError) as exc:
+   last_error=exc
+   logging.warning("Market API attempt %s failed: %s",attempt+1,type(exc).__name__)
+   if attempt<2:time.sleep(2**attempt)
+ raise RuntimeError("Market API unavailable after retries") from last_error
+
 def fetch():
- profiles=session.get("https://api.dexscreener.com/token-profiles/latest/v1",timeout=20).json()
- addresses=list(dict.fromkeys(x.get("tokenAddress") for x in profiles if x.get("chainId")=="solana" and x.get("tokenAddress")))[:90]
+ profiles=market_json("https://api.dexscreener.com/token-profiles/latest/v1")
+ if not isinstance(profiles,list):raise ValueError("Invalid token profile list")
+ addresses=list(dict.fromkeys(x.get("tokenAddress") for x in profiles if isinstance(x,dict) and x.get("chainId")=="solana" and x.get("tokenAddress")))[:90]
  pairs=[]
  for i in range(0,len(addresses),30):
-  r=session.get("https://api.dexscreener.com/tokens/v1/solana/"+",".join(addresses[i:i+30]),timeout=20)
-  r.raise_for_status();pairs+=r.json()
+  try:
+   batch=market_json("https://api.dexscreener.com/tokens/v1/solana/"+",".join(addresses[i:i+30]))
+   if isinstance(batch,list):pairs+=batch
+  except RuntimeError:logging.warning("Market pair batch unavailable; continuing with remaining batches")
+ if addresses and not pairs:raise RuntimeError("No market pair batches available")
  unique={}
  for p in pairs:
+  if not isinstance(p,dict):continue
   mint=p.get("baseToken",{}).get("address")
   if p.get("chainId")!="solana" or not mint:continue
   if mint not in unique or float(p.get("liquidity",{}).get("usd") or 0)>float(unique[mint].get("liquidity",{}).get("usd") or 0):unique[mint]=p
@@ -154,6 +174,11 @@ def loop():
      try:handle(u)
      except Exception:logging.exception("update failed")
    else:time.sleep(10)
+  except requests.HTTPError as exc:
+   if exc.response is not None and exc.response.status_code==409:
+    logging.warning("Telegram polling conflict: another instance may be polling this token")
+   else:logging.exception("telegram HTTP error")
+   time.sleep(15)
   except Exception:logging.exception("telegram worker error");time.sleep(10)
 @app.get("/")
 def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":False}
