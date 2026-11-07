@@ -166,7 +166,7 @@ def handle(update):
    send(chat,("✅ CARTEIRA SOLANA GERADA" if created else "✅ CARTEIRA SOLANA EXISTENTE")+"\nEndereço público (Solana mainnet):\n"+address+"\n\n🔐 Chave privada criptografada no disco persistente. Faça backup seguro do arquivo e da senha antes de depositar. Saques e trades reais não estão implementados.")
   except Exception:
    logging.warning("Wallet creation unavailable (check persistent disk and secrets)")
-   send(chat,"⚠️ Não foi possível criar a carteira. Configure TELEGRAM_CHAT_ID, BOT_WALLET_FILE no disco persistente e BOT_WALLET_ENCRYPTION_PASSPHRASE nos segredos do Render. Nenhum endereço foi criado.")
+   send(chat,"⚠️ Não foi possível criar a carteira. Configure BOT_WALLET_FILE no disco persistente e BOT_WALLET_ENCRYPTION_PASSPHRASE nos segredos do Render. Nenhum endereço foi criado.")
  elif action in ("wallet_connect","/carteira","/wallet","/depositar","/deposito","/sacar","wallet_deposit","wallet_withdraw"):
   address=get_address() if os.getenv("BOT_WALLET_FILE") else None
   address=address or CONNECTED_WALLETS.get(str(chat))
