@@ -156,9 +156,14 @@ def handle(update):
  elif action in ("latest","/latest"):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
- elif action in ("wallet_connect","/carteira","/wallet"):
+ elif action in ("wallet_connect","/carteira","/wallet","/depositar","/deposito","/sacar"):
   address=CONNECTED_WALLETS.get(str(chat))
-  if address:
+  if action=="/sacar":
+   send(chat,"💸 SAQUE — modo seguro\\nAbra a carteira dedicada no aplicativo Phantom, toque em Enviar e escolha SOL. Confirme o endereço de destino e a taxa diretamente na Phantom.\\nSaques automáticos ainda estão desativados; o bot não possui autorização para movimentar fundos.")
+  elif address:
+   if action in ("/depositar","/deposito"):
+    send(chat,"📥 DEPÓSITO SOLANA\\nEnvie SOL pela rede Solana para o endereço público da carteira dedicada:\\n"+address+"\\nConfira o endereço na Phantom antes de transferir. A detecção do saldo é automática ao consultar /wallet.")
+    return
    try:
     rpc=os.getenv("SOLANA_RPC_URL","https://api.mainnet-beta.solana.com")
     response=session.post(rpc,json={"jsonrpc":"2.0","id":1,"method":"getBalance","params":[address]},timeout=12)
