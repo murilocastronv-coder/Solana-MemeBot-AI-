@@ -2,7 +2,7 @@
 No seed phrase is accepted from Telegram. Never log signed transactions.
 Requires a dedicated RPC and Jupiter API key. This is NOT a trading strategy.
 """
-import os, base64, requests
+import os, base64, requests, math
 from solders.transaction import VersionedTransaction
 from solders.message import to_bytes_versioned
 from solders.signature import Signature
@@ -32,6 +32,10 @@ def quote(input_mint,output_mint,amount,slippage_bps=100):
     data=r.json()
     if not data.get("routePlan") or data.get("inputMint")!=input_mint or data.get("outputMint")!=output_mint:
         raise SwapError("No valid swap route")
+    if int(data.get("inAmount",0))!=int(amount) or int(data.get("outAmount",0))<=0:
+        raise SwapError("Invalid quote amounts")
+    if int(data.get("priceImpactPct",0) or 0)>1:
+        raise SwapError("Price impact too high")
     return data
 
 def build_swap(quote_response,public_address):
@@ -49,6 +53,22 @@ def rpc(method,params):
     data=r.json()
     if data.get("error"):raise SwapError("RPC rejected "+method)
     return data.get("result")
+
+def simulate_swap(input_mint,output_mint,amount,slippage_bps=100):
+    """Read-only transaction simulation; never signs or submits a swap."""
+    address=get_address()
+    if not address:raise SwapError("No wallet configured")
+    route=quote(input_mint,output_mint,amount,slippage_bps)
+    payload=build_swap(route,address)
+    raw=payload["swapTransaction"]
+    tx=VersionedTransaction.from_bytes(base64.b64decode(raw,validate=True))
+    if str(tx.message.account_keys[0])!=address:raise SwapError("Unexpected fee payer")
+    result=rpc("simulateTransaction",[raw,{"encoding":"base64","sigVerify":False,"replaceRecentBlockhash":True,"commitment":"processed"}])
+    if not isinstance(result,dict) or result.get("value",{}).get("err") is not None:
+        raise SwapError("Swap simulation failed")
+    return {"input_mint":input_mint,"output_mint":output_mint,"input_amount":int(amount),
+            "quoted_output":int(route["outAmount"]),"simulation_ok":True,
+            "units_consumed":result.get("value",{}).get("unitsConsumed")}
 
 def execute_swap(input_mint,output_mint,amount,passphrase,slippage_bps=100):
     """Sign and submit exactly one Jupiter route. Caller MUST enforce position/risk limits,
