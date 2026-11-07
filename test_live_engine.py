@@ -131,10 +131,64 @@ class LiveEngineTests(unittest.TestCase):
         with patch("live_order_bridge.execute_signed", side_effect=RuntimeError("timeout")):
             live_engine.buy_cycle([pair()], self.send, "1")
         self.assertEqual(state.status()["pending"], 1)
-        self.assertIn("BLOQUEADO", self.sent[-1])
+        self.assertIn("Vou conferir sozinho", self.sent[-1])
         self.assertFalse(state.can_open()[0])
         with self.assertRaises(RuntimeError):
             state.start()
+
+def age_pending(seconds=600):
+    from datetime import datetime, timezone, timedelta
+    data = state._load()
+    for p in data["pending"].values():
+        p["created_at"] = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+    state._save(data)
+
+
+class RecoveryTests(LiveEngineTests):
+    def test_buy_never_executed_is_released(self):
+        live_engine.start(); self.side = "buy"
+        with patch("live_order_bridge.execute_signed", side_effect=RuntimeError("timeout")):
+            live_engine.buy_cycle([pair()], self.send, "1")
+        self.assertEqual(live_engine.recover(self.send, "1"), [])  # too early: tx could still land
+        age_pending()
+        result = live_engine.recover(self.send, "1")
+        self.assertEqual(result[0]["status"], "discarded")
+        self.assertEqual(state.status()["pending"], 0)
+        self.assertTrue(state.can_open()[0])
+        self.assertIn("não foi executada", self.sent[-1])
+
+    def test_buy_landed_but_unconfirmed_becomes_position(self):
+        live_engine.start(); self.side = "buy"
+        with patch("live_swap_executor.rpc", return_value=None), patch("live_engine.time.sleep"):
+            live_engine.buy_cycle([pair()], self.send, "1")
+        self.assertEqual(state.status()["pending"], 1)
+        age_pending()
+        with patch("live_swap_executor.rpc", return_value=None):
+            result = live_engine.recover(self.send, "1")
+        self.assertEqual(result[0]["status"], "settled_buy")
+        st = state.status()
+        self.assertEqual((st["pending"], st["positions"]), (0, 1))
+        self.assertEqual(state._load()["positions"][MINT]["cost_usd"], 20.0)
+
+    def test_sell_landed_but_unconfirmed_settles_pnl(self):
+        live_engine.start(); self.side = "buy"
+        live_engine.buy_cycle([pair()], self.send, "1")
+        self.side = "sell"
+        position = state._load()["positions"][MINT]
+        signal = {"action": "sell", "reason": "stop_loss", "change_pct": -9.0}
+        with patch("live_engine.sell_signals", return_value=[(MINT, position, signal)]), \
+             patch("live_swap_executor.rpc", return_value=None), patch("live_engine.time.sleep"):
+            live_engine.exit_cycle(self.send, "1")
+        age_pending()
+        with patch("live_swap_executor.rpc", return_value=None), \
+             patch("live_trade_state._sol_to_usd", return_value=18.0):
+            result = live_engine.recover(self.send, "1")
+        self.assertEqual(result[0]["status"], "settled_sell")
+        st = state.status()
+        self.assertEqual((st["pending"], st["positions"]), (0, 0))
+        self.assertAlmostEqual(state.pnl_summary()["total_pnl_usd"], -2.0)
+        self.assertIn("-2.00 USD", self.sent[-1])
+
 
 def new_pair(minutes=20):
     return {"baseToken": {"address": MINT, "symbol": "NEW"}, "priceUsd": "0.0001",

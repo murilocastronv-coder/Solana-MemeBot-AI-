@@ -353,11 +353,13 @@ def loop():
     try:
      pending=trade_state.pending_orders()
      if pending:
-      send(active_chat(),"⚠️ "+str(len(pending))+" operação(ões) pendente(s) após reinício ou falha. Trading bloqueado para evitar duplicidade. Verifique assinaturas e saldos on-chain antes de liberar novas ordens.")
+      send(active_chat(),"⏳ "+str(len(pending))+" operação(ões) pendente(s). Estou conferindo sozinho os saldos na blockchain; o robô volta a operar assim que confirmar.")
     except Exception:logging.exception("recovery pending inspection failed")
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+20
 
+    try:live_engine.recover(send,active_chat())
+    except Exception:logging.exception("pending order recovery failed")
     try:
      if os.getenv("LIVE_TRADING_ENABLED")=="true":live_engine.exit_cycle(send,active_chat())
      else:live_exit_monitor.monitor(send,active_chat())

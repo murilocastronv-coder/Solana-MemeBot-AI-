@@ -73,9 +73,9 @@ def _settle(order_id, wallet):
 def _failure(send, chat, side, mint, exc):
     pending = state.pending_orders()
     if pending:
-        send(chat, "⚠️ " + side.upper() + " com resultado incerto: " + mint +
-             "\nRobô BLOQUEADO até conferir a transação na carteira (Solscan). "
-             "Nenhuma ordem será reenviada automaticamente.")
+        send(chat, "⏳ " + side.capitalize() + " ainda sem confirmação: " + mint +
+             "\nVou conferir sozinho os saldos na blockchain em ~2 min e liberar o robô. "
+             "Nada é reenviado em dobro.")
     else:
         _notice(send, chat, ("fail", side, str(exc)[:80]),
                 "⛔ " + side.capitalize() + " não enviada: " + str(exc)[:200])
@@ -213,8 +213,8 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode):
              "📄 " + mint + "\n"
              "🔗 https://solscan.io/tx/" + settled["signature"])
     else:
-        send(chat, "⚠️ Compra enviada mas não conciliada (" + str(settled.get("reason", settled.get("status"))) +
-             "). Robô bloqueado.\nTx: https://solscan.io/tx/" + str(result["signature"]))
+        send(chat, "⏳ Compra enviada, conferindo saldo (" + str(settled.get("reason", settled.get("status"))) +
+             "). Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" + str(result["signature"]))
     return settled
 
 
@@ -319,8 +319,8 @@ def exit_cycle(send, chat):
         if settled.get("status") == "settled_sell":
             send(chat, sell_message(position.get("symbol") or mint[:6], signal, settled))
         else:
-            send(chat, "⚠️ Venda enviada, conferir manualmente (" +
-                 str(settled.get("reason", settled.get("status"))) + "). Robô pausado.\nTx: https://solscan.io/tx/" +
+            send(chat, "⏳ Venda enviada, conferindo saldo (" +
+                 str(settled.get("reason", settled.get("status"))) + "). Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" +
                  str(result["signature"]))
         return  # one order per cycle
 
@@ -434,3 +434,29 @@ def sniper_cycle(send, chat):
     if len(_sniper_seen) > 5000:
         _sniper_seen.clear()
     return None
+
+
+def recover(send, chat):
+    """Resolve stuck pending orders from on-chain balances and tell the owner."""
+    if not chat or not state.pending_orders():
+        return []
+    wallet = get_address()
+    if not wallet:
+        return []
+    results = state.auto_reconcile(wallet)
+    for r in results:
+        mint = r.get("mint", "?")
+        if r["status"] == "settled_buy":
+            send(chat, "✅ Compra confirmada pela conferência automática: " + mint + "\nRobô liberado.")
+        elif r["status"].startswith("settled_sell"):
+            send(chat, "✅ Venda confirmada pela conferência automática: " + mint +
+                 ("\nP/L: " + format(r["pnl_usd"], "+.2f") + " USD" if "pnl_usd" in r else "") +
+                 ("\nVenda parcial: o resto continua com stop." if r.get("partial") else "") + "\nRobô liberado.")
+        elif r["status"] == "discarded":
+            what = "Compra" if r.get("side") == "buy" else "Venda"
+            send(chat, "ℹ️ " + what + " não foi executada na blockchain (" + mint + "). Nada mudou na carteira. Robô liberado" +
+                 ("; a venda será tentada de novo." if r.get("side") == "sell" else "."))
+        else:
+            _notice(send, chat, ("recover_err", mint), "⚠️ Não consegui conferir a ordem pendente de " + mint +
+                    " ainda; tento de novo automaticamente.", REPORT_EVERY_SECONDS)
+    return results

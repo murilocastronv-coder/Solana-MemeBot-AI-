@@ -282,3 +282,93 @@ def _sol_to_usd(lamports):
     if int(lamports) <= 0:
         return 0.0
     return int(order(SOL_MINT, USDC_MINT, int(lamports))["outAmount"]) / 1_000_000
+
+
+def discard_pending(order_id):
+    """Drop a reservation whose transaction verifiably never changed balances."""
+    with _LOCK:
+        data = _load()
+        data["pending"].pop(order_id, None)
+        _save(data)
+
+
+def _age_seconds(pending):
+    try:
+        created = datetime.fromisoformat(pending["created_at"])
+        return (datetime.now(timezone.utc) - created).total_seconds()
+    except Exception:
+        return 1e9
+
+
+def _reconcile_by_balance(order_id, pending, owner):
+    """Settle from on-chain balances once any in-flight transaction has expired."""
+    from solana_settlement import get_token_balance, get_sol_balance
+    signature = pending.get("signature") or "balance-check"
+    mint = pending["mint"]
+    before_token = pending.get("before_token_raw")
+    before_sol = pending.get("before_sol_raw")
+    if before_token is None or before_sol is None:
+        discard_pending(order_id)  # failed before anything was sent
+        return {"status": "discarded", "mint": mint, "side": pending["side"]}
+    token_now = get_token_balance(owner, mint)
+    sol_now = get_sol_balance(owner)
+    if pending["side"] == "buy":
+        acquired = token_now - int(before_token)
+        if acquired <= 0:
+            discard_pending(order_id)
+            return {"status": "discarded", "mint": mint, "side": "buy"}
+        position = {"token_amount_raw": acquired, "cost_usd": float(pending.get("cost_usd") or 0) or 10.0,
+                    "buy_signature": signature}
+        record_settlement(order_id, signature, position=position)
+        return {"status": "settled_buy", "mint": mint, "signature": signature, "token_amount_raw": acquired}
+    sold = int(before_token) - token_now
+    if sold <= 0:
+        discard_pending(order_id)  # sell never executed; position stays and will be retried
+        return {"status": "discarded", "mint": mint, "side": "sell"}
+    with _LOCK:
+        data = _load()
+        position = dict(data["positions"].get(mint, {}))
+    cost = float(position.get("cost_usd", 0) or 0)
+    held = int(position.get("token_amount_raw") or before_token) or 1
+    sold_fraction = min(1.0, sold / held)
+    cost_sold = cost * sold_fraction
+    try:
+        proceeds = _sol_to_usd(max(0, sol_now - int(before_sol)))
+    except Exception:
+        proceeds = None
+    pnl = None if proceeds is None or cost_sold <= 0 else proceeds - cost_sold
+    record_settlement(order_id, signature, realized_loss_usd=max(0.0, -(pnl or 0.0)), pnl_usd=pnl)
+    leftover = held - sold
+    if leftover > held * 0.05 and token_now > 0:  # partial fill: keep tracking the rest
+        with _LOCK:
+            data = _load()
+            position.update(token_amount_raw=min(leftover, token_now), cost_usd=cost - cost_sold)
+            data["positions"][mint] = position
+            _save(data)
+    return {"status": "settled_sell", "mint": mint, "signature": signature, "pnl_usd": pnl or 0.0,
+            "cost_usd": cost_sold, "proceeds_usd": proceeds or 0.0, "partial": leftover > held * 0.05}
+
+
+EXPIRY_SECONDS = 150  # a Solana transaction cannot land after its blockhash expires (~90 s)
+
+
+def auto_reconcile(owner):
+    """Resolve pending orders without manual help. Never resends anything."""
+    results = []
+    for order_id, pending in pending_orders().items():
+        if pending.get("signature"):
+            try:
+                result = reconcile_known_signature(order_id, owner)
+            except Exception:
+                result = {"status": "error"}
+            if result.get("status", "").startswith("settled"):
+                result["mint"] = pending["mint"]
+                results.append(result)
+                continue
+        if _age_seconds(pending) < EXPIRY_SECONDS:
+            continue
+        try:
+            results.append(_reconcile_by_balance(order_id, pending, owner))
+        except Exception:
+            results.append({"status": "error", "mint": pending["mint"]})
+    return results
