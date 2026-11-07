@@ -36,9 +36,21 @@ function render(){
  const actions=document.createElement("div");actions.className="coin-actions";const copy=document.createElement("button");copy.textContent="Copiar contrato";copy.onclick=async()=>{try{await navigator.clipboard.writeText(mint);copy.textContent="✓ Copiado";setTimeout(()=>copy.textContent="Copiar contrato",1600);}catch{copy.textContent="Falhou: copie o texto acima";}};actions.append(copy);
  if(typeof p.url==="string"&&p.url.startsWith("https://dexscreener.com/")){const a=document.createElement("a");a.href=p.url;a.target="_blank";a.rel="noopener noreferrer";a.className="link secondary";a.textContent="Ver gráfico";actions.append(a);}
  const target=document.createElement("div");target.className="targets-inline";
-const entry=Number(p.priceUsd);const tp=Number($("tpPct").value),sl=Number($("slPct").value);
-const fmt=n=>n.toLocaleString("en-US",{maximumSignificantDigits:10});
-target.textContent=Number.isFinite(entry)&&entry>0&&tp>0&&sl>0&&sl<100?"TP +"+tp+"%: $"+fmt(entry*(1+tp/100))+"  |  SL -"+sl+"%: $"+fmt(entry*(1-sl/100)):"TP/SL: preço de referência indisponível";
+const entry=Number(p.priceUsd),tp=Number($("tpPct").value),sl=Number($("slPct").value);
+const validTargets=Number.isFinite(entry)&&entry>0&&Number.isFinite(tp)&&tp>0&&tp<=1000&&Number.isFinite(sl)&&sl>0&&sl<100;
+function priceText(value){return value.toLocaleString("en-US",{useGrouping:false,maximumSignificantDigits:15});}
+if(validTargets){
+ const take=priceText(entry*(1+tp/100)),stop=priceText(entry*(1-sl/100));
+ const summary=document.createElement("div");summary.textContent="Preço de referência: $"+priceText(entry)+" • TP +"+tp+"%: $"+take+" • SL -"+sl+"%: $"+stop;
+ target.append(summary);
+ const buttons=document.createElement("div");buttons.className="target-buttons";
+ for(const [label,value] of [["Copiar TP",take],["Copiar SL",stop]]){
+  const btn=document.createElement("button");btn.className="secondary";btn.textContent=label;
+  btn.onclick=async()=>{try{await navigator.clipboard.writeText(value);btn.textContent="✓ "+label+" copiado";setTimeout(()=>btn.textContent=label,1800);}catch{btn.textContent="Não foi possível copiar";setTimeout(()=>btn.textContent=label,2000);}};
+  buttons.append(btn);
+ }
+ target.append(buttons);
+}else target.textContent="TP/SL: preço ou percentual inválido.";
 const risk=document.createElement("div");risk.className="risk";risk.textContent="⚠️ Risco não verificado. Nenhuma análise garante segurança.";
 const inspect=document.createElement("button");inspect.className="secondary";inspect.textContent="Verificar scam / rug pull / holders";
 const report=document.createElement("div");report.className="risk-report";report.textContent="Análise externa sob demanda. Carteiras de pools podem aparecer entre os maiores holders.";
