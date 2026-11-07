@@ -11,7 +11,11 @@ Sizing: 20% of the account as collateral per trade; position = collateral x leve
 Costs modelled on Jupiter Perps: 0.06% open + 0.06% close of position size,
 ~0.01%/hour borrow fee. Liquidation when losses reach 90% of the collateral.
 
-No real orders are sent: real execution on Jupiter Perps is not wired yet.
+Two timeframes: "1h" (trend) and "5m" (intraday momentum breakouts all day;
+tighter ATR stops and a fee filter that skips trades whose stop is too small
+compared with Jupiter's fees).
+Two modes: "sim" (paper money, real prices) and "real" (bot wallet on Jupiter
+Perps through jupiter_perps.py, USDC collateral).
 """
 import json
 import logging
@@ -43,18 +47,24 @@ def _get(url):
     return r.json()
 
 
-def fetch_candles():
-    """Closed 1h BTC/USD candles, oldest first (Binance, Coinbase fallback)."""
+TIMEFRAMES = {"1h": {"seconds": 3600, "stop_atr": 2.0, "trail_atr": 3.0},
+              "5m": {"seconds": 300, "stop_atr": 1.5, "trail_atr": 2.5}}
+MIN_STOP_PCT = {"1h": 0.0, "5m": 0.0035}  # 5m: skip trades where fees would eat > ~1/3 of the risk
+
+
+def fetch_candles(tf="1h"):
+    """Closed BTC/USD candles, oldest first (Binance, Coinbase fallback)."""
+    secs = TIMEFRAMES[tf]["seconds"]
     try:
-        rows = _get("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=300")
+        rows = _get("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=" + tf + "&limit=300")
         candles = [{"t": int(r[0]) // 1000, "o": float(r[1]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4])}
                    for r in rows]
     except Exception:
-        rows = _get("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=3600")
+        rows = _get("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=" + str(secs))
         candles = sorted(({"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "o": float(r[3]), "c": float(r[4])}
                           for r in rows), key=lambda c: c["t"])
     now = time.time()
-    return [c for c in candles if c["t"] + 3600 <= now]  # drop the candle still forming
+    return [c for c in candles if c["t"] + secs <= now]  # drop the candle still forming
 
 
 def fetch_price():
@@ -105,12 +115,16 @@ def _path():
 
 def _default():
     return {"enabled": False, "leverage": DEFAULT_LEVERAGE, "balance": START_USD, "start": START_USD,
-            "position": None, "history": [], "last_candle": 0}
+            "position": None, "history": [], "last_candle": 0, "mode": "sim", "timeframe": "1h",
+            "real_position": None, "real_history": [], "real_start": None}
 
 
 def _load():
     path = _path()
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else _default()
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    merged = _default()
+    merged.update(data)
+    return merged
 
 
 def _save(data):
@@ -135,6 +149,28 @@ def set_leverage(value):
     return value
 
 
+def set_option(name, value):
+    allowed = {"mode": ("sim", "real"), "timeframe": tuple(TIMEFRAMES)}
+    if value not in allowed[name]:
+        raise ValueError("Opção inválida")
+    with _LOCK:
+        data = _load()
+        if name == "mode" and data.get("position" if data["mode"] == "sim" else "real_position"):
+            raise ValueError("Feche a posição aberta antes de trocar de modo")
+        if name == "mode" and value == "real" and not data.get("real_test_ok"):
+            raise ValueError("Faça primeiro o 🧪 Teste real $5 (precisa passar uma vez)")
+        if name == "mode" and value == "real" and not data.get("real_start"):
+            try:
+                data["real_start"] = real_equity()
+            except Exception:
+                pass
+        data[name] = value
+        if name == "timeframe":
+            data["last_candle"] = 0
+        _save(data)
+    return value
+
+
 def reset():
     with _LOCK:
         old = _load()
@@ -154,59 +190,162 @@ def _liq_price(pos):
     return pos["entry"] * (1 - move if pos["side"] == "long" else 1 + move)
 
 
+# ------------------------------------------------------------------ books (sim / real)
+def _keys(data):
+    return ("position", "history") if data["mode"] == "sim" else ("real_position", "real_history")
+
+
+def _tf(data):
+    return TIMEFRAMES[data.get("timeframe", "1h")]
+
+
+SOL_RESERVE_LAMPORTS = 50_000_000  # keep 0.05 SOL for fees and account rent
+
+
+def real_balances():
+    """(sol, usdc, sol_price) of the bot wallet."""
+    import jupiter_perps as jp
+    import live_order_bridge as bridge
+    from bot_wallet_service import get_address
+    owner = get_address()
+    if not owner:
+        raise RuntimeError("Carteira do bot não encontrada")
+    return bridge.get_sol_balance(owner) / 1e9, jp.usdc_balance(owner), float(bridge.sol_usd_price())
+
+
+def real_equity():
+    sol, usdc, sol_price = real_balances()
+    return sol * sol_price + usdc
+
+
+def ensure_usdc(amount):
+    """Swap SOL -> USDC through Jupiter if the wallet lacks USDC for the collateral."""
+    import jupiter_perps as jp
+    import live_order_bridge as bridge
+    from bot_wallet_service import get_address
+    from jupiter_v2_executor import order, sign_order, execute_signed, SOL_MINT, USDC_MINT
+    owner = get_address()
+    have = jp.usdc_balance(owner)
+    if have >= amount:
+        return have
+    need_usd = (amount - have) * 1.02
+    lamports = int(need_usd / float(bridge.sol_usd_price()) * 1e9)
+    if bridge.get_sol_balance(owner) < lamports + SOL_RESERVE_LAMPORTS:
+        raise RuntimeError("Saldo insuficiente: deposite mais SOL na carteira do bot")
+    quote = order(SOL_MINT, USDC_MINT, lamports, taker=owner)
+    execute_signed(sign_order(quote, os.environ["BOT_WALLET_ENCRYPTION_PASSPHRASE"]), quote["requestId"])
+    for _ in range(20):
+        time.sleep(3)
+        have = jp.usdc_balance(owner)
+        if have >= amount:
+            return have
+    raise RuntimeError("Troca SOL→USDC não confirmou a tempo")
+
+
 def _open(data, side, price, a, send, chat):
     lev = int(data["leverage"])
-    collateral = round(data["balance"] * ORDER_FRACTION, 2)
-    if collateral < 1:
-        send(chat, "💤 BTC: saldo simulado baixo demais para abrir posição.")
+    tf = data.get("timeframe", "1h")
+    real = data["mode"] == "real"
+    pos_key, _ = _keys(data)
+    try:
+        equity = real_equity() if real else data["balance"]
+    except Exception as exc:
+        send(chat, "⛔ BTC real: não consegui ler o saldo da carteira (" + str(exc)[:150] + ").")
+        return
+    collateral = round(equity * ORDER_FRACTION, 2)
+    if collateral < (5 if real else 1):
+        send(chat, "💤 BTC: saldo baixo demais para abrir posição (20% = $" + format(collateral, ".2f") +
+             (", mínimo $5 no real)." if real else ")."))
         return
     size = collateral * lev
     max_dist = MAX_STOP_OF_LIQ * LIQ_LOSS / lev   # keep the stop well before liquidation
-    dist = min(STOP_ATR * a / price, max_dist)
-    stop = price * (1 - dist if side == "long" else 1 + dist)
-    data["balance"] -= collateral
-    data["position"] = {"side": side, "entry": price, "collateral": collateral, "size_usd": size, "leverage": lev,
-                        "stop": stop, "best": price, "atr": a, "opened_at": time.time()}
-    pos = data["position"]
-    send(chat, ("🟢 LONG" if side == "long" else "🔴 SHORT") + " BTC " + str(lev) + "x (SIMULADO, preço real)\n"
-         "Entrada: $" + format(price, ",.0f") + "\nGarantia: $" + format(collateral, ".2f") + " (20% da conta) → posição $" +
+    dist = min(_tf(data)["stop_atr"] * a / price, max_dist)
+    if dist < MIN_STOP_PCT[tf]:
+        logging.info("BTC %s signal skipped: stop %.3f%% too small vs fees", tf, dist * 100)
+        return
+    entry, signature = price, None
+    if real:
+        import jupiter_perps as jp
+        try:
+            ensure_usdc(collateral)
+            onchain = jp.open_position(side, collateral, lev, price)
+        except Exception as exc:
+            send(chat, "⛔ BTC REAL: ordem " + side.upper() + " não aberta: " + str(exc)[:300])
+            return
+        entry, signature = onchain["price"] or price, onchain.get("signature")
+        size, collateral = onchain["size_usd"] or size, onchain["collateral_usd"] or collateral
+    else:
+        data["balance"] -= collateral
+    stop = entry * (1 - dist if side == "long" else 1 + dist)
+    data[pos_key] = {"side": side, "entry": entry, "collateral": collateral, "size_usd": size, "leverage": lev,
+                     "stop": stop, "best": entry, "atr": a, "opened_at": time.time(), "timeframe": tf}
+    pos = data[pos_key]
+    send(chat, ("🟢 LONG" if side == "long" else "🔴 SHORT") + " BTC " + str(lev) + "x " +
+         ("💵 DINHEIRO REAL" if real else "(SIMULADO, preço real)") + " · gráfico " + tf + "\n"
+         "Entrada: $" + format(entry, ",.0f") + "\nGarantia: $" + format(collateral, ".2f") + " (20% da conta) → posição $" +
          format(size, ",.2f") + "\n🛑 Stop: $" + format(stop, ",.0f") + " (" + format(dist * 100, ".2f") + "% no preço = −" +
          format(dist * lev * 100, ".1f") + "% da garantia)\n💀 Liquidação ≈ $" + format(_liq_price(pos), ",.0f") +
-         "\n📈 Stop móvel: 3×ATR do melhor preço")
+         "\n📈 Stop móvel por ATR" + ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
 
 
 def _close(data, price, reason, send, chat):
-    pos = data["position"]
-    pnl = max(_pnl(pos, price), -pos["collateral"])
-    data["balance"] += pos["collateral"] + pnl
-    data["position"] = None
-    data["history"].append({"symbol": "BTC " + pos["side"].upper() + " " + str(pos["leverage"]) + "x", "mode": "btc",
-                            "cost_usd": pos["collateral"], "pnl_usd": round(pnl, 4), "reason": reason,
-                            "closed_at": time.time(), "minutes": round((time.time() - pos["opened_at"]) / 60, 1),
-                            "mint": "BTC"})
-    data["history"] = data["history"][-300:]
+    real = data["mode"] == "real"
+    pos_key, hist_key = _keys(data)
+    pos = data[pos_key]
+    signature = None
+    if real:
+        import jupiter_perps as jp
+        try:
+            before = jp.usdc_balance(jp.Pubkey.from_string(_owner()))
+            result = jp.close_position(pos["side"], price)
+            after = jp.usdc_balance(jp.Pubkey.from_string(_owner()))
+            signature = result.get("signature")
+        except Exception as exc:
+            send(chat, "⛔ BTC REAL: não consegui FECHAR a posição (" + str(exc)[:250] + "). Tento de novo em ~20 s. "
+                 "Se continuar, feche no site da Jupiter (jup.ag/perps) com a carteira do bot.")
+            return False
+        pnl = (after - before) - pos["collateral"] if not result.get("already_closed") else _pnl(pos, price)
+    else:
+        pnl = max(_pnl(pos, price), -pos["collateral"])
+        data["balance"] += pos["collateral"] + pnl
+    data[pos_key] = None
+    data[hist_key].append({"symbol": "BTC " + pos["side"].upper() + " " + str(pos["leverage"]) + "x", "mode": "btc",
+                           "cost_usd": pos["collateral"], "pnl_usd": round(pnl, 4), "reason": reason,
+                           "closed_at": time.time(), "minutes": round((time.time() - pos["opened_at"]) / 60, 1),
+                           "mint": "BTC", "timeframe": pos.get("timeframe", "1h")})
+    data[hist_key] = data[hist_key][-300:]
     names = {"stop_loss": "stop", "trailing": "stop móvel", "reversal": "virada de tendência", "liquidated": "LIQUIDADO"}
     send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — FECHOU " + pos["side"].upper() + " BTC " +
-         str(pos["leverage"]) + "x (" + names.get(reason, reason) + ")\nEntrada $" + format(pos["entry"], ",.0f") +
-         " → saída $" + format(price, ",.0f") + "\nP/L: " + format(pnl, "+.2f") + " USD (" +
-         format(pnl / pos["collateral"] * 100, "+.1f") + "% da garantia)\nSaldo simulado: $" + format(data["balance"], ".2f"))
+         str(pos["leverage"]) + "x " + ("💵 REAL" if real else "(simulado)") + " (" + names.get(reason, reason) + ")\nEntrada $" +
+         format(pos["entry"], ",.0f") + " → saída $" + format(price, ",.0f") + "\nP/L: " + format(pnl, "+.2f") + " USD (" +
+         format(pnl / pos["collateral"] * 100, "+.1f") + "% da garantia)" +
+         ("" if real else "\nSaldo simulado: $" + format(data["balance"], ".2f")) +
+         ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
+    return True
+
+
+def _owner():
+    from bot_wallet_service import get_address
+    return get_address()
 
 
 def manage(data, price, send, chat):
     """Trailing stop, stop loss and liquidation check on the live price."""
-    pos = data["position"]
+    pos_key, _ = _keys(data)
+    pos = data[pos_key]
     if not pos:
         return
     if _pnl(pos, price) <= -LIQ_LOSS * pos["collateral"]:
         _close(data, price, "liquidated", send, chat)
         return
+    trail = TIMEFRAMES[pos.get("timeframe", "1h")]["trail_atr"]
     if pos["side"] == "long":
         pos["best"] = max(pos["best"], price)
-        pos["stop"] = max(pos["stop"], pos["best"] - TRAIL_ATR * pos["atr"])
+        pos["stop"] = max(pos["stop"], pos["best"] - trail * pos["atr"])
         hit = price <= pos["stop"]
     else:
         pos["best"] = min(pos["best"], price)
-        pos["stop"] = min(pos["stop"], pos["best"] + TRAIL_ATR * pos["atr"])
+        pos["stop"] = min(pos["stop"], pos["best"] + trail * pos["atr"])
         hit = price >= pos["stop"]
     if hit:
         trailed = (pos["side"] == "long" and pos["stop"] > pos["entry"]) or (pos["side"] == "short" and pos["stop"] < pos["entry"])
@@ -214,45 +353,81 @@ def manage(data, price, send, chat):
 
 
 def cycle(send, chat, candles=None, price=None):
-    """Run every ~20 s: manage the open trade; on each new closed hour, act on the signal."""
+    """Run every ~20 s: manage the open trade; on each new closed candle, act on the signal."""
     if not chat:
         return
     with _LOCK:
         data = _load()
         if not data.get("enabled"):
             return
+        pos_key, _ = _keys(data)
         price = price if price is not None else fetch_price()
         manage(data, price, send, chat)
-        candles = candles if candles is not None else fetch_candles()
+        candles = candles if candles is not None else fetch_candles(data.get("timeframe", "1h"))
         if candles and candles[-1]["t"] != data.get("last_candle"):
             data["last_candle"] = candles[-1]["t"]
             side, a, _ = signal(candles)
-            pos = data["position"]
+            pos = data[pos_key]
             if side and pos and pos["side"] != side:
-                _close(data, price, "reversal", send, chat)
-                pos = None
+                if _close(data, price, "reversal", send, chat):
+                    pos = None
             if side and not pos and a > 0:
                 _open(data, side, price, a, send, chat)
         _save(data)
 
 
+def test_real_order(send, chat, price=None):
+    """Owner-triggered check: open a US$ 5, 2x LONG on Jupiter Perps and close it right away."""
+    import jupiter_perps as jp
+    price = price or fetch_price()
+    send(chat, "🧪 TESTE REAL: abrindo LONG BTC 2x com $5 de garantia na Jupiter Perps...")
+    try:
+        ensure_usdc(5)
+        opened = jp.open_position("long", 5, 2, price)
+        send(chat, "✅ Abriu: posição $" + format(opened["size_usd"], ".2f") + " a $" + format(opened["price"], ",.0f") +
+             "\n🔗 https://solscan.io/tx/" + str(opened.get("signature")) + "\nFechando...")
+        closed = jp.close_position("long", fetch_price())
+        with _LOCK:
+            data = _load(); data["real_test_ok"] = True; _save(data)
+        send(chat, "✅ Fechou. Teste OK — a ligação com a Jupiter Perps funciona.\n🔗 https://solscan.io/tx/" +
+             str(closed.get("signature")) + "\nAgora pode usar ₿ Modo REAL.")
+        return True
+    except Exception as exc:
+        send(chat, "❌ Teste falhou: " + str(exc)[:350] + "\nNada foi deixado aberto se a simulação recusou. "
+             "Confira em jup.ag/perps com a carteira do bot. Mande este print para o suporte.")
+        return False
+
+
 def summary():
     with _LOCK:
         data = _load()
-        pos = data["position"]
-        equity = data["balance"] + (pos["collateral"] if pos else 0)
+        pos_key, hist_key = _keys(data)
+        pos = data[pos_key]
+        if data["mode"] == "real":
+            try:
+                equity = real_equity() + (pos["collateral"] if pos else 0)
+            except Exception:
+                equity = 0.0
+            start = data.get("real_start") or equity
+        else:
+            equity = data["balance"] + (pos["collateral"] if pos else 0)
+            start = data["start"]
         return {"enabled": data.get("enabled", False), "leverage": data.get("leverage", DEFAULT_LEVERAGE),
-                "balance": data["balance"], "equity": equity, "start": data["start"], "position": pos,
-                "history": list(data["history"])}
+                "mode": data["mode"], "timeframe": data.get("timeframe", "1h"),
+                "balance": data["balance"], "equity": equity, "start": start, "position": pos,
+                "history": list(data[hist_key])}
 
 
 def status_text(price=None):
     s = summary()
+    real = s["mode"] == "real"
     lines = ["₿ ROBÔ BTC ALAVANCADO — " + ("🟢 LIGADO" if s["enabled"] else "🔴 DESLIGADO"),
-             "Modo: SIMULAÇÃO com preço real (execução real na Jupiter Perps ainda não ligada)",
+             "Modo: " + ("💵 DINHEIRO REAL (carteira do bot, Jupiter Perps)" if real else "🧪 SIMULAÇÃO com preço real"),
+             "Gráfico: " + s["timeframe"] + (" (tendência)" if s["timeframe"] == "1h" else " (operações rápidas o dia todo)"),
              "Alavancagem: " + str(s["leverage"]) + "x | 20% da conta por ordem",
-             "Saldo simulado: $" + format(s["equity"], ".2f") + " (início $" + format(s["start"], ".2f") + ", " +
-             format((s["equity"] / s["start"] - 1) * 100 if s["start"] else 0, "+.1f") + "%)"]
+             ("Conta real" if real else "Saldo simulado") + ": $" + format(s["equity"], ".2f") +
+             ("" if real else " (início $" + format(s["start"], ".2f") + ", " +
+              format((s["equity"] / s["start"] - 1) * 100 if s["start"] else 0, "+.1f") + "%)")]
     pos = s["position"]
     if pos:
         line = ("Posição: " + pos["side"].upper() + " " + str(pos["leverage"]) + "x desde $" + format(pos["entry"], ",.0f") +
@@ -263,7 +438,7 @@ def status_text(price=None):
                     format(pnl / pos["collateral"] * 100, "+.1f") + "%)"
         lines.append(line)
     else:
-        lines.append("Posição: nenhuma (esperando rompimento de 20h a favor da média de 200)")
+        lines.append("Posição: nenhuma (esperando rompimento a favor da média de 200)")
     closed = [t for t in s["history"] if t.get("pnl_usd") is not None]
     if closed:
         wins = sum(1 for t in closed if t["pnl_usd"] > 0)

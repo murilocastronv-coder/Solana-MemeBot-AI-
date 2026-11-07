@@ -49,6 +49,9 @@ def send(chat,text,keyboard=None):
 def keyboard():
  return [[{"text":"₿ BTC ON","callback_data":"btc_on"},{"text":"₿ BTC OFF","callback_data":"btc_off"}],
   [{"text":"⚙️ Alavancagem","callback_data":"lev"},{"text":"📊 Status BTC","callback_data":"btc_status"}],
+  [{"text":"⏱️ Gráfico 1h","callback_data":"tf_1h"},{"text":"⚡ Gráfico 5m","callback_data":"tf_5m"}],
+  [{"text":"💵 Modo REAL","callback_data":"mode_real"},{"text":"🧪 Modo simulação","callback_data":"mode_sim"}],
+  [{"text":"🧪 Teste real $5","callback_data":"btc_test"}],
   [{"text":"📜 Histórico","callback_data":"history"}],
   [{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}]]
@@ -300,7 +303,21 @@ def handle(update):
    send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
  elif action in ("btc_on","/btc_on"):
   btc_perps.set_enabled(True);lev=btc_perps.summary()["leverage"]
-  send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x (SIMULAÇÃO com preço real)\nEstratégia de tendência (rompimento de 20h + média de 200 + stop móvel por ATR). Opera LONG e SHORT com 20% da conta por ordem. Decide a cada vela de 1h fechada e controla o stop a cada ~20 s.\nA execução com dinheiro real na Jupiter Perps ainda não está ligada.",keyboard())
+  st=btc_perps.summary()
+  send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x · "+("💵 DINHEIRO REAL" if st["mode"]=="real" else "🧪 SIMULAÇÃO com preço real")+" · gráfico "+st["timeframe"]+"\nRompimento de 20 velas a favor da média de 200 + stop por ATR e stop móvel. LONG e SHORT, 20% da conta por ordem. Decide a cada vela fechada e controla o stop a cada ~20 s.",keyboard())
+ elif action in ("tf_1h","tf_5m"):
+  try:
+   tf=btc_perps.set_option("timeframe",action[3:])
+   send(chat,"✅ Gráfico "+tf+(": tendência, poucas operações por semana, deixa o lucro correr." if tf=="1h" else ": operações rápidas o dia todo (rompimentos de 100 min a favor da tendência de ~16 h), stop 1,5×ATR e stop móvel 2,5×ATR. Pula sinais em que a taxa da Jupiter comeria mais de 1/3 do risco.\n⚠️ Com 10x, cada ida e volta custa ~1,2% da garantia em taxas."),keyboard())
+  except ValueError as exc:send(chat,"⚠️ "+str(exc),keyboard())
+ elif action in ("mode_real","mode_sim"):
+  try:
+   mode=btc_perps.set_option("mode","real" if action=="mode_real" else "sim")
+   send(chat,("💵 MODO REAL ATIVO: o robô vai abrir LONG/SHORT de verdade na Jupiter Perps com a carteira do bot (garantia em USDC; troca SOL→USDC sozinho quando precisa). Mantenha ~0,05 SOL para taxas." if mode=="real" else "🧪 Modo simulação ativo: dinheiro de mentira, preço real."),keyboard())
+  except ValueError as exc:send(chat,"⚠️ "+str(exc),keyboard())
+ elif action in ("btc_test","/btc_teste"):
+  try:btc_perps.test_real_order(send,chat)
+  except Exception as exc:logging.exception("btc test failed");send(chat,"❌ Teste falhou: "+str(exc)[:300])
  elif action in ("btc_off","/btc_off"):
   btc_perps.set_enabled(False);send(chat,"₿ Robô BTC desligado. Uma posição simulada aberta fica parada até religar.",keyboard())
  elif action in ("btc_status","/btc"):

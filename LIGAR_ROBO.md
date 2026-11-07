@@ -63,3 +63,13 @@ O menu agora é só de BTC (memecoins removidas; posições antigas continuam co
 - 20% da conta como garantia por ordem; posição = garantia × alavancagem. Stop sempre antes da liquidação.
 - Taxas modeladas da Jupiter Perps (0,06% abrir + 0,06% fechar, ~0,01%/h de juros).
 - **Ainda em simulação com preço real** (Binance, fallback Coinbase); `/btc_reset` recomeça com US$ 100.
+
+### 💵 Modo REAL na Jupiter Perps
+1. Deposite SOL na carteira do bot (📥 Depositar). O robô troca SOL→USDC sozinho para a garantia e guarda ~0,05 SOL para taxas.
+2. Toque em **🧪 Teste real $5**: abre um LONG 2x com US$ 5 e fecha em seguida. Precisa passar uma vez.
+3. Toque em **💵 Modo REAL** e depois **₿ BTC ON**.
+- Cada transação é **simulada na blockchain antes de enviar**; se a simulação falhar, nada é enviado e o erro aparece no Telegram.
+- A posição é conferida na conta on-chain da Jupiter (preço, tamanho, garantia). Se o fechamento falhar, o robô tenta de novo a cada ~20 s; dá para fechar manualmente em jup.ag/perps importando a carteira do bot na Phantom.
+
+### ⚡ Gráfico 5m (operações rápidas o dia todo)
+Mesma lógica de rompimento a favor da tendência em velas de 5 min (canal de 100 min, tendência de ~16 h), stop 1,5×ATR e stop móvel 2,5×ATR. Pula sinais em que o stop é menor que 0,35% (as taxas comeriam mais de 1/3 do risco).
