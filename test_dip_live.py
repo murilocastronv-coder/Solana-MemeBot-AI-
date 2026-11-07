@@ -21,11 +21,13 @@ class DipLiveTests(unittest.TestCase):
     def test_buy_rebuy_and_close_at_3(self):
         b.cycle(self.send, "1", candles=self.c, price=self.bottom)
         pos = b.summary()["position"]
-        self.assertEqual((len(pos["entries"]), pos["collateral"], pos["size_usd"], pos["side"]), (1, 25.0, 250.0, "long"))
+        self.assertEqual((len(pos["entries"]), pos["collateral"], pos["size_usd"], pos["side"]), (1, 25.0, 125.0, "long"))
         self.assertIn("COMPRA NO FUNDO", self.sent[-1])
-        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 0.989)       # -1.1% -> re-buy
-        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 0.978)       # -1% again -> 3rd buy
-        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 0.968)       # max 3: no 4th buy
+        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 0.99)        # -1%: not enough (gap is 2%)
+        self.assertEqual(len(b.summary()["position"]["entries"]), 1)
+        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 0.979)       # -2.1% -> re-buy
+        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 0.958)       # -2% again -> 3rd buy
+        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 0.937)       # max 3: no 4th buy
         pos = b.summary()["position"]
         self.assertEqual(len(pos["entries"]), 3)
         self.assertEqual(b._load()["balance"], 75.0)
@@ -38,9 +40,9 @@ class DipLiveTests(unittest.TestCase):
 
     def test_single_buy_needs_2_50(self):
         b.cycle(self.send, "1", candles=self.c, price=self.bottom)
-        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 1.008)     # +$2 gross: not yet
+        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 1.016)     # +$2 gross: not yet
         self.assertIsNotNone(b.summary()["position"])
-        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 1.0125)
+        b.cycle(self.send, "1", candles=self.c, price=self.bottom * 1.0225)
         self.assertGreaterEqual(b.summary()["history"][-1]["pnl_usd"], 2.5)
 
     def test_emergency_stop(self):
