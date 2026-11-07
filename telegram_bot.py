@@ -148,9 +148,10 @@ def handle(update):
   PRIVATE_CHAT=str(chat)
   logging.info("Private Telegram chat registered in memory; will reset on restart")
  if action=="/id":
-  send(chat,"Seu chat ID privado: "+str(chat)+"\nNão é necessário configurar Chat ID para o modo temporário.");return
+  send(chat,"Seu chat ID privado: "+str(chat)+"\nPara proteger sua carteira, configure este número como TELEGRAM_CHAT_ID no Render.");return
  if not authorized(chat):
-  send(chat,"Este bot já está vinculado a outra conversa privada nesta execução. Se você é o proprietário, configure TELEGRAM_CHAT_ID no Render. Nenhuma carteira está conectada.");return
+  if cb:return  # Do not flood chat on old inline buttons; do not grant access.
+  send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("scan","/scan"):
   try:
