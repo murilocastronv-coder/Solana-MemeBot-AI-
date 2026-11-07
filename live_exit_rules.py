@@ -39,3 +39,24 @@ def daily_loss_exceeded(realized_loss_usd, additional_loss_usd=0):
     if not realized.is_finite() or not additional.is_finite() or realized < 0 or additional < 0:
         raise ValueError("Invalid loss")
     return realized + additional >= MAX_DAILY_LOSS_USD
+
+
+TRAIL_ARM = Decimal("1.15")   # trailing stop activates at +15%
+TRAIL_DROP = Decimal("0.10")  # then sells after a 10% drop from the best value
+
+
+def trailing_exit_signal(cost_usd, executable_proceeds_usd, peak_ratio=0):
+    """SL -8% always; above +15% let profit run and sell 10% below the peak."""
+    cost = _positive(cost_usd)
+    ratio = _positive(executable_proceeds_usd) / cost
+    peak = max(ratio, Decimal(str(peak_ratio or 0)))
+    change = float((ratio - 1) * 100)
+    result = {"action": "hold", "reason": "inside_range", "change_pct": change,
+              "peak_ratio": float(peak), "peak_pct": float((peak - 1) * 100)}
+    if ratio <= 1 - STOP_LOSS:
+        result.update(action="sell", reason="stop_loss")
+    elif peak >= TRAIL_ARM and ratio <= peak * (1 - TRAIL_DROP):
+        result.update(action="sell", reason="take_profit")
+    elif peak >= TRAIL_ARM:
+        result["reason"] = "trailing"
+    return result

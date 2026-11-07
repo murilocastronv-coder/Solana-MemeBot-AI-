@@ -8,7 +8,10 @@ WALLET = "11111111111111111111111111111112"
 def pair():
     return {"baseToken": {"address": MINT, "symbol": "BONK"}, "priceUsd": "0.00002",
             "liquidity": {"usd": 900000}, "volume": {"h24": 500000}, "fdv": 1500000,
-            "pairCreatedAt": (time.time() - 30 * 86400) * 1000, "priceChange": {"h24": 5}}
+            "pairCreatedAt": (time.time() - 30 * 86400) * 1000,
+            "priceChange": {"m5": 1, "h1": 4, "h6": 9, "h24": 5}, "txns": {"h1": {"buys": 120, "sells": 80}}}
+
+SAFE_MINT = {"value": {"data": {"parsed": {"type": "mint", "info": {"mintAuthority": None, "freezeAuthority": None}}}}}
 
 class LiveEngineTests(unittest.TestCase):
     def setUp(self):
@@ -17,6 +20,9 @@ class LiveEngineTests(unittest.TestCase):
                                            "LIVE_TRADING_ENABLED": "true", "BOT_WALLET_ENCRYPTION_PASSPHRASE": "x" * 24})
         self.env.start()
         live_engine._tried.clear()
+        live_engine._safety.clear()
+        live_engine._last_notice.clear()
+        self.mint_info = SAFE_MINT
         self.sent = []
         self.chain = {"token": 0, "sol": 1_000_000_000}
         patches = [
@@ -24,7 +30,9 @@ class LiveEngineTests(unittest.TestCase):
             patch("live_engine.bridge.preflight", return_value=True),
             patch("live_order_bridge.preflight", return_value=True),
             patch("bot_wallet_service.get_address", return_value=WALLET),
-            patch("live_order_bridge.sol_for_ten_usd", return_value=50_000_000),
+            patch("live_order_bridge.sol_for_usd", return_value=50_000_000),
+            patch("live_order_bridge.sol_usd_price", return_value=200),
+            patch("live_engine.rpc", side_effect=lambda m, p: self.mint_info),
             patch("live_order_bridge.order", side_effect=lambda *a, **k: {"requestId": "r", "outAmount": "1", "transaction": "x"}),
             patch("live_order_bridge.sign_order", return_value="signed"),
             patch("live_order_bridge.execute_signed", side_effect=self.execute),
@@ -67,16 +75,18 @@ class LiveEngineTests(unittest.TestCase):
         signal = {"action": "sell", "reason": "take_profit", "change_pct": 20.0}
         position = state._load()["positions"][MINT]
         with patch("live_engine.sell_signals", return_value=[(MINT, position, signal)]), \
-             patch("live_trade_state._sol_to_usd", return_value=12.0):
+             patch("live_trade_state._sol_to_usd", return_value=46.0):
             live_engine.exit_cycle(self.send, "1")
         st = state.status()
         self.assertEqual((st["positions"], st["pending"], st["daily_loss_usd"]), (0, 0, 0.0))
         self.assertTrue(st["enabled"])
         msg = self.sent[-1]
-        for part in ("LUCRO", "VENDEU BONK", "US$ 10.00", "US$ 12.00", "+2.00 USD (+20.0%)", "P/L total: +2.00", "1/1"):
+        for part in ("LUCRO", "VENDEU BONK", "US$ 40.00", "US$ 46.00", "+6.00 USD (+15.0%)", "P/L total: +6.00", "1/1"):
             self.assertIn(part, msg)
         self.assertIn("COMPROU BONK", self.sent[1])
-        self.assertEqual(state.pnl_summary()["total_pnl_usd"], 2.0)
+        self.assertEqual(state.pnl_summary()["total_pnl_usd"], 6.0)
+        self.assertIn("US$ 40.00 de BONK (20% da conta de US$ 200.00)", self.sent[0])
+        self.assertEqual(state.daily_loss_limit(), 30.0)
 
     def test_reports_why_nothing_was_bought(self):
         live_engine.start()
@@ -87,6 +97,19 @@ class LiveEngineTests(unittest.TestCase):
         self.assertIn("1 com idade < 24h", self.sent[-1])
         live_engine.buy_cycle([young], self.send, "1")
         self.assertEqual(len(self.sent), 1)  # throttled to once per hour
+
+    def test_skips_token_without_uptrend(self):
+        live_engine.start()
+        falling = pair(); falling["priceChange"]["h1"] = -3
+        self.assertIsNone(live_engine.buy_cycle([falling], self.send, "1"))
+        self.assertIn("sem tendência de alta", self.sent[-1])
+
+    def test_anti_rug_blocks_mint_authority(self):
+        live_engine.start()
+        self.mint_info = {"value": {"data": {"parsed": {"type": "mint", "info": {"mintAuthority": "X", "freezeAuthority": None}}}}}
+        self.assertIsNone(live_engine.buy_cycle([pair()], self.send, "1"))
+        self.assertEqual(state.status()["pending"], 0)
+        self.assertIn("criar mais moedas", self.sent[-1])
 
     def test_uncertain_buy_blocks_robot(self):
         live_engine.start()

@@ -94,6 +94,33 @@ def start():
         _save(state)
         return status()
 
+def _loss_limit(state):
+    return float(state.get("max_daily_loss_usd") or MAX_DAILY_LOSS_USD)
+
+def set_daily_loss_limit(usd):
+    """Scale the daily loss limit with account size (set once per UTC day)."""
+    with _LOCK:
+        state = _load()
+        today = datetime.now(timezone.utc).date().isoformat()
+        if state.get("loss_limit_day") == today:
+            return _loss_limit(state)
+        state["max_daily_loss_usd"] = max(MAX_DAILY_LOSS_USD, round(float(usd), 2))
+        state["loss_limit_day"] = today
+        _save(state)
+        return state["max_daily_loss_usd"]
+
+def daily_loss_limit():
+    with _LOCK:
+        return _loss_limit(_load())
+
+def update_peak(mint, ratio):
+    with _LOCK:
+        state = _load()
+        position = state["positions"].get(mint)
+        if position is not None and float(ratio) > float(position.get("peak_ratio", 0)):
+            position["peak_ratio"] = float(ratio)
+            _save(state)
+
 def can_open():
     with _LOCK:
         state = _load()
@@ -111,7 +138,7 @@ def can_open():
             return False, "Unreconciled transaction"
         if len(state["positions"]) >= MAX_POSITIONS:
             return False, "Position limit"
-        if state["daily_loss_usd"] >= MAX_DAILY_LOSS_USD:
+        if state["daily_loss_usd"] >= _loss_limit(state):
             return False, "Daily loss limit"
         return True, "Ready"
 
@@ -148,7 +175,7 @@ def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0,
             state["trades_closed"] = int(state.get("trades_closed", 0)) + 1
             state["trades_won"] = int(state.get("trades_won", 0)) + (1 if pnl_usd > 0 else 0)
         del state["pending"][order_id]
-        if state["daily_loss_usd"] >= MAX_DAILY_LOSS_USD:
+        if state["daily_loss_usd"] >= _loss_limit(state):
             state["enabled"] = False
             state["halted"] = True
         _save(state)

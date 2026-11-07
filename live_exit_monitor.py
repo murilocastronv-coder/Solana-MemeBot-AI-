@@ -5,7 +5,8 @@ Sales are executed by live_engine.exit_cycle; this module only evaluates/alerts.
 """
 import logging, time
 from live_trade_state import _load
-from live_exit_rules import exit_signal
+from live_exit_rules import trailing_exit_signal
+import live_trade_state
 from jupiter_v2_executor import order, SOL_MINT, USDC_MINT
 
 _last_alert = {}
@@ -27,7 +28,10 @@ def _evaluate():
                 raise ValueError("No executable SOL quote")
             usd_quote = order(SOL_MINT, USDC_MINT, sol_out)
             proceeds = int(usd_quote["outAmount"]) / 1_000_000
-            yield mint, position, exit_signal(cost, proceeds)
+            signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0))
+            if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
+                live_trade_state.update_peak(mint, signal["peak_ratio"])
+            yield mint, position, signal
         except Exception:
             logging.warning("Live position quote/monitoring unavailable for mint %s", mint[:8])
 

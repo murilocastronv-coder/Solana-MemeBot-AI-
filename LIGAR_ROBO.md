@@ -20,10 +20,15 @@ Build command: `pip install -r requirements.txt`.
 3. **▶️ Iniciar trading real**.
 
 ## O que ele faz
-- A cada varredura compra no máximo 1 token que passa nos filtros (liquidez ≥ US$ 30 mil, volume 24h ≥ US$ 20 mil, idade ≥ 24 h, FDV/liquidez ≤ 100).
-- US$ 10 por compra (pago em SOL), no máximo 3 posições.
-- Vende sozinho em **TP +15%** ou **SL −8%** (cotação executável da Jupiter), mesmo depois de ⏹️ Parar.
-- Para de comprar ao perder US$ 3 no dia.
+- A cada varredura compra no máximo 1 moeda que passa em **todos** os filtros:
+  - liquidez ≥ US$ 30 mil, volume 24h ≥ US$ 20 mil, idade ≥ 24 h, FDV/liquidez ≤ 100, variação 24h entre −20% e +80%;
+  - **em alta agora**: subindo em 1 h e 6 h, sem queda forte em 5 min, e mais compras que vendas na última hora;
+  - **anti-golpe**: o criador não pode criar mais moedas (mint authority) nem congelar carteiras (freeze authority).
+- **Juros compostos**: cada compra usa **20% do valor da conta** (SOL livre + posições abertas), no máximo `MAX_ORDER_USD` (padrão US$ 100). Mínimo US$ 3. No máximo 3 posições.
+- **Saída**: stop loss em −8%. A partir de +15% liga o **stop móvel**: deixa o lucro correr e vende quando o valor cai 10% abaixo do melhor ponto. Continua vendendo mesmo depois de ⏹️ Parar.
+- **Limite diário**: para de comprar ao perder 15% do valor da conta no dia (mínimo US$ 3). Para voltar, toque em ▶️ Iniciar.
 - Se uma transação ficar incerta, o robô **bloqueia** e não reenvia nada. Confira no Solscan.
+
+Opcional no Render: `ORDER_FRACTION` (padrão `0.20`) e `MAX_ORDER_USD` (padrão `100`).
 
 ⚠️ Memecoins podem ir a zero e o stop loss pode executar bem abaixo de −8% em quedas rápidas. Use só dinheiro que aceita perder.
