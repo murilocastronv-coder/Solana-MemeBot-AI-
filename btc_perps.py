@@ -109,16 +109,20 @@ def signal(candles):
     return None, a, last["c"]
 
 
-# ------------------------------------------------------------------ M5 momentum scalping (EMA + RSI + Volume + ATR)
-# Rules from the owner's spec. Every trade closes by the end of the M5 candle it was opened in.
-SCALP_SL_PCT = 0.0025        # stop-loss 0.25%
-SCALP_TP_PCT = 0.0040        # take-profit 0.40%
-SCALP_FRACTION = 0.10        # US$ 10 on a US$ 100 account
-SCALP_MIN_ATR_PCT = 0.0015   # ATR must be big enough to beat costs
-SCALP_MAX_EMA9_DIST = 0.003  # price not too far from EMA 9 (0.3%)
-SCALP_DAILY_LOSS = 0.03      # stop new trades after losing 3% of the account in the day
-SCALP_MAX_LOSS_STREAK = 3    # pause after 3 consecutive losses ...
-SCALP_STREAK_PAUSE = 3600    # ... until the next 1-hour window
+# ------------------------------------------------------------------ "Compra no fundo" (dip buying with up to 3 buys)
+# Long only. On 5m candles: after a big drop, buy US$ 25 at 10x; if it keeps falling a good distance,
+# buy US$ 25 more (max 3 buys). One buy: close at +US$ 2.50 net of fees. 2-3 buys: close as soon as the
+# whole position reaches DIP_TP_MULTI net. Emergency stop before liquidation.
+DIP_USD = 25.0
+DIP_LEV = 10
+DIP_MAX_BUYS = 3
+DIP_DROP = 0.015          # price >= 1.5% below the highest high of the last 2 hours (24 candles)
+DIP_LOOKBACK = 24
+DIP_RSI = 30              # RSI 14 below 30 (oversold) ...
+DIP_GAP = 0.01            # re-buy when price is 1% below the last buy
+DIP_TP_FIRST = 2.50       # net profit target (US$) with a single buy
+DIP_TP_MULTI = 3.00       # net profit target (US$) with 2-3 buys
+DIP_EMERGENCY = 0.07      # close all if price falls 7% below the average price (10x liquidates ~9%)
 
 
 def rsi(closes, length=14):
@@ -132,29 +136,20 @@ def rsi(closes, length=14):
     return 100 - 100 / (1 + rs)
 
 
-def scalp_signal(candles):
-    """EMA 9/21 + RSI 14 + volume > 20-candle average + momentum of the last closed candle + ATR,
-    price close to EMA 9. Returns (side|None, atr, why)."""
-    if len(candles) < 40:
-        return None, 0.0, "histórico curto"
+def dip_signal(candles, drop=None, rsi_max=None):
+    """(buy?, info) on the last closed 5m candle: big drop from the 2-hour high, oversold RSI, and the
+    first green candle (sign of a bottom)."""
+    drop = DIP_DROP if drop is None else drop
+    rsi_max = DIP_RSI if rsi_max is None else rsi_max
+    if len(candles) < DIP_LOOKBACK + 16:
+        return False, {"drop": 0.0, "rsi": 50.0}
     closes = [c["c"] for c in candles]
-    last, prev = candles[-1], candles[-2]
-    a = atr(candles)
-    price = last["c"]
-    if a / price < SCALP_MIN_ATR_PCT:
-        return None, a, "volatilidade baixa (ATR não cobre os custos)"
-    vols = [c.get("v", 0.0) for c in candles[-21:-1]]
-    if not vols or last.get("v", 0.0) <= sum(vols) / len(vols):
-        return None, a, "volume abaixo da média de 20 velas"
-    e9, e21 = ema(closes, 9), ema(closes, 21)
-    if abs(price - e9) / price > SCALP_MAX_EMA9_DIST:
-        return None, a, "preço longe demais da EMA 9"
-    r = rsi(closes)
-    if e9 > e21 and 52 <= r <= 70 and last["c"] > last["o"] and last["c"] > prev["c"]:
-        return "long", a, ""
-    if e9 < e21 and 30 <= r <= 48 and last["c"] < last["o"] and last["c"] < prev["c"]:
-        return "short", a, ""
-    return None, a, "sem confirmação (EMA/RSI/momentum)"
+    last = candles[-1]
+    high = max(c["h"] for c in candles[-DIP_LOOKBACK - 1:-1])
+    fall = 1 - last["c"] / high
+    r = min(rsi(closes), rsi(closes[:-1]))
+    ok = fall >= drop and r < rsi_max and last["c"] > last["o"]
+    return ok, {"drop": fall, "rsi": r}
 
 
 # ------------------------------------------------------------------ simulated account
@@ -167,8 +162,7 @@ def _default():
     return {"enabled": False, "leverage": DEFAULT_LEVERAGE, "balance": START_USD, "start": START_USD,
             "position": None, "history": [], "last_candle": 0, "mode": "sim", "timeframe": "1h",
             "real_position": None, "real_history": [], "real_start": None,
-            "strategy": "trend", "scalp_day": "", "scalp_day_start": 0.0, "scalp_paused_day": "",
-            "scalp_stats": {"candles": 0, "signals": 0, "last_reason": ""}}
+            "strategy": "trend"}
 
 
 def _load():
@@ -176,6 +170,8 @@ def _load():
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     merged = _default()
     merged.update(data)
+    if merged.get("strategy") == "scalp":       # old M5 scalping was replaced by the dip strategy
+        merged["strategy"] = "dip"
     return merged
 
 
@@ -202,7 +198,7 @@ def set_leverage(value):
 
 
 def set_option(name, value):
-    allowed = {"mode": ("sim", "real"), "timeframe": tuple(TIMEFRAMES), "strategy": ("trend", "scalp")}
+    allowed = {"mode": ("sim", "real"), "timeframe": tuple(TIMEFRAMES), "strategy": ("trend", "dip")}
     if value not in allowed[name]:
         raise ValueError("Opção inválida")
     with _LOCK:
@@ -294,10 +290,9 @@ def ensure_usdc(amount):
     raise RuntimeError("Troca SOL→USDC não confirmou a tempo")
 
 
-def _open(data, side, price, a, send, chat, exit_at=None):
+def _open(data, side, price, a, send, chat):
     lev = int(data["leverage"])
-    scalp = exit_at is not None
-    tf = "5m" if scalp else data.get("timeframe", "1h")
+    tf = data.get("timeframe", "1h")
     real = data["mode"] == "real"
     pos_key, _ = _keys(data)
     try:
@@ -305,15 +300,15 @@ def _open(data, side, price, a, send, chat, exit_at=None):
     except Exception as exc:
         send(chat, "⛔ BTC real: não consegui ler o saldo da carteira (" + str(exc)[:150] + ").")
         return
-    collateral = round(equity * (SCALP_FRACTION if scalp else ORDER_FRACTION), 2)
+    collateral = round(equity * ORDER_FRACTION, 2)
     if collateral < (5 if real else 1):
         send(chat, "💤 BTC: saldo baixo demais para abrir posição (20% = $" + format(collateral, ".2f") +
              (", mínimo $5 no real)." if real else ")."))
         return
     size = collateral * lev
     max_dist = MAX_STOP_OF_LIQ * LIQ_LOSS / lev   # keep the stop well before liquidation
-    dist = min(SCALP_SL_PCT if scalp else _tf(data)["stop_atr"] * a / price, max_dist)
-    if not scalp and dist < MIN_STOP_PCT[tf]:
+    dist = min(_tf(data)["stop_atr"] * a / price, max_dist)
+    if dist < MIN_STOP_PCT[tf]:
         logging.info("BTC %s signal skipped: stop %.3f%% too small vs fees", tf, dist * 100)
         return
     entry, signature = price, None
@@ -332,17 +327,14 @@ def _open(data, side, price, a, send, chat, exit_at=None):
     stop = entry * (1 - dist if side == "long" else 1 + dist)
     data[pos_key] = {"side": side, "entry": entry, "collateral": collateral, "size_usd": size, "leverage": lev,
                      "stop": stop, "best": entry, "atr": a, "opened_at": time.time(), "timeframe": tf,
-                     "trail": not scalp, "exit_at": exit_at, "strategy": "scalp" if scalp else "trend",
-                     "tp": (entry * (1 + SCALP_TP_PCT if side == "long" else 1 - SCALP_TP_PCT)) if scalp else None}
+                     "strategy": "trend"}
     pos = data[pos_key]
     send(chat, ("🟢 LONG" if side == "long" else "🔴 SHORT") + " BTC " + str(lev) + "x " +
          ("💵 DINHEIRO REAL" if real else "(SIMULADO, preço real)") + " · gráfico " + tf + "\n"
-         "Entrada: $" + format(entry, ",.0f") + "\nGarantia: $" + format(collateral, ".2f") + " (" + ("10" if scalp else "20") + "% da conta) → posição $" +
+         "Entrada: $" + format(entry, ",.0f") + "\nGarantia: $" + format(collateral, ".2f") + " (20% da conta) → posição $" +
          format(size, ",.2f") + "\n🛑 Stop: $" + format(stop, ",.0f") + " (" + format(dist * 100, ".2f") + "% no preço = −" +
          format(dist * lev * 100, ".1f") + "% da garantia)\n💀 Liquidação ≈ $" + format(_liq_price(pos), ",.0f") +
-         ("\n🎯 Alvo: $" + format(pos["tp"], ",.0f") + " (+0,40%)\n⏱️ Fecha no fim da vela: " +
-          time.strftime("%H:%M", time.gmtime(exit_at)) + " UTC" if scalp else
-          "\n📈 Stop móvel por ATR") + ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
+         "\n📈 Stop móvel por ATR" + ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
 
 
 def _close(data, price, reason, send, chat):
@@ -366,19 +358,14 @@ def _close(data, price, reason, send, chat):
         pnl = max(_pnl(pos, price), -pos["collateral"])
         data["balance"] += pos["collateral"] + pnl
     data[pos_key] = None
-    if pos.get("strategy") == "scalp":
-        data["scalp_streak"] = data.get("scalp_streak", 0) + 1 if pnl <= 0 else 0
-        if data["scalp_streak"] >= SCALP_MAX_LOSS_STREAK:
-            data["scalp_pause_until"] = time.time() + SCALP_STREAK_PAUSE
-            data["scalp_streak"] = 0
-            send(chat, "⏸️ Scalping: 3 perdas seguidas. Pausa de 1 hora antes de novas entradas.")
-    data[hist_key].append({"symbol": "BTC " + pos["side"].upper() + " " + str(pos["leverage"]) + "x", "mode": "btc",
+    data[hist_key].append({"symbol": "BTC " + pos["side"].upper() + " " + str(pos["leverage"]) + "x" +
+                           (" (" + str(len(pos["entries"])) + " compras)" if pos.get("entries") else ""), "mode": "btc",
                            "cost_usd": pos["collateral"], "pnl_usd": round(pnl, 4), "reason": reason,
                            "closed_at": time.time(), "minutes": round((time.time() - pos["opened_at"]) / 60, 1),
                            "mint": "BTC", "timeframe": pos.get("timeframe", "1h")})
     data[hist_key] = data[hist_key][-300:]
     names = {"stop_loss": "stop", "trailing": "stop móvel", "reversal": "virada de tendência", "liquidated": "LIQUIDADO",
-             "candle_close": "fim da vela", "take_profit": "alvo +0,40%"}
+             "take_profit": "lucro alvo", "emergency": "stop de emergência"}
     send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — FECHOU " + pos["side"].upper() + " BTC " +
          str(pos["leverage"]) + "x " + ("💵 REAL" if real else "(simulado)") + " (" + names.get(reason, reason) + ")\nEntrada $" +
          format(pos["entry"], ",.0f") + " → saída $" + format(price, ",.0f") + "\nP/L: " + format(pnl, "+.2f") + " USD (" +
@@ -402,7 +389,9 @@ def manage(data, price, send, chat):
     if _pnl(pos, price) <= -LIQ_LOSS * pos["collateral"]:
         _close(data, price, "liquidated", send, chat)
         return
-    trail = TIMEFRAMES[pos.get("timeframe", "1h")]["trail_atr"] if pos.get("trail", True) else None
+    if pos.get("strategy") == "dip":
+        return                      # exits handled by _dip_step
+    trail = TIMEFRAMES[pos.get("timeframe", "1h")]["trail_atr"]
     if pos["side"] == "long":
         pos["best"] = max(pos["best"], price)
         if trail:
@@ -413,10 +402,6 @@ def manage(data, price, send, chat):
         if trail:
             pos["stop"] = min(pos["stop"], pos["best"] + trail * pos["atr"])
         hit = price >= pos["stop"]
-    tp = pos.get("tp")
-    if tp and not hit and ((pos["side"] == "long" and price >= tp) or (pos["side"] == "short" and price <= tp)):
-        _close(data, price, "take_profit", send, chat)
-        return
     if hit:
         trailed = (pos["side"] == "long" and pos["stop"] > pos["entry"]) or (pos["side"] == "short" and pos["stop"] < pos["entry"])
         _close(data, price, "trailing" if trailed else "stop_loss", send, chat)
@@ -433,8 +418,8 @@ def cycle(send, chat, candles=None, price=None):
         pos_key, _ = _keys(data)
         price = price if price is not None else fetch_price()
         manage(data, price, send, chat)
-        if data.get("strategy") == "scalp":
-            _scalp_step(data, price, send, chat, candles if candles is not None else fetch_candles("5m"))
+        if data.get("strategy") == "dip":
+            _dip_step(data, price, send, chat, candles if candles is not None else fetch_candles("5m"))
             _save(data)
             return
         candles = candles if candles is not None else fetch_candles(data.get("timeframe", "1h"))
@@ -457,51 +442,78 @@ def _account_value(data):
     return base + (pos["collateral"] if pos else 0)
 
 
-def _scalp_step(data, price, send, chat, candles):
-    """At each closed M5 candle: close the trade that belonged to it, then enter on a fresh signal."""
-    pos_key, hist_key = _keys(data)
+def _dip_add(data, price, send, chat):
+    """One buy of US$ 25 at 10x (first buy or re-buy). Returns True if it went through."""
+    real = data["mode"] == "real"
+    pos_key, _ = _keys(data)
     pos = data[pos_key]
-    now = time.time()
-    if pos and pos.get("strategy") == "scalp" and now > (pos.get("exit_at") or now) + 60:
-        _close(data, price, "candle_close", send, chat)   # safety: candle feed late, still exit on time
-        pos = data[pos_key]
-    if now - data.get("scalp_report_at", 0) >= 3600:
-        data["scalp_report_at"] = now
-        st = data["scalp_stats"]
-        send(chat, "⚡ Scalping M5 ligado: " + str(st["candles"]) + " velas analisadas, " + str(st["signals"]) +
-             " sinais na última hora.\nÚltima leitura: " + (st["last_reason"] or "aguardando primeira vela"))
-        data["scalp_stats"] = {"candles": 0, "signals": 0, "last_reason": st["last_reason"]}
+    n = len(pos["entries"]) + 1 if pos else 1
+    collateral, size = DIP_USD, DIP_USD * DIP_LEV
+    entry, signature = price, None
+    if real:
+        import jupiter_perps as jp
+        try:
+            ensure_usdc(collateral)
+            onchain = jp.open_position("long", collateral, DIP_LEV, price,
+                                       min_size=(pos["size_usd"] if pos else 0))
+        except Exception as exc:
+            send(chat, "⛔ Compra " + str(n) + " não executada: " + str(exc)[:300])
+            return False
+        signature = onchain.get("signature")
+        entry = price
+    else:
+        if data["balance"] < collateral:
+            send(chat, "💤 Saldo simulado insuficiente para a compra " + str(n) + " ($25).")
+            return False
+        data["balance"] -= collateral
+    if not pos:
+        pos = data[pos_key] = {"side": "long", "entry": entry, "collateral": 0.0, "size_usd": 0.0,
+                               "leverage": DIP_LEV, "stop": 0.0, "best": entry, "atr": 0.0,
+                               "opened_at": time.time(), "timeframe": "5m", "strategy": "dip", "entries": []}
+    pos["entries"].append({"price": entry, "size": size, "collateral": collateral, "at": time.time()})
+    pos["entry"] = sum(e["size"] for e in pos["entries"]) / sum(e["size"] / e["price"] for e in pos["entries"])
+    pos["size_usd"] += size
+    pos["collateral"] += collateral
+    target = DIP_TP_FIRST if n == 1 else DIP_TP_MULTI
+    send(chat, ("🟢 COMPRA NO FUNDO" if n == 1 else "🔁 RECOMPRA " + str(n) + "/" + str(DIP_MAX_BUYS)) +
+         " — BTC LONG 10x " + ("💵 REAL" if real else "(simulado)") + "\nPreço: $" + format(entry, ",.0f") +
+         " · garantia $25 → posição $250\nTotal: " + str(n) + " compra(s), $" + format(pos["collateral"], ".0f") +
+         " de garantia, preço médio $" + format(pos["entry"], ",.0f") +
+         "\n🎯 Fecha tudo com lucro líquido ≥ $" + format(target, ".2f") +
+         (" · próxima recompra em $" + format(entry * (1 - DIP_GAP), ",.0f") if n < DIP_MAX_BUYS else " · sem mais recompras") +
+         "\n🛑 Stop de emergência: $" + format(pos["entry"] * (1 - DIP_EMERGENCY), ",.0f") +
+         ("\n🔗 https://solscan.io/tx/" + signature if signature else ""))
+    return True
+
+
+def _dip_step(data, price, send, chat, candles):
+    """Manage the open dip position every ~10 s; look for a new bottom at each closed 5m candle."""
+    pos_key, _ = _keys(data)
+    pos = data[pos_key]
+    if pos and pos.get("strategy") == "dip":
+        net = _pnl(pos, price)
+        n = len(pos["entries"])
+        if net >= (DIP_TP_FIRST if n == 1 else DIP_TP_MULTI):
+            _close(data, price, "take_profit", send, chat)
+        elif DIP_EMERGENCY and price <= pos["entry"] * (1 - DIP_EMERGENCY):
+            _close(data, price, "emergency", send, chat)
+        elif n < DIP_MAX_BUYS and price <= pos["entries"][-1]["price"] * (1 - DIP_GAP):
+            _dip_add(data, price, send, chat)
+        return
+    if pos:
+        return                                   # a trend position is open; leave it alone
     if not candles or candles[-1]["t"] == data.get("last_candle"):
         return
     data["last_candle"] = candles[-1]["t"]
-    stats = data["scalp_stats"]
-    stats["candles"] += 1
-    exit_at = candles[-1]["t"] + 600          # end of the candle that is starting now
-    side, a, why = scalp_signal(candles)
-    stats["last_reason"] = why if not side else "sinal " + side
-    if side:
-        stats["signals"] += 1
-    if pos and pos.get("strategy") == "scalp" and now >= (pos.get("exit_at") or 0) - 15:
-        if not _close(data, price, "candle_close", send, chat):   # never carried to the next candle
-            return
-        pos = None
-    if pos or not side:
-        return
-    today = time.strftime("%Y-%m-%d", time.gmtime(now))
-    try:
-        value = _account_value(data)
-    except Exception:
-        return
-    if data.get("scalp_day") != today:
-        data.update(scalp_day=today, scalp_day_start=value)
-    if data.get("scalp_paused_day") == today or now < data.get("scalp_pause_until", 0):
-        return
-    if value <= data["scalp_day_start"] * (1 - SCALP_DAILY_LOSS):
-        data["scalp_paused_day"] = today
-        send(chat, "⏸️ Scalping pausado até amanhã (00:00 UTC): perdeu 3% da conta hoje. "
-             "Proteção contra dia ruim.")
-        return
-    _open(data, side, price, a, send, chat, exit_at=exit_at)
+    ok, info = dip_signal(candles)
+    data["dip_last"] = info
+    if time.time() - data.get("dip_report_at", 0) >= 3600:
+        data["dip_report_at"] = time.time()
+        send(chat, "🎯 Compra no fundo ligada: esperando queda. Agora o BTC está " + format(info["drop"] * 100, ".2f") +
+             "% abaixo da máxima de 2 h (precisa ≥ " + format(DIP_DROP * 100, ".1f") + "%), RSI " +
+             format(info["rsi"], ".0f") + " (precisa < " + str(DIP_RSI) + ").")
+    if ok:
+        _dip_add(data, price, send, chat)
 
 
 def test_real_order(send, chat, price=None):
@@ -542,7 +554,6 @@ def summary():
             start = data["start"]
         return {"enabled": data.get("enabled", False), "leverage": data.get("leverage", DEFAULT_LEVERAGE),
                 "mode": data["mode"], "timeframe": data.get("timeframe", "1h"), "strategy": data.get("strategy", "trend"),
-                "scalp_stats": dict(data.get("scalp_stats", {})),
                 "balance": data["balance"], "equity": equity, "start": start, "position": pos,
                 "history": list(data[hist_key])}
 
@@ -552,7 +563,7 @@ def status_text(price=None):
     real = s["mode"] == "real"
     lines = ["₿ ROBÔ BTC ALAVANCADO — " + ("🟢 LIGADO" if s["enabled"] else "🔴 DESLIGADO"),
              "Modo: " + ("💵 DINHEIRO REAL (carteira do bot, Jupiter Perps)" if real else "🧪 SIMULAÇÃO com preço real"),
-             ("Estratégia: ⚡ SCALPING M5 (momentum, fecha no fim da vela)" if s.get("strategy") == "scalp" else
+             ("Estratégia: 🎯 COMPRA NO FUNDO (só long, $25 × 10x, até 3 compras)" if s.get("strategy") == "dip" else
               "Estratégia: 📈 Tendência · gráfico " + s["timeframe"]),
              "Alavancagem: " + str(s["leverage"]) + "x | 20% da conta por ordem",
              ("Conta real" if real else "Saldo simulado") + ": $" + format(s["equity"], ".2f") +

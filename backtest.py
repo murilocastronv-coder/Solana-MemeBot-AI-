@@ -1,6 +1,6 @@
 """Backtest of the BTC strategies on recent history, with Jupiter Perps costs.
 
-Uses the same signal functions as the live robot (btc_perps.scalp_signal and
+Uses the same signal functions as the live robot (btc_perps.dip_signal and
 btc_perps.signal), 20% of equity as collateral per trade, fees of 0.06% per
 side plus hourly borrow, and the same stops. Entries happen at the next
 candle's open (no look-ahead). Stops are checked against each candle's
@@ -97,54 +97,106 @@ def _stop_hit(pos, candle):
 
 
 SLIPPAGE = 0.0002   # 0.02% per side (spread + slippage), on top of the 0.06% fee
+DIP_START = 150.0   # needs up to 3 x $25 of collateral; close to the bot's real account
 
 
-def scalp_signals(candles, warmup=60):
-    return [b.scalp_signal(candles[i - warmup + 1:i + 1]) if i >= warmup - 1 else (None, 0.0, "")
-            for i in range(len(candles))]
+def dip_signals(candles):
+    warm = b.DIP_LOOKBACK + 16
+    return [b.dip_signal(candles[i - warm + 1:i + 1])[0] if i >= warm - 1 else False for i in range(len(candles))]
 
 
-def run_scalp(candles, leverage=1, warmup=60, sigs=None, sl=None, tp=None, fee_mult=1.0, slip_mult=1.0):
-    """Owner's M5 strategy: signal on closed candle i, enter at candle i+1 open, exit inside candle i+1 at
-    SL/TP (if both are touched in the same candle the stop counts — worst case) or at its close.
-    10% of equity per trade, 3% daily loss stop, 1-hour pause after 3 consecutive losses."""
-    sigs = sigs or scalp_signals(candles, warmup)
-    sl = b.SCALP_SL_PCT if sl is None else sl
-    tp = b.SCALP_TP_PCT if tp is None else tp
+def run_dip(candles, sigs=None, start=DIP_START, emergency=True, fee_mult=1.0, slip_mult=1.0,
+            gap=None, tp_first=None, tp_multi=None):
+    """Long-only dip buying: signal on closed candle i -> buy $25 x10 at candle i+1 open. Re-buy when the
+    price trades `gap` below the last buy (max 3). Close all at the net profit target, at the emergency
+    stop, or by liquidation. Inside a candle the path is open->low->high->close for green candles and
+    open->high->low->close for red ones; a stop and a target in the same leg count as the stop."""
+    sigs = sigs or dip_signals(candles)
+    gap = b.DIP_GAP if gap is None else gap
+    tp_first = b.DIP_TP_FIRST if tp_first is None else tp_first
+    tp_multi = b.DIP_TP_MULTI if tp_multi is None else tp_multi
     fee, slip = b.FEE_RATE * fee_mult, SLIPPAGE * slip_mult
-    acc = Account(leverage)
-    day, day_start, streak, pause_until = None, START, 0, 0
-    for i in range(warmup, len(candles) - 1):
-        side, _, _ = sigs[i]
-        nxt = candles[i + 1]
-        d = time.strftime("%Y-%m-%d", time.gmtime(nxt["t"]))
-        if d != day:
-            day, day_start = d, acc.equity
-        if not side or nxt["t"] < pause_until or acc.equity <= day_start * (1 - b.SCALP_DAILY_LOSS):
-            continue
-        size = acc.equity * b.SCALP_FRACTION * leverage
-        if size < 1:
-            break
-        entry = nxt["o"]
-        if side == "long":
-            stop, target = entry * (1 - sl), entry * (1 + tp)
-            exit_price = stop if nxt["l"] <= stop else target if nxt["h"] >= target else nxt["c"]
-            move = exit_price / entry - 1
-        else:
-            stop, target = entry * (1 + sl), entry * (1 - tp)
-            exit_price = stop if nxt["h"] >= stop else target if nxt["l"] <= target else nxt["c"]
-            move = 1 - exit_price / entry
-        cost = size * (fee * 2 + slip * 2)
-        pnl = size * move - cost
-        acc.equity += pnl
-        acc.fees += cost
-        acc.trades.append(pnl)
-        acc.peak = max(acc.peak, acc.equity)
-        acc.max_dd = max(acc.max_dd, (acc.peak - acc.equity) / acc.peak if acc.peak else 0)
-        streak = streak + 1 if pnl <= 0 else 0
-        if streak >= b.SCALP_MAX_LOSS_STREAK:
-            pause_until, streak = nxt["t"] + b.SCALP_STREAK_PAUSE, 0
-    return acc.report()
+    cash, fees_paid = start, 0.0
+    pos = None
+    cycles, max_used, peak, max_dd = [], 0.0, start, 0.0
+    monthly = {}
+
+    def pnl_at(p, price, hours):
+        move = price / p["avg"] - 1
+        cost = p["size"] * (fee * 2 + slip * 2 + b.BORROW_RATE_HOUR * hours)
+        return p["size"] * move - cost, cost
+
+    def close(p, price, reason, t):
+        nonlocal cash, pos, fees_paid
+        hours = (t - p["t0"]) / 3600
+        pnl, cost = pnl_at(p, price, hours)
+        pnl = max(pnl, -p["coll"])
+        cash += p["coll"] + pnl
+        fees_paid += cost
+        cycles.append({"pnl": pnl, "buys": p["n"], "reason": reason, "hours": hours})
+        m = time.strftime("%Y-%m", time.gmtime(t))
+        monthly[m] = monthly.get(m, 0.0) + pnl
+        pos = None
+
+    def buy(price, t):
+        nonlocal cash, pos, max_used
+        if cash < b.DIP_USD:
+            return
+        cash -= b.DIP_USD
+        size = b.DIP_USD * b.DIP_LEV
+        if pos is None:
+            pos = {"size": 0.0, "coins": 0.0, "coll": 0.0, "n": 0, "last": price, "t0": t}
+        pos["size"] += size; pos["coins"] += size / price; pos["coll"] += b.DIP_USD
+        pos["n"] += 1; pos["last"] = price; pos["avg"] = pos["size"] / pos["coins"]
+        max_used = max(max_used, pos["coll"])
+
+    def target_price(p, t):
+        hours = (t - p["t0"]) / 3600
+        need = (tp_first if p["n"] == 1 else tp_multi) + p["size"] * (fee * 2 + slip * 2 + b.BORROW_RATE_HOUR * hours)
+        return p["avg"] * (1 + need / p["size"])
+
+    def go_down(level, t):
+        """Price trades down to `level`: re-buys, emergency stop, liquidation."""
+        while pos and pos["n"] < b.DIP_MAX_BUYS and level <= pos["last"] * (1 - gap) and cash >= b.DIP_USD:
+            buy(pos["last"] * (1 - gap), t)
+        if not pos:
+            return
+        liq = pos["avg"] * (1 - b.LIQ_LOSS * pos["coll"] / pos["size"])
+        stop = pos["avg"] * (1 - b.DIP_EMERGENCY) if emergency else None
+        if stop and level <= stop and stop > liq:
+            close(pos, stop, "emergency", t)
+        elif level <= liq:
+            close(pos, liq, "liquidated", t)
+
+    def go_up(level, t):
+        if pos and level >= target_price(pos, t):
+            close(pos, target_price(pos, t), "take_profit", t)
+
+    for i in range(len(candles) - 1):
+        c = candles[i + 1]
+        if pos is None and sigs[i]:
+            buy(c["o"], c["t"])
+        if pos is not None:
+            if c["c"] >= c["o"]:
+                go_down(c["l"], c["t"]); go_up(c["h"], c["t"])
+            else:
+                go_up(c["h"], c["t"]); go_down(c["l"], c["t"])
+        equity = cash + ((pos["coll"] + pnl_at(pos, c["c"], (c["t"] - pos["t0"]) / 3600)[0]) if pos else 0)
+        peak = max(peak, equity)
+        max_dd = max(max_dd, (peak - equity) / peak if peak else 0)
+    open_pnl = 0.0
+    if pos:
+        open_pnl = pnl_at(pos, candles[-1]["c"], (candles[-1]["t"] - pos["t0"]) / 3600)[0]
+    final = cash + ((pos["coll"] + open_pnl) if pos else 0)
+    wins = [x for x in cycles if x["pnl"] > 0]
+    return {"start": start, "final": final, "pnl_usd": final - start, "pnl_pct": (final / start - 1) * 100,
+            "cycles": len(cycles), "wins": len(wins), "losses": len(cycles) - len(wins),
+            "by_buys": {k: sum(1 for x in cycles if x["buys"] == k) for k in (1, 2, 3)},
+            "emergency": sum(1 for x in cycles if x["reason"] == "emergency"),
+            "liquidated": sum(1 for x in cycles if x["reason"] == "liquidated"),
+            "fees": fees_paid, "max_dd": max_dd * 100, "max_used": max_used,
+            "worst": min((x["pnl"] for x in cycles), default=0.0), "open": bool(pos), "open_pnl": open_pnl,
+            "avg_hours": sum(x["hours"] for x in cycles) / len(cycles) if cycles else 0.0, "monthly": monthly}
 
 
 def trend_signals(candles, warmup=250):
@@ -184,56 +236,49 @@ def run_trend(candles, leverage, warmup=250, sigs=None):
     return acc.report()
 
 
-SL_GRID = (0.0015, 0.0020, 0.0025, 0.0030)
-TP_GRID = (0.0025, 0.0035, 0.0040, 0.0050)
-LEVERAGES = (1,)
-
-
 def _money(v):
     return ("+" if v >= 0 else "−") + "$" + format(abs(v), ".2f")
 
 
-def _pct(x):
-    return format(x * 100, ".2f").rstrip("0").rstrip(".") + "%"
-
-
-def report_text(m5, h1=None, days=DAYS):
-    lines = ["📊 BACKTEST — ESTRATÉGIA M5 (EMA 9/21 + RSI + Volume + ATR), últimos " + str(days) + " dias de BTC",
-             "$100 inicial · $10 por operação (10% da conta) · sem alavancagem · fecha no fim da vela",
-             "Custos: taxa 0,06% + deslize 0,02% em cada lado. Entra na abertura da vela seguinte ao sinal.", ""]
+def report_text(m5, h1=None, days=365):
+    lines = ["📊 BACKTEST — 🎯 COMPRA NO FUNDO (só long), " + str(days) + " dias de BTC em velas de 5 min",
+             "Conta inicial $" + format(DIP_START, ".0f") + " · cada compra $25 × 10x · até 3 compras · "
+             "1 compra fecha com +$2,50 líquido, 2–3 compras com +$3,00 líquido",
+             "Compra quando cai ≥ " + format(b.DIP_DROP * 100, ".1f") + "% da máxima de 2 h + RSI < " + str(b.DIP_RSI) +
+             " + primeira vela verde · recompra a cada −" + format(b.DIP_GAP * 100, ".0f") + "%",
+             "Custos: taxa 0,06% + deslize 0,02% por lado + juros por hora.", ""]
     if not m5:
         return "\n".join(lines + ["Sem dados de preço."])
-    move = (m5[-1]["c"] / m5[-1 - min(len(m5) - 1, days * 288)]["c"] - 1) * 100
-    sigs = scalp_signals(m5)
-    r = run_scalp(m5, 1, sigs=sigs)
+    sigs = dip_signals(m5)
+    r = run_dip(m5, sigs)
     win = r["pnl_usd"] > 0
+    move = (m5[-1]["c"] / m5[0]["c"] - 1) * 100
     lines += ["💵 P/L TOTAL: " + ("🟢 LUCRO " if win else "🔴 PREJUÍZO ") + _money(r["pnl_usd"]) +
-              " (" + format(r["pnl_pct"], "+.2f") + "%) · $100 → $" + format(r["final"], ".2f"),
-              "Stop 0,25% / alvo 0,40% (padrão)",
-              "Operações: " + str(r["trades"]) + " (" + str(r["wins"]) + " ganhos / " + str(r["losses"]) + " perdas) · acerto " +
-              format(r["win_rate"], ".0f") + "%",
-              "Lucro bruto (sem custos): " + _money(r["gross_usd"]) + " · custos: $" + format(r["fees"], ".2f"),
-              "Maior ganho " + _money(r["best"]) + " · maior perda " + _money(r["worst"]) + " · queda máx " +
-              format(r["max_dd"], ".1f") + "%",
-              "Comparação: BTC no período " + format(move, "+.1f") + "% (comprar e segurar $100 → $" +
-              format(100 * (1 + move / 100), ".2f") + ")", ""]
-    grid = []
-    for sl in SL_GRID:
-        for tp in TP_GRID:
-            g = run_scalp(m5, 1, sigs=sigs, sl=sl, tp=tp)
-            grid.append((g["pnl_usd"], sl, tp, g))
-    grid.sort(key=lambda x: -x[0])
-    lines.append("🔧 Outras combinações de stop/alvo (P/L em " + str(days) + " dias):")
-    for pnl, sl, tp, g in grid[:5]:
-        lines.append("  SL " + _pct(sl) + " / TP " + _pct(tp) + ": " + ("🟢 " if pnl > 0 else "🔴 ") + _money(pnl) +
-                     " · acerto " + format(g["win_rate"], ".0f") + "%")
-    lines.append("  … pior: SL " + _pct(grid[-1][1]) + " / TP " + _pct(grid[-1][2]) + ": " + _money(grid[-1][0]))
-    stress = run_scalp(m5, 1, sigs=sigs, fee_mult=2, slip_mult=2)
-    lines += ["", "🧱 Com taxas e deslize dobrados: " + ("🟢 " if stress["pnl_usd"] > 0 else "🔴 ") + _money(stress["pnl_usd"]),
-              "", "⚠️ Resultado passado não garante o futuro. Escolher o melhor stop/alvo olhando o mesmo período "
-              "superestima o resultado. Se ficou 🔴, a estratégia tende a perder com dinheiro real."]
+              " (" + format(r["pnl_pct"], "+.1f") + "%) · $" + format(r["start"], ".0f") + " → $" + format(r["final"], ".2f"),
+              "Ciclos fechados: " + str(r["cycles"]) + " (" + str(r["wins"]) + " com lucro / " + str(r["losses"]) + " com perda)",
+              "Usou 1 compra: " + str(r["by_buys"][1]) + " · 2 compras: " + str(r["by_buys"][2]) + " · 3 compras: " + str(r["by_buys"][3]),
+              "🛑 Stops de emergência: " + str(r["emergency"]) + " · 💀 liquidações: " + str(r["liquidated"]) +
+              " · pior ciclo: " + _money(r["worst"]),
+              "Custos totais: $" + format(r["fees"], ".2f") + " · queda máx da conta: " + format(r["max_dd"], ".1f") +
+              "% · garantia máx em uso: $" + format(r["max_used"], ".0f") + " · tempo médio por ciclo: " +
+              format(r["avg_hours"], ".1f") + " h"]
+    if r["open"]:
+        lines.append("Posição ainda aberta no fim: " + _money(r["open_pnl"]) + " (já incluído no P/L)")
+    lines.append("Comparação: BTC no período " + format(move, "+.1f") + "% (comprar e segurar $" + format(DIP_START, ".0f") +
+                 " → $" + format(DIP_START * (1 + move / 100), ".2f") + ")")
+    if r["monthly"]:
+        lines += ["", "📅 Resultado por mês:"]
+        lines += ["  " + m + ": " + ("🟢 " if v > 0 else "🔴 ") + _money(v) for m, v in sorted(r["monthly"].items())]
+    no_stop = run_dip(m5, sigs, emergency=False)
+    stress = run_dip(m5, sigs, fee_mult=2, slip_mult=2)
+    lines += ["", "🧪 Comparações:",
+              "  Sem stop de emergência: " + ("🟢 " if no_stop["pnl_usd"] > 0 else "🔴 ") + _money(no_stop["pnl_usd"]) +
+              " · liquidações: " + str(no_stop["liquidated"]),
+              "  Com taxas e deslize dobrados: " + ("🟢 " if stress["pnl_usd"] > 0 else "🔴 ") + _money(stress["pnl_usd"]),
+              "", "⚠️ Resultado passado não garante o futuro. Com 10x e recompras, uma queda forte do BTC pode levar "
+              "a garantia inteira de um ciclo ($75)."]
     return "\n".join(lines)
 
 
-def run(days=DAYS):
-    return report_text(fetch_history("5m", days, extra=80), None, days)
+def run(days=365):
+    return report_text(fetch_history("5m", days, extra=60), None, days)

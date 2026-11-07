@@ -18,31 +18,6 @@ def walk(n, secs, drift=0.0, vol=0.002, seed=1, start=60000.0):
 
 
 class BacktestTests(unittest.TestCase):
-    def test_scalp_runs_fast_on_30_days_and_charges_costs(self):
-        m5 = walk(30 * 288 + 80, 300, vol=0.0025)
-        t = time.time()
-        text = bt.report_text(m5)
-        self.assertLess(time.time() - t, 30)
-        r = bt.run_scalp(m5, 1)
-        self.assertGreater(r["trades"], 0)
-        self.assertAlmostEqual(r["gross_usd"] - r["fees"], r["pnl_usd"], places=6)
-        stress = bt.run_scalp(m5, 1, fee_mult=2, slip_mult=2)
-        self.assertLess(stress["pnl_usd"], r["pnl_usd"])           # higher costs, worse result
-        self.assertIn("P/L TOTAL", text)
-
-    def test_stop_counts_first_when_both_touched(self):
-        c = [{"t": i * 300, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1} for i in range(70)]
-        sigs = [(None, 0, "")] * 69 + [("long", 1, "")]
-        sigs[60] = ("long", 1.0, "")
-        r = bt.run_scalp(c, 1, sigs=sigs)
-        self.assertEqual(r["trades"], 1)
-        self.assertLess(r["pnl_usd"], 0)                            # worst case assumed
-
-    def test_flat_market_no_trades(self):
-        flat = [{"t": i * 300, "o": 60000.0, "h": 60001.0, "l": 59999.0, "c": 60000.0, "v": 100.0} for i in range(600)]
-        self.assertEqual(bt.run_scalp(flat, 3)["trades"], 0)
-        self.assertEqual(bt.run_trend(flat, 3)["trades"], 0)
-
     def test_trend_profits_in_strong_trend(self):
         h1 = walk(30 * 24 + 260, 3600, drift=0.002, vol=0.003, seed=7)
         r = bt.run_trend(h1, 2)
@@ -55,11 +30,6 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(pos["entry"], 100.0)
         acc.close(pos, 100.0, 0)
         self.assertAlmostEqual(acc.trades[0], -pos["size"] * b.FEE_RATE * 2)   # flat trade only pays fees
-
-    def test_report_text(self):
-        text = bt.report_text(walk(1000, 300, vol=0.0025), days=3)
-        for part in ("ESTRATÉGIA M5", "P/L TOTAL", "SL 0.15% / TP", "taxas e deslize dobrados", "BTC no período"):
-            self.assertIn(part, text)
 
     def test_fetch_history_paginates_binance(self):
         now = int(time.time()) // 300 * 300
@@ -74,6 +44,64 @@ class BacktestTests(unittest.TestCase):
         self.assertGreaterEqual(len(calls), 3)
         self.assertEqual(len({r["t"] for r in rows}), len(rows))
         self.assertTrue(all(a["t"] < b2["t"] for a, b2 in zip(rows, rows[1:])))
+
+
+def dip_series(after, t0=1_700_000_000):
+    """60 flat candles, a 2.4% drop in red candles, one green bottom candle, then `after` closes."""
+    out, p = [], 60000.0
+    for i in range(60):
+        o = p; c = p + (5 if i % 2 else -5)
+        out.append({"t": t0 + i * 300, "o": o, "h": max(o, c) + 5, "l": min(o, c) - 5, "c": c, "v": 1}); p = c
+    for k in range(6):
+        o = p; c = p * 0.996
+        out.append({"t": t0 + len(out) * 300, "o": o, "h": o + 1, "l": c - 1, "c": c, "v": 1}); p = c
+    o = p; c = p * 1.0005
+    out.append({"t": t0 + len(out) * 300, "o": o, "h": c + 1, "l": o - 1, "c": c, "v": 1}); p = c
+    for target in after:
+        o = p; c = target
+        out.append({"t": t0 + len(out) * 300, "o": o, "h": max(o, c) + 1, "l": min(o, c) - 1, "c": c, "v": 1}); p = c
+    return out
+
+
+class DipBacktestTests(unittest.TestCase):
+    def test_signal_fires_at_bottom(self):
+        c = dip_series([])
+        self.assertTrue(b.dip_signal(c)[0])
+        self.assertFalse(b.dip_signal(c[:-1])[0])                       # red candle: wait for green
+
+    def test_single_buy_closes_at_2_50(self):
+        c = dip_series([])
+        bottom = c[-1]["c"]
+        c = dip_series([bottom * 1.003, bottom * 1.006, bottom * 1.012])
+        r = bt.run_dip(c)
+        self.assertEqual((r["cycles"], r["by_buys"][1]), (1, 1))
+        self.assertAlmostEqual(r["pnl_usd"], 2.50, places=2)
+
+    def test_three_buys_close_at_3(self):
+        bottom = dip_series([])[-1]["c"]
+        path = [bottom * 0.995, bottom * 0.989, bottom * 0.984, bottom * 0.978, bottom * 0.99, bottom * 1.0, bottom * 1.01]
+        r = bt.run_dip(dip_series(path))
+        self.assertEqual((r["cycles"], r["by_buys"][3]), (1, 1))
+        self.assertAlmostEqual(r["pnl_usd"] - r["open_pnl"], 3.00, places=2)   # closed cycle = +$3 net
+        self.assertEqual(r["max_used"], 75)
+
+    def test_emergency_stop_and_liquidation(self):
+        bottom = dip_series([])[-1]["c"]
+        path = [bottom * (1 - 0.01 * k) for k in range(1, 13)]           # keeps falling 12%
+        with_stop = bt.run_dip(dip_series(path))
+        self.assertEqual((with_stop["emergency"], with_stop["liquidated"]), (1, 0))
+        self.assertLess(with_stop["pnl_usd"], -40)
+        no_stop = bt.run_dip(dip_series(path), emergency=False)
+        self.assertEqual(no_stop["liquidated"], 1)
+        self.assertLess(no_stop["pnl_usd"], with_stop["pnl_usd"])
+
+    def test_one_year_is_fast_and_report(self):
+        m5 = walk(365 * 288, 300, vol=0.0025, seed=11)
+        t = time.time()
+        text = bt.report_text(m5)
+        self.assertLess(time.time() - t, 60)
+        for part in ("COMPRA NO FUNDO", "P/L TOTAL", "Resultado por mês", "Sem stop de emergência", "taxas e deslize dobrados"):
+            self.assertIn(part, text)
 
 
 if __name__ == "__main__":
