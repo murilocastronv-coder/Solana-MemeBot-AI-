@@ -6,6 +6,7 @@ import paper_auto as auto
 from live_preflight import live_status, risk_settings
 import live_trade_state as trade_state
 import live_exit_monitor
+import telegram_owner
 from live_swap_executor import configured as swap_configured
 from bot_wallet_service import create_or_get, get_address, export_private_key
 from datetime import datetime,timezone
@@ -106,7 +107,11 @@ def message(p):
  "💧 Liquidez: $"+fmt(liq)+"\n"+
  "⚠️ Não auditado. Risco de scam/rug pull; TP/SL não são ordens.")
 def active_chat():
- return CHAT or PRIVATE_CHAT
+ if CHAT:return CHAT
+ try:return telegram_owner.get_owner()
+ except Exception:
+  logging.exception("persistent Telegram owner unavailable; deny access")
+  return None
 
 def qualifies(p):
  try:
@@ -146,11 +151,15 @@ def handle(update):
  if not chat:return
  chat_type=(cb.get("message",{}).get("chat",{}).get("type") if cb else (msg or {}).get("chat",{}).get("type"))
  if chat_type!="private":return
- if not CHAT and PRIVATE_CHAT is None and action in ("/start","/menu"):
-  PRIVATE_CHAT=str(chat)
-  logging.info("Private Telegram chat registered in memory; will reset on restart")
+ if not CHAT and action in ("/start","/menu"):
+  try:
+   if not telegram_owner.claim(chat):
+    return
+  except Exception:
+   logging.exception("persistent owner claim failed")
+   return
  if action=="/id":
-  send(chat,"Seu chat ID privado: "+str(chat)+"\nPara proteger sua carteira, configure este número como TELEGRAM_CHAT_ID no Render.");return
+  send(chat,"Seu chat ID privado: "+str(chat)+"\nIdentificação privada. O proprietário vinculado é mantido no disco persistente.");return
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
