@@ -116,3 +116,63 @@ def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0)
             state["enabled"] = False
             state["halted"] = True
         _save(state)
+
+def annotate_pending(order_id, **fields):
+    """Durably store recovery metadata before advancing execution stage."""
+    allowed = {"signature", "request_id", "before_token_raw", "before_sol_raw",
+               "input_amount_raw", "stage", "cost_usd"}
+    if set(fields) - allowed:
+        raise ValueError("Unsupported pending metadata")
+    with _LOCK:
+        data = _load()
+        pending = data["pending"].get(order_id)
+        if not pending:
+            raise RuntimeError("Pending order missing")
+        pending.update(fields)
+        _save(data)
+
+def pending_orders():
+    with _LOCK:
+        return {key: dict(value) for key, value in _load()["pending"].items()}
+
+def reconcile_known_signature(order_id, owner):
+    """Read-only finalized reconciliation. Never retry ambiguous submissions."""
+    from solana_settlement import get_token_balance, get_sol_balance
+    from live_swap_executor import rpc
+    with _LOCK:
+        data = _load()
+        pending = data["pending"].get(order_id)
+        if not pending or not pending.get("signature"):
+            return {"status": "manual_review", "reason": "Missing signature"}
+        signature = pending["signature"]
+        tx = rpc("getTransaction", [signature, {"encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
+        if not tx:
+            return {"status": "waiting_finality", "signature": signature}
+        if tx.get("meta", {}).get("err") is not None:
+            return {"status": "manual_review", "reason": "On-chain failure; verify fees and balances", "signature": signature}
+        before_token = pending.get("before_token_raw")
+        before_sol = pending.get("before_sol_raw")
+        if before_token is None or before_sol is None:
+            return {"status": "manual_review", "reason": "Missing pre-trade balances", "signature": signature}
+        mint = pending["mint"]
+        after_token = get_token_balance(owner, mint)
+        after_sol = get_sol_balance(owner)
+        if pending["side"] == "buy":
+            acquired = after_token - int(before_token)
+            if acquired <= 0 or after_sol >= int(before_sol):
+                return {"status": "manual_review", "reason": "Balance mismatch", "signature": signature}
+            cost = float(pending.get("cost_usd", 10.0))
+            position = {"token_amount_raw": acquired, "cost_usd": cost, "buy_signature": signature}
+            record_settlement(order_id, signature, position=position)
+            return {"status": "settled_buy", "signature": signature, "token_amount_raw": acquired}
+        sold = int(before_token) - after_token
+        if sold != int(pending.get("input_amount_raw", -1)) or after_sol <= int(before_sol):
+            return {"status": "manual_review", "reason": "Sell balance mismatch", "signature": signature}
+        # No reliable realized USD PnL without a verified execution-time USD valuation.
+        # Keep halted for review rather than silently bypassing daily loss limits.
+        record_settlement(order_id, signature)
+        data = _load()
+        data["enabled"] = False
+        data["halted"] = True
+        _save(data)
+        return {"status": "settled_sell_review_pnl", "signature": signature}
