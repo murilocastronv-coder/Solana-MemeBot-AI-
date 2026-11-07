@@ -352,23 +352,27 @@ def _reconcile_by_balance(order_id, pending, owner):
 EXPIRY_SECONDS = 150  # a Solana transaction cannot land after its blockhash expires (~90 s)
 
 
-def auto_reconcile(owner):
+def auto_reconcile(owner, min_age_seconds=None):
     """Resolve pending orders without manual help. Never resends anything."""
+    min_age = EXPIRY_SECONDS if min_age_seconds is None else min_age_seconds
     results = []
     for order_id, pending in pending_orders().items():
         if pending.get("signature"):
             try:
                 result = reconcile_known_signature(order_id, owner)
-            except Exception:
-                result = {"status": "error"}
+            except Exception as exc:
+                result = {"status": "error", "error": type(exc).__name__ + ": " + str(exc)[:150]}
             if result.get("status", "").startswith("settled"):
                 result["mint"] = pending["mint"]
                 results.append(result)
                 continue
-        if _age_seconds(pending) < EXPIRY_SECONDS:
+        if _age_seconds(pending) < min_age:
+            results.append({"status": "waiting", "mint": pending["mint"],
+                            "seconds_left": int(min_age - _age_seconds(pending))})
             continue
         try:
             results.append(_reconcile_by_balance(order_id, pending, owner))
-        except Exception:
-            results.append({"status": "error", "mint": pending["mint"]})
+        except Exception as exc:
+            results.append({"status": "error", "mint": pending["mint"],
+                            "error": type(exc).__name__ + ": " + str(exc)[:150]})
     return results

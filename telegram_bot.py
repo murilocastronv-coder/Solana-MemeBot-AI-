@@ -43,7 +43,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"📊 Status trading real","callback_data":"live_status"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"📊 Status trading real","callback_data":"live_status"},{"text":"🔧 Destravar robô","callback_data":"unstick"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
 def trading_readiness():
  """Report observed switches and ledger state; never imply real trading works."""
  st=trade_state.status()
@@ -66,7 +66,7 @@ def trading_status_text():
  try:pnl=trade_state.pnl_summary()
  except Exception:pnl={"day_pnl_usd":0.0,"total_pnl_usd":0.0,"trades_closed":0,"trades_won":0}
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
-        "🔴 ROBÔ DESLIGADO" if not running else "🟢 ROBÔ LIGADO",
+        "🟢 ROBÔ LIGADO" if running else "🔴 ROBÔ PARADO — "+(live_engine.why_stopped() or ""),
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
         "Compras automáticas (10% da conta): "+("SIM" if running else "NÃO"),
         "Vendas automáticas (SL -8% / stop móvel após +15%): "+("SIM" if running else "NÃO"),
@@ -279,6 +279,10 @@ def handle(update):
    send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura compra até 2 moedas em alta e aprovada no anti-golpe, usando 10% da conta (máx. 3 posições). Vende sozinho: stop -8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para ao perder 15% da conta no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
   except Exception as exc:
    send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
+ elif action in ("unstick","/destravar"):
+  try:live_engine.unstick(send,chat)
+  except Exception as exc:
+   logging.exception("unstick failed");send(chat,"❌ Falha ao destravar: "+type(exc).__name__+": "+str(exc)[:200])
  elif action in ("sniper_on","/sniper_on"):
   try:
    trade_state.set_sniper(True)

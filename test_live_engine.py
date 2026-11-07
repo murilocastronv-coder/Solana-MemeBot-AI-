@@ -149,13 +149,25 @@ class RecoveryTests(LiveEngineTests):
         live_engine.start(); self.side = "buy"
         with patch("live_order_bridge.execute_signed", side_effect=RuntimeError("timeout")):
             live_engine.buy_cycle([pair()], self.send, "1")
-        self.assertEqual(live_engine.recover(self.send, "1"), [])  # too early: tx could still land
+        self.assertEqual(live_engine.recover(self.send, "1")[0]["status"], "waiting")  # tx could still land
+        self.assertEqual(state.status()["pending"], 1)
         age_pending()
         result = live_engine.recover(self.send, "1")
         self.assertEqual(result[0]["status"], "discarded")
         self.assertEqual(state.status()["pending"], 0)
         self.assertTrue(state.can_open()[0])
         self.assertIn("não foi executada", self.sent[-1])
+
+    def test_unstick_button_resolves_and_reports(self):
+        live_engine.start(); self.side = "buy"
+        with patch("live_order_bridge.execute_signed", side_effect=RuntimeError("timeout")):
+            live_engine.buy_cycle([pair()], self.send, "1")
+        self.assertIn("ordem pendente", live_engine.why_stopped())
+        age_pending(90)
+        live_engine.unstick(self.send, "1")
+        self.assertIn("ORDENS PENDENTES", self.sent[-3])
+        self.assertIn("não executada", self.sent[-2])
+        self.assertEqual(self.sent[-1], "🟢 Robô ligado e operando.")
 
     def test_buy_landed_but_unconfirmed_becomes_position(self):
         live_engine.start(); self.side = "buy"

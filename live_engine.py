@@ -456,7 +456,61 @@ def recover(send, chat):
             what = "Compra" if r.get("side") == "buy" else "Venda"
             send(chat, "ℹ️ " + what + " não foi executada na blockchain (" + mint + "). Nada mudou na carteira. Robô liberado" +
                  ("; a venda será tentada de novo." if r.get("side") == "sell" else "."))
-        else:
+        elif r["status"] == "error":
+            logging.warning("Pending recovery failed for %s: %s", mint[:8], r.get("error"))
             _notice(send, chat, ("recover_err", mint), "⚠️ Não consegui conferir a ordem pendente de " + mint +
-                    " ainda; tento de novo automaticamente.", REPORT_EVERY_SECONDS)
+                    " ainda (" + str(r.get("error", "?")) + "); tento de novo automaticamente.", REPORT_EVERY_SECONDS)
+    return results
+
+
+def why_stopped():
+    """Plain-language reason the robot is not running (None if running)."""
+    st = state.status()
+    if st["pending"]:
+        return "ordem pendente sem confirmação (toque em 🔧 Destravar robô)"
+    if ready():
+        return None
+    if not st["enabled"] or st["halted"]:
+        if st["daily_loss_usd"] >= state.daily_loss_limit():
+            return "limite de perda do dia atingido; toque em ▶️ Iniciar amanhã ou agora para religar"
+        return "desligado (toque em ▶️ Iniciar trading real)"
+    return _why_not_ready() or "verificação de segurança falhou"
+
+
+def unstick(send, chat):
+    """Owner button: show stuck orders and resolve them now from balances."""
+    pending = state.pending_orders()
+    wallet = get_address()
+    if not pending:
+        reason = why_stopped()
+        send(chat, "✅ Nenhuma ordem pendente." + ("" if reason is None else "\nRobô parado: " + reason))
+        return []
+    lines = ["🔧 ORDENS PENDENTES:"]
+    for order_id, p in pending.items():
+        age = int(state._age_seconds(p))
+        lines.append("• " + ("Compra" if p["side"] == "buy" else "Venda") + " " + p["mint"] +
+                     "\n  etapa: " + str(p.get("stage", "reservada")) + " | há " + str(age // 60) + " min" +
+                     ("\n  tx: https://solscan.io/tx/" + p["signature"] if p.get("signature") else "\n  sem assinatura (talvez nem tenha sido enviada)"))
+    send(chat, "\n".join(lines))
+    if not wallet:
+        send(chat, "⚠️ Carteira do bot não encontrada.")
+        return []
+    results = state.auto_reconcile(wallet, min_age_seconds=60)
+    for r in results:
+        if r["status"] == "waiting":
+            send(chat, "⏳ Ordem muito recente; tente de novo em " + str(r["seconds_left"]) + " s.")
+        elif r["status"] == "error":
+            send(chat, "❌ Erro ao conferir " + r.get("mint", "?") + ": " + str(r.get("error")) +
+                 "\nMande este print para o suporte.")
+    recover_messages = [r for r in results if r["status"] not in ("waiting", "error")]
+    for r in recover_messages:
+        mint = r.get("mint", "?")
+        if r["status"] == "settled_buy":
+            send(chat, "✅ Compra confirmada: " + mint)
+        elif r["status"].startswith("settled_sell"):
+            send(chat, "✅ Venda confirmada: " + mint + ("\nP/L: " + format(r["pnl_usd"], "+.2f") + " USD" if "pnl_usd" in r else ""))
+        elif r["status"] == "discarded":
+            send(chat, "ℹ️ Ordem não executada na blockchain (" + mint + "). Liberada.")
+    reason = why_stopped()
+    send(chat, "🟢 Robô ligado e operando." if reason is None else "🔴 Robô parado: " + reason)
     return results
