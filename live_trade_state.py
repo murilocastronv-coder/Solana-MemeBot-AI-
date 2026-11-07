@@ -88,6 +88,16 @@ def sniper_enabled():
     with _LOCK:
         return bool(_load().get("sniper_enabled", False))
 
+def set_flag(name, value):
+    with _LOCK:
+        state = _load()
+        state[name] = bool(value)
+        _save(state)
+
+def flag(name):
+    with _LOCK:
+        return bool(_load().get(name, False))
+
 def positions_by_mode(mode):
     with _LOCK:
         return sum(1 for p in _load()["positions"].values() if p.get("mode", "normal") == mode)

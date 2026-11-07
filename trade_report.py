@@ -1,6 +1,6 @@
 """Plain-language trade history and per-strategy statistics for Telegram."""
 REASONS = {"stop_loss": "stop", "take_profit": "stop móvel", "time_stop": "tempo", "dead": "zerada", "?": "?"}
-MODES = {"normal": "Normal", "sniper": "Sniper"}
+MODES = {"normal": "Normal", "sniper": "Sniper", "pumpfun": "Pump.fun"}
 
 
 def stats(trades):
@@ -16,7 +16,7 @@ def _block(title, trades):
     lines = [title]
     if not trades:
         return lines + ["Nenhuma operação fechada ainda."]
-    for mode in ("normal", "sniper"):
+    for mode in ("normal", "sniper", "pumpfun"):
         s = stats([t for t in trades if t.get("mode", "normal") == mode])
         if not s["n"]:
             continue
@@ -43,5 +43,5 @@ def history_text(real_trades, sim):
                     "\nSaldo: US$ " + format(sim["equity"], ".2f") + " (começou com US$ " + format(sim["start"], ".2f") +
                     ", " + format((sim["equity"] / sim["start"] - 1) * 100 if sim["start"] else 0, "+.1f") + "%) | abertas: " +
                     str(sim["open"]) + "/3", sim["history"])
-    lines += ["", "N = normal, S = sniper. Avalie depois de 20–30 operações."]
+    lines += ["", "N = normal, S = sniper, P = pump.fun. Avalie depois de 20–30 operações."]
     return "\n".join(lines)

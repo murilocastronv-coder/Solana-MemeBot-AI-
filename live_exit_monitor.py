@@ -28,7 +28,7 @@ def quote_value_usd(mint, amount):
 
 def position_signal(position, cost, proceeds):
     """Exit decision shared by real trading and the simulator."""
-    if position.get("mode") == "sniper":
+    if position.get("mode") in ("sniper", "pumpfun"):
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **SNIPER_EXIT)
         held = time.time() - float(position.get("opened_at") or time.time())
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
