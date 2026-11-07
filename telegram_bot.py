@@ -40,7 +40,24 @@ def fetch():
   if p.get("chainId")!="solana" or not mint:continue
   if mint not in unique or float(p.get("liquidity",{}).get("usd") or 0)>float(unique[mint].get("liquidity",{}).get("usd") or 0):unique[mint]=p
  return sorted(unique.values(),key=lambda p:p.get("pairCreatedAt") or 0,reverse=True)
-def fmt(v):return format(v,'.12g')
+def fmt(v):
+ if v == 0:return "0"
+ return format(v, ".12f").rstrip("0").rstrip(".") if abs(v)<1 else format(v, ".12f").rstrip("0").rstrip(".")
+def coin_keyboard(p):
+ token=p.get("baseToken",{})
+ mint=str(token.get("address",""))
+ try:
+  price=float(p.get("priceUsd") or 0)
+ except (ValueError,TypeError):price=0
+ if not mint:return None
+ buttons=[[{"text":"📋 Copiar contrato","copy_text":{"text":mint}}]]
+ if price>0:
+  buttons.append([{"text":"🎯 Copiar TP","copy_text":{"text":fmt(price*(1+TP/100))}},
+                  {"text":"🛑 Copiar SL","copy_text":{"text":fmt(price*(1-SL/100))}}])
+ return buttons
+def send_coin(chat,p,prefix=""):
+ return send(chat,prefix+message(p),coin_keyboard(p))
+
 def message(p):
  token=p.get("baseToken",{});mint=token.get("address","")
  price=float(p.get("priceUsd") or 0);liq=float(p.get("liquidity",{}).get("usd") or 0)
@@ -65,7 +82,7 @@ def scan(alert=False):
    if mint in seen:continue
    seen.add(mint)
    if float(p.get("liquidity",{}).get("usd") or 0)>=MIN_LIQ:
-    send(active_chat(),"🔔 Token detectado (não é recomendação):\n"+message(p))
+    send_coin(active_chat(),p,"🔔 Token detectado (não é recomendação):\n")
   if len(seen)>2000:seen.clear()
  return rows
 def authorized(chat):
@@ -92,10 +109,10 @@ def handle(update):
  elif action in ("scan","/scan"):
   try:
    rows=scan(False);send(chat,"🔎 "+str(len(rows))+" tokens nesta amostra. Exibindo até 5 recém-detectados.")
-   for p in rows[:5]:send(chat,message(p))
+   for p in rows[:5]:send_coin(chat,p)
   except Exception:logging.exception("scan failed");send(chat,"Falha temporária ao consultar DexScreener.")
  elif action in ("latest","/latest"):
-  for p in last[:5]:send(chat,message(p))
+  for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
  elif action in ("settings","/settings"):
   send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nAlertas: liquidez mínima $"+str(MIN_LIQ)+"\nValores indicativos, não ordens. Ajuste TP_PERCENT e SL_PERCENT no Render.")
