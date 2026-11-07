@@ -84,7 +84,7 @@ def _buy(data, p, mode, fraction, send, chat):
     data["balance"] -= usd
     data["positions"][mint] = {"symbol": symbol, "mode": mode, "token_amount_raw": tokens,
                                "cost_usd": usd, "opened_at": time.time(), "peak_ratio": 0}
-    send(chat, "🧪 SIM " + ("🎯 SNIPER " if mode == "sniper" else "") + "COMPROU " + symbol +
+    send(chat, "🧪 SIM " + {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN "}.get(mode, "") + "COMPROU " + symbol +
          " — US$ " + format(usd, ".2f") + " (dinheiro de mentira, preço real)\n" + mint)
     return True
 
@@ -195,3 +195,25 @@ def summary():
         data = _load()
         return {"enabled": data.get("enabled", False), "equity": equity(data), "start": data["start"],
                 "balance": data["balance"], "open": len(data["positions"]), "history": list(data["history"])}
+
+
+def pumpfun_cycle(send, chat):
+    """Pump.fun strategy (~20 s): one buy per cycle, 5% of sim equity, max 2 pump.fun positions."""
+    import pumpfun
+    if not chat or not enabled():
+        return 0
+    with _LOCK:
+        data = _load()
+        open_pf = sum(1 for p in data["positions"].values() if p["mode"] == "pumpfun")
+        if len(data["positions"]) >= MAX_POSITIONS or open_pf >= pumpfun.MAX_POSITIONS:
+            return 0
+        recent = {h["mint"] for h in data["history"][-100:]}
+        for t in pumpfun.candidates(exclude=set(data["positions"]) | recent):
+            mint = t.get("id") or t.get("address")
+            try:
+                if pumpfun.safe(mint)[0] and _buy(data, pumpfun.as_pair(t), "pumpfun", pumpfun.FRACTION, send, chat):
+                    _save(data)
+                    return 1
+            except Exception:
+                logging.warning("sim pump.fun buy failed for %s", mint[:8])
+        return 0

@@ -10,6 +10,7 @@ import telegram_owner
 import live_order_bridge
 import live_engine
 import sim_engine
+import pumpfun
 import trade_report
 from live_swap_executor import configured as swap_configured
 from jupiter_v2_executor import headers as jupiter_headers
@@ -45,7 +46,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"🧪 Simulação ON","callback_data":"sim_on"},{"text":"🧪 Simulação OFF","callback_data":"sim_off"}],[{"text":"📜 Histórico","callback_data":"history"}],[{"text":"📊 Status trading real","callback_data":"live_status"},{"text":"🔧 Destravar robô","callback_data":"unstick"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"🟣 Pump.fun ON","callback_data":"pump_on"},{"text":"🟣 Pump.fun OFF","callback_data":"pump_off"}],[{"text":"🧪 Simulação ON","callback_data":"sim_on"},{"text":"🧪 Simulação OFF","callback_data":"sim_off"}],[{"text":"📜 Histórico","callback_data":"history"}],[{"text":"📊 Status trading real","callback_data":"live_status"},{"text":"🔧 Destravar robô","callback_data":"unstick"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
 def trading_readiness():
  """Report observed switches and ledger state; never imply real trading works."""
  st=trade_state.status()
@@ -65,6 +66,8 @@ def trading_status_text():
  st,checks,running=trading_readiness()
  try:sniper_on=trade_state.sniper_enabled();sniper_n=trade_state.positions_by_mode("sniper")
  except Exception:sniper_on=False;sniper_n=0
+ try:pump_on=trade_state.flag("pumpfun_enabled");pump_n=trade_state.positions_by_mode("pumpfun")
+ except Exception:pump_on=False;pump_n=0
  try:pnl=trade_state.pnl_summary()
  except Exception:pnl={"day_pnl_usd":0.0,"total_pnl_usd":0.0,"trades_closed":0,"trades_won":0}
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
@@ -73,6 +76,7 @@ def trading_status_text():
         "Compras automáticas (10% da conta): "+("SIM" if running else "NÃO"),
         "Vendas automáticas (SL -8% / stop móvel após +15%): "+("SIM" if running else "NÃO"),
         "🎯 Sniper (moedas novas, 5% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
+        "🟣 Pump.fun (5% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
         "Posições registradas: "+str(st["positions"])+" / 3",
         "Ordens pendentes: "+str(st["pending"]),
         "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ "+format(trade_state.daily_loss_limit(),".2f"),
@@ -283,6 +287,13 @@ def handle(update):
    send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura compra até 2 moedas em alta e aprovada no anti-golpe, usando 10% da conta (máx. 3 posições). Vende sozinho: stop -8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para ao perder 15% da conta no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
   except Exception as exc:
    send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
+ elif action in ("pump_on","/pump_on"):
+  trade_state.set_flag("pumpfun_enabled",True)
+  extra="" if live_engine.ready() else "\n⚠️ O robô principal está desligado: toque em ▶️ Iniciar trading real para operar com dinheiro real (a 🧪 simulação testa o pump.fun mesmo assim)."
+  send(chat,"🟣 PUMP.FUN LIGADO — RISCO MUITO ALTO\nA cada ~20 s olha as moedas novas e em alta do pump.fun (lista da Jupiter). Compra só se tiver 5–90 min, liquidez ≥ US$ 15 mil, ≥ 150 donos, mint/freeze revogados, 10 maiores donos < 25%, dev < 5%, compras fortes e espalhadas sem já ter disparado, e passar no TESTE DE VENDA (≥ 92%).\nCompra 5% da conta (máx. 2 posições pump.fun).\nSaída: stop -12%; a partir de +25% deixa correr e vende 12% abaixo do topo; vende após 30 min se não decolar."+extra,keyboard())
+ elif action in ("pump_off","/pump_off"):
+  trade_state.set_flag("pumpfun_enabled",False)
+  send(chat,"🟣 Pump.fun DESLIGADO. Posições abertas continuam com stop e venda automática.",keyboard())
  elif action in ("history","/historico"):
   try:send(chat,trade_report.history_text(trade_state.history(),sim_engine.summary()),keyboard())
   except Exception as exc:logging.exception("history failed");send(chat,"⚠️ Histórico indisponível: "+str(exc)[:150])
@@ -380,6 +391,10 @@ def loop():
     except Exception:logging.exception("sniper cycle failed")
     try:sim_engine.sniper_cycle(send,active_chat())
     except Exception:logging.exception("sim sniper cycle failed")
+    try:pumpfun.cycle(send,active_chat())
+    except Exception:logging.exception("pump.fun cycle failed")
+    try:sim_engine.pumpfun_cycle(send,active_chat())
+    except Exception:logging.exception("sim pump.fun cycle failed")
    if active_chat() and time.monotonic()-last_recovery_notice>3600:
     last_recovery_notice=time.monotonic()
     try:

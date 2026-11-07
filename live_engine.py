@@ -219,6 +219,7 @@ BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
     "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
+    "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
 }
 
 
@@ -235,7 +236,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode):
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = "🎯 SNIPER " if mode == "sniper" else ""
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN "}.get(mode, "")
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:

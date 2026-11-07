@@ -47,3 +47,11 @@ Antes de comprar, cota comprar US$ 10 e vender de volta na hora. Se devolver men
 - **🧪 Simulação ON/OFF**: roda as mesmas estratégias (normal + sniper) com **preços reais** da Jupiter e **dinheiro de mentira** (começa com US$ 100, `SIM_START_USD`), com 1% de custo por lado. Não mexe na carteira. `/sim_reset` recomeça.
 - **📜 Histórico** (`/historico`): operações reais e simuladas, taxa de acerto, P/L, ganho e perda médios por estratégia.
 - Teste mudanças na simulação por 20–30 operações antes de usar dinheiro real.
+
+## 🟣 Modo Pump.fun — risco muito alto
+Ligue/desligue com **🟣 Pump.fun ON / OFF** (o robô principal precisa estar ligado para dinheiro real; a 🧪 simulação testa o pump.fun mesmo assim).
+- Fonte: lista de moedas novas e em alta da Jupiter (Tokens API v2), filtrando só moedas lançadas no **pump.fun**.
+- Compra só se: 5–90 min de vida, liquidez ≥ US$ 15 mil, valor de mercado ≤ 20× liquidez, **≥ 150 donos**, mint/freeze revogados, **10 maiores donos < 25%**, **dev < 5%**, subindo 0–40% em 5 min (máx. +300% em 1 h), ≥ 25 compras em 5 min (30% a mais que vendas), ≥ 100 compras em 1 h, volume 5 min entre US$ 5 mil e 3× liquidez, e **teste de venda ≥ 92%**.
+- Compra **5% da conta**, no máx. 2 posições pump.fun (dentro do limite total de 3).
+- Saída igual ao sniper: −12%; stop móvel 12% abaixo do topo a partir de +25%; vende após 30 min se não decolar.
+- Se não conseguir ler a lista, avisa no Telegram a cada hora.
