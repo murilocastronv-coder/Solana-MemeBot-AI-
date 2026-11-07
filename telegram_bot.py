@@ -215,8 +215,8 @@ def handle(update):
   missing=[]
   if not get_address():missing.append("carteira no disco persistente")
   # Jupiter supports keyless API access at reduced rate limits.
-  if not os.getenv("SOLANA_RPC_URL"):missing.append("SOLANA_RPC_URL")
-  if not CHAT:missing.append("TELEGRAM_CHAT_ID fixo")
+  # Public mainnet RPC fallback is configured for basic reads; dedicated RPC recommended for execution.
+  # Private owner is claimed on first /start; group chats are rejected.
   missing.extend(["assinatura e envio validados", "confirmação on-chain e reconciliação", "posições persistentes e vendas TP/SL", "limite de perdas com proteção contra ordens duplicadas"])
   send(chat,"⛔ TRADING REAL BLOQUEADO — diagnóstico\nNão executei nenhuma compra.\nPendências:\n• "+"\n• ".join(missing)+"\n\nParâmetros aprovados: US$ 10/compra, TP +15%, SL -8%, 3 posições, perdas máximas US$ 3/dia.\nO botão só poderá iniciar após testes completos. Não envie chaves ou senhas pelo Telegram.")
  elif action in ("live_stop","/parar","/live_off"):
