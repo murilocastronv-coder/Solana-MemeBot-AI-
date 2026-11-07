@@ -3,6 +3,7 @@ import os,time,logging,threading,requests,re,secrets,html
 from flask import Flask,Response,request
 import paper_positions as paper
 import paper_auto as auto
+from live_preflight import live_status, risk_settings
 from bot_wallet_service import create_or_get, get_address, export_private_key
 from datetime import datetime,timezone
 app=Flask(__name__)
@@ -35,9 +36,9 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar 24/7 (simulação)","callback_data":"auto_start"},{"text":"⏹️ Parar","callback_data":"auto_stop"}],[{"text":"🤖 Status trading","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}]],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"📊 Status trading real","callback_data":"live_status"}]],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
 def menu(chat):
- send(chat,"🤖 Solana MemeBot AI\nRadar de tokens e simulação automática. Use ▶️ Iniciar 24/7 (simulação) para operações fictícias de US$ 10. Nenhuma compra real é executada.",keyboard())
+ send(chat,"🤖 Solana MemeBot AI\nCarteira Solana mainnet. Trading real permanece DESATIVADO até a integração e validação de compras e vendas on-chain. Nenhuma operação é executada ao tocar em Iniciar enquanto não estiver pronto.",keyboard())
 def market_json(url):
  last_error=None
  for attempt in range(3):
@@ -117,7 +118,7 @@ def qualifies(p):
 def scan(alert=False):
  global last
  rows=fetch();last=rows
- if active_chat():auto.enter(active_chat(),rows,send,fmt)
+ 
  if alert and active_chat() and ALERTS_ENABLED:
   sent=0
   for p in reversed(rows):
@@ -207,6 +208,15 @@ def handle(update):
  elif action=="/desconectar":
   CONNECTED_WALLETS.pop(str(chat),None)
   send(chat,"Carteira pública desvinculada desta sessão.")
+ elif action in ("live_start","/iniciar","/live_on"):
+  checks=live_status()
+  send(chat,"⛔ TRADING REAL NÃO INICIADO\\nA carteira existe, mas o executor de swaps e os controles de segurança ainda não estão implementados. Nenhuma compra foi feita.\\nConfiguração prevista: US$ 10 por ordem, TP +15%, SL -8%, máximo 3 posições e limite de perdas US$ 3/dia.\\nNão deposite fundos para trading automático até concluir e testar a integração.")
+ elif action in ("live_stop","/parar","/live_off"):
+  auto.set_enabled(chat,False)
+  send(chat,"⏹️ Trading automático desativado. Nenhuma compra ou venda real estava habilitada.")
+ elif action in ("live_status","/status_real"):
+  checks=live_status()
+  send(chat,"📊 TRADING REAL\\nStatus: DESATIVADO\\nCarteira: "+(get_address() or "não configurada")+"\\nExecutor on-chain: indisponível\\nCompras e vendas reais: 0 executadas por este bot\\nTP +15% | SL -8% | US$ 10 por ordem.")
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
@@ -251,8 +261,7 @@ def loop():
     except Exception:logging.exception("automatic opportunity scan failed")
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+60
-    try:auto.exit_positions(active_chat(),send,fmt)
-    except Exception:logging.exception("auto paper exit failed")
+
     try:paper.check(active_chat(),send,fmt)
     except Exception:logging.exception("paper position monitoring failed")
    if TOKEN:
