@@ -3,6 +3,7 @@ import os,time,logging,threading,requests,re
 from flask import Flask,Response
 import paper_positions as paper
 import paper_auto as auto
+from bot_wallet_service import create_or_get, get_address
 from datetime import datetime,timezone
 app=Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -157,11 +158,18 @@ def handle(update):
   for p in last[:5]:send_coin(chat,p)
   if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
  elif action in ("wallet_export","/exportar_chave"):
-  send(chat,"🔑 EXPORTAR CHAVE PRIVADA\\nA exportação deve ser feita no dispositivo confiável onde a carteira criptografada foi criada, usando export_wallet.py e a senha do arquivo bot_wallet.enc.\\nO exportador confirma que a chave corresponde ao endereço público de depósito.\\nNunca envie sua chave privada ou 12 palavras pelo Telegram. Importar a chave na Phantom dá acesso aos mesmos fundos.\\n⚠️ Exportação diretamente pelo Telegram está desativada por segurança.")
+  send(chat,"🔑 EXPORTAR CHAVE PRIVADA\nA exportação deve ser feita no dispositivo confiável onde a carteira criptografada foi criada, usando export_wallet.py e a senha do arquivo bot_wallet.enc.\\nO exportador confirma que a chave corresponde ao endereço público de depósito.\\nNunca envie sua chave privada ou 12 palavras pelo Telegram. Importar a chave na Phantom dá acesso aos mesmos fundos.\\n⚠️ Exportação diretamente pelo Telegram está desativada por segurança.")
  elif action in ("wallet_create","/criar_carteira"):
-  send(chat,"➕ CRIAR CARTEIRA SOLANA\\nA carteira ainda não é gerada dentro do Telegram. Para proteger seus fundos, a chave deve ser criada e guardada em armazenamento seguro e persistente.\\nO gerador já está no GitHub: provision_wallet.py. Execute-o em um dispositivo confiável, faça backup da carteira criptografada e da senha, e use /connect ENDERECO_PUBLICO para consultar saldo.\\n⚠️ Não deposite até concluir a configuração e testar recuperação e saques. Não envie sua chave privada ou 12 palavras pelo Telegram.")
+  try:
+   address,created=create_or_get()
+   CONNECTED_WALLETS[str(chat)]=address
+   send(chat,("✅ CARTEIRA SOLANA GERADA" if created else "✅ CARTEIRA SOLANA EXISTENTE")+"\nEndereço público (Solana mainnet):\n"+address+"\n\n🔐 Chave privada criptografada no disco persistente. Faça backup seguro do arquivo e da senha antes de depositar. Saques e trades reais não estão implementados.")
+  except Exception:
+   logging.warning("Wallet creation unavailable (check persistent disk and secrets)")
+   send(chat,"⚠️ Não foi possível criar a carteira. Configure TELEGRAM_CHAT_ID, BOT_WALLET_FILE no disco persistente e BOT_WALLET_ENCRYPTION_PASSPHRASE nos segredos do Render. Nenhum endereço foi criado.")
  elif action in ("wallet_connect","/carteira","/wallet","/depositar","/deposito","/sacar","wallet_deposit","wallet_withdraw"):
-  address=CONNECTED_WALLETS.get(str(chat))
+  address=get_address() if os.getenv("BOT_WALLET_FILE") else None
+  address=address or CONNECTED_WALLETS.get(str(chat))
   if action in ("/sacar","wallet_withdraw"):
    send(chat,"💸 SAQUE — modo seguro\\nAbra a carteira dedicada no aplicativo Phantom, toque em Enviar e escolha SOL. Confirme o endereço de destino e a taxa diretamente na Phantom.\\nSaques automáticos ainda estão desativados; o bot não possui autorização para movimentar fundos.")
   elif address:
