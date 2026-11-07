@@ -1,0 +1,112 @@
+"""Telegram Solana token radar. Read-only, no wallet credentials or trades."""
+import os,time,logging,threading,requests
+from flask import Flask
+from datetime import datetime,timezone
+app=Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
+CHAT=os.getenv("TELEGRAM_CHAT_ID","")
+INTERVAL=max(60,int(os.getenv("SCAN_INTERVAL_SECONDS","300")))
+TP=float(os.getenv("TP_PERCENT","15"))
+SL=float(os.getenv("SL_PERCENT","8"))
+MIN_LIQ=float(os.getenv("MIN_LIQUIDITY_USD","25000"))
+BASE="https://api.telegram.org/bot"+TOKEN
+session=requests.Session()
+seen=set()
+last=[]
+def request_api(method,**params):
+ if not TOKEN:return {}
+ r=session.post(BASE+"/"+method,json=params,timeout=25);r.raise_for_status()
+ return r.json()
+def send(chat,text,keyboard=None):
+ args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
+ if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
+ return request_api("sendMessage",**args)
+def keyboard():
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"⚙️ TP / SL","callback_data":"settings"},{"text":"📋 Ajuda","callback_data":"help"}]]
+def menu(chat):
+ send(chat,"🤖 Solana MemeBot AI\nRadar de tokens, contratos para copiar e TP/SL indicativos. Nenhuma compra é executada.",keyboard())
+def fetch():
+ profiles=session.get("https://api.dexscreener.com/token-profiles/latest/v1",timeout=20).json()
+ addresses=list(dict.fromkeys(x.get("tokenAddress") for x in profiles if x.get("chainId")=="solana" and x.get("tokenAddress")))[:90]
+ pairs=[]
+ for i in range(0,len(addresses),30):
+  r=session.get("https://api.dexscreener.com/tokens/v1/solana/"+",".join(addresses[i:i+30]),timeout=20)
+  r.raise_for_status();pairs+=r.json()
+ unique={}
+ for p in pairs:
+  mint=p.get("baseToken",{}).get("address")
+  if p.get("chainId")!="solana" or not mint:continue
+  if mint not in unique or float(p.get("liquidity",{}).get("usd") or 0)>float(unique[mint].get("liquidity",{}).get("usd") or 0):unique[mint]=p
+ return sorted(unique.values(),key=lambda p:p.get("pairCreatedAt") or 0,reverse=True)
+def fmt(v):return format(v,'.12g')
+def message(p):
+ token=p.get("baseToken",{});mint=token.get("address","")
+ price=float(p.get("priceUsd") or 0);liq=float(p.get("liquidity",{}).get("usd") or 0)
+ tp=fmt(price*(1+TP/100)) if price>0 else "indisponível"
+ sl=fmt(price*(1-SL/100)) if price>0 else "indisponível"
+ return ("🪙 "+str(token.get("name","Token"))[:80]+" ("+str(token.get("symbol","?"))[:20]+")\n"+
+ "📄 CONTRATO (copie a linha abaixo):\n"+mint+"\n"+
+ "💰 Preço de referência: $"+fmt(price)+"\n"+
+ "🎯 TP +"+str(TP)+"%: "+tp+"\n"+
+ "🛑 SL -"+str(SL)+"%: "+sl+"\n"+
+ "💧 Liquidez: $"+fmt(liq)+"\n"+
+ "⚠️ Não auditado. Risco de scam/rug pull; TP/SL não são ordens.")
+def scan(alert=False):
+ global last
+ rows=fetch();last=rows
+ if alert and CHAT:
+  for p in reversed(rows):
+   mint=p.get("baseToken",{}).get("address")
+   if mint in seen:continue
+   seen.add(mint)
+   if float(p.get("liquidity",{}).get("usd") or 0)>=MIN_LIQ:
+    send(CHAT,"🔔 Token detectado (não é recomendação):\n"+message(p))
+  if len(seen)>2000:seen.clear()
+ return rows
+def authorized(chat):
+ return bool(CHAT) and str(chat)==str(CHAT)
+def handle(update):
+ msg=update.get("message");cb=update.get("callback_query")
+ if cb:
+  chat=cb.get("message",{}).get("chat",{}).get("id");action=cb.get("data","")
+  request_api("answerCallbackQuery",callback_query_id=cb["id"])
+ else:
+  chat=(msg or {}).get("chat",{}).get("id");action=(msg or {}).get("text","").split(" ")[0]
+ if not chat:return
+ if action=="/id":
+  send(chat,"Seu chat ID: "+str(chat)+"\nConfigure TELEGRAM_CHAT_ID no Render para restringir o acesso.");return
+ if not authorized(chat):
+  send(chat,"Acesso não autorizado. Configure TELEGRAM_CHAT_ID no Render. Nenhuma carteira está conectada.");return
+ if action in ("/start","/menu","help"):menu(chat)
+ elif action in ("scan","/scan"):
+  try:
+   rows=scan(False);send(chat,"🔎 "+str(len(rows))+" tokens nesta amostra. Exibindo até 5 recém-detectados.")
+   for p in rows[:5]:send(chat,message(p))
+  except Exception:logging.exception("scan failed");send(chat,"Falha temporária ao consultar DexScreener.")
+ elif action in ("latest","/latest"):
+  for p in last[:5]:send(chat,message(p))
+  if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
+ elif action in ("settings","/settings"):
+  send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nAlertas: liquidez mínima $"+str(MIN_LIQ)+"\nValores indicativos, não ordens. Ajuste TP_PERCENT e SL_PERCENT no Render.")
+ else:menu(chat)
+def loop():
+ offset=None;next_scan=0
+ while True:
+  try:
+   if time.monotonic()>=next_scan:
+    scan(True);next_scan=time.monotonic()+INTERVAL
+   if TOKEN:
+    data=request_api("getUpdates",offset=offset,timeout=15,allowed_updates=["message","callback_query"])
+    for u in data.get("result",[]):
+     offset=u["update_id"]+1
+     try:handle(u)
+     except Exception:logging.exception("update failed")
+   else:time.sleep(10)
+  except Exception:logging.exception("telegram worker error");time.sleep(10)
+@app.get("/")
+def health():return {"service":"solana-memebot-telegram","configured":bool(TOKEN and CHAT),"trading":False}
+if __name__=="__main__":
+ if TOKEN:threading.Thread(target=loop,daemon=True).start()
+ else:logging.warning("Missing TELEGRAM_BOT_TOKEN; worker not started")
+ app.run(host="0.0.0.0",port=int(os.getenv("PORT","10000")))
