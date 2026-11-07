@@ -35,9 +35,9 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar 24/7 (simulação)","callback_data":"auto_start"},{"text":"⏹️ Parar","callback_data":"auto_stop"}],[{"text":"🤖 Status trading","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}]],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
 def menu(chat):
- send(chat,"🤖 Solana MemeBot AI\nRadar de tokens e simulação automática. Use /auto_on para iniciar operações fictícias de US$ 10. Nenhuma compra real é executada.",keyboard())
+ send(chat,"🤖 Solana MemeBot AI\nRadar de tokens e simulação automática. Use ▶️ Iniciar 24/7 (simulação) para operações fictícias de US$ 10. Nenhuma compra real é executada.",keyboard())
 def market_json(url):
  last_error=None
  for attempt in range(3):
@@ -210,9 +210,9 @@ def handle(update):
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
- elif action=="/auto_on":
+ elif action in ("/auto_on","auto_start"):
   auto.set_enabled(chat,True);send(chat,"🧪 Trading SIMULADO ATIVADO. Compras fictícias de $10, até 3 posições, TP +15%, SL -8%. Não há ordens reais.")
- elif action=="/auto_off":
+ elif action in ("/auto_off","auto_stop"):
   auto.set_enabled(chat,False);send(chat,"⏸️ Trading simulado pausado. Nenhuma ordem real existe. Posições fictícias não serão monitoradas até /auto_on.")
  elif action in ("positions","/posicoes"):
   items=paper.list_open(chat)
