@@ -182,10 +182,10 @@ def handle(update):
   address=get_address() if os.getenv("BOT_WALLET_FILE") else None
   address=address or CONNECTED_WALLETS.get(str(chat))
   if action in ("/sacar","wallet_withdraw"):
-   send(chat,"💸 SAQUE — modo seguro\\nAbra a carteira dedicada no aplicativo Phantom, toque em Enviar e escolha SOL. Confirme o endereço de destino e a taxa diretamente na Phantom.\\nSaques automáticos ainda estão desativados; o bot não possui autorização para movimentar fundos.")
+   send(chat,"💸 SAQUE — modo seguro\nAbra a carteira dedicada no aplicativo Phantom, toque em Enviar e escolha SOL. Confirme o endereço de destino e a taxa diretamente na Phantom.\nSaques automáticos ainda estão desativados; o bot não possui autorização para movimentar fundos.")
   elif address:
    if action in ("/depositar","/deposito","wallet_deposit"):
-    send(chat,"📥 DEPÓSITO SOLANA\\nEnvie SOL pela rede Solana para o endereço público da carteira dedicada:\\n"+address+"\\nConfira o endereço na Phantom antes de transferir. A detecção do saldo é automática ao consultar /wallet.")
+    send(chat,"📥 DEPÓSITO SOLANA\nEnvie SOL pela rede Solana para o endereço público da carteira dedicada:\n"+address+"\nConfira o endereço na Phantom antes de transferir. A detecção do saldo é automática ao consultar /wallet.")
     return
    try:
     rpc=os.getenv("SOLANA_RPC_URL","https://api.mainnet-beta.solana.com")
@@ -194,33 +194,33 @@ def handle(update):
     data=response.json()
     if "error" in data:raise ValueError("RPC error")
     balance=int(data["result"]["value"])/1_000_000_000
-    send(chat,"💰 SALDO REAL — CARTEIRA SOLANA\\n"+address+"\\nSaldo: "+fmt(balance)+" SOL\\nRede: Solana mainnet\\nConsulta pública em tempo real. Sem movimentação de fundos.")
+    send(chat,"💰 SALDO REAL — CARTEIRA SOLANA\n"+address+"\nSaldo: "+fmt(balance)+" SOL\nRede: Solana mainnet\nConsulta pública em tempo real. Sem movimentação de fundos.")
    except (requests.RequestException,ValueError,KeyError,TypeError):
-    send(chat,"Endereço vinculado: "+address+"\\nNão foi possível consultar o saldo agora.")
+    send(chat,"Endereço vinculado: "+address+"\nNão foi possível consultar o saldo agora.")
   else:
-   send(chat,"👻 VINCULAR PHANTOM — SOMENTE LEITURA\\nNa Phantom, toque em Receber > Solana > Copiar endereço público. Depois envie: /connect ENDERECO_PUBLICO\\nNunca envie as 12 palavras, seed phrase ou chave privada neste chat. A vinculação não autoriza compras ou saques.")
+   send(chat,"👻 VINCULAR PHANTOM — SOMENTE LEITURA\nNa Phantom, toque em Receber > Solana > Copiar endereço público. Depois envie: /connect ENDERECO_PUBLICO\nNunca envie as 12 palavras, seed phrase ou chave privada neste chat. A vinculação não autoriza compras ou saques.")
  elif action=="/connect":
   parts=(msg or {}).get("text","").split()
   if len(parts)!=2 or not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}",parts[1]):
-   send(chat,"Uso: /connect ENDERECO_PUBLICO_SOLANA\\nCopie apenas o endereço público na Phantom. Não envie 12 palavras nem chave privada.")
+   send(chat,"Uso: /connect ENDERECO_PUBLICO_SOLANA\nCopie apenas o endereço público na Phantom. Não envie 12 palavras nem chave privada.")
   else:
    CONNECTED_WALLETS[str(chat)]=parts[1]
-   send(chat,"✅ Endereço público vinculado para consulta: "+parts[1]+"\\nUse /wallet para consultar saldo ou /desconectar para remover. Sem assinatura ou operações reais.")
+   send(chat,"✅ Endereço público vinculado para consulta: "+parts[1]+"\nUse /wallet para consultar saldo ou /desconectar para remover. Sem assinatura ou operações reais.")
  elif action=="/desconectar":
   CONNECTED_WALLETS.pop(str(chat),None)
   send(chat,"Carteira pública desvinculada desta sessão.")
  elif action in ("live_start","/iniciar","/live_on"):
   checks=live_status()
-  send(chat,"⛔ TRADING REAL NÃO INICIADO\\nA carteira existe, mas o executor de swaps e os controles de segurança ainda não estão implementados. Nenhuma compra foi feita.\\nConfiguração prevista: US$ 10 por ordem, TP +15%, SL -8%, máximo 3 posições e limite de perdas US$ 3/dia.\\nNão deposite fundos para trading automático até concluir e testar a integração.")
+  send(chat,"⛔ TRADING REAL NÃO INICIADO\nA carteira existe, mas o executor de swaps e os controles de segurança ainda não estão implementados. Nenhuma compra foi feita.\nConfiguração prevista: US$ 10 por ordem, TP +15%, SL -8%, máximo 3 posições e limite de perdas US$ 3/dia.\nNão deposite fundos para trading automático até concluir e testar a integração.")
  elif action in ("live_stop","/parar","/live_off"):
   auto.set_enabled(chat,False)
   send(chat,"⏹️ Trading automático desativado. Nenhuma compra ou venda real estava habilitada.")
  elif action in ("live_status","/status_real"):
   checks=live_status()
-  send(chat,"📊 TRADING REAL\\nStatus: DESATIVADO\\nCarteira: "+(get_address() or "não configurada")+"\\nAPI de swaps: "+("configurada" if swap_configured() else "não configurada")+"\\nAssinatura/envio: BLOQUEADOS até testes e verificações\\nCompras e vendas reais: 0 executadas por este bot\\nTP +15% | SL -8% | US$ 10 por ordem.")
+  send(chat,"📊 TRADING REAL\nStatus: DESATIVADO\nCarteira: "+(get_address() or "não configurada")+"\nAPI de swaps: "+("configurada" if swap_configured() else "não configurada")+"\nAssinatura/envio: BLOQUEADOS até testes e verificações\nCompras e vendas reais: 0 executadas por este bot\nTP +15% | SL -8% | US$ 10 por ordem.")
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
-  send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
+  send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\nCompra: US$ 10 | TP: +15% | SL: -8%\nSaldo fictício livre: $"+fmt(st["balance"])+"\nPosições automáticas: "+str(st["open"])+" / 3\nResultado realizado: $"+fmt(st["realized"])+"\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
  elif action in ("/auto_on","auto_start"):
   auto.set_enabled(chat,True);send(chat,"🧪 Trading SIMULADO ATIVADO. Compras fictícias de $10, até 3 posições, TP +15%, SL -8%. Não há ordens reais.")
  elif action in ("/auto_off","auto_stop"):
@@ -229,15 +229,15 @@ def handle(update):
   items=paper.list_open(chat)
   if not items:send(chat,"Nenhuma simulação aberta. Use /simular CONTRATO PRECO_ENTRADA VALOR_USD")
   else:
-   for mint,p in items:send(chat,"📊 SIMULAÇÃO\\nContrato: "+mint+"\\nEntrada: $"+fmt(p["entry"])+"\\nTP: $"+fmt(p["entry"]*(1+p["tp"]/100))+"\\nSL: $"+fmt(p["entry"]*(1-p["sl"]/100))+"\\n/remover "+mint)
+   for mint,p in items:send(chat,"📊 SIMULAÇÃO\nContrato: "+mint+"\nEntrada: $"+fmt(p["entry"])+"\nTP: $"+fmt(p["entry"]*(1+p["tp"]/100))+"\nSL: $"+fmt(p["entry"]*(1-p["sl"]/100))+"\n/remover "+mint)
  elif action=="/simular":
   parts=(msg or {}).get("text","").split()
-  if len(parts)!=4:send(chat,"Uso: /simular CONTRATO PRECO_ENTRADA VALOR_USD\\nExemplo: /simular <contrato> 0.000012 2")
+  if len(parts)!=4:send(chat,"Uso: /simular CONTRATO PRECO_ENTRADA VALOR_USD\nExemplo: /simular <contrato> 0.000012 2")
   else:
    try:
     mint=parts[1];entry=float(parts[2]);usd=float(parts[3])
     paper.add(chat,mint,entry,usd,TP,SL)
-    send(chat,"✅ Simulação registrada (nenhuma compra real).\\nContrato: "+mint+"\\nTP: $"+fmt(entry*(1+TP/100))+"\\nSL: $"+fmt(entry*(1-SL/100))+"\\nAvisarei quando o preço observado atingir um alvo.")
+    send(chat,"✅ Simulação registrada (nenhuma compra real).\nContrato: "+mint+"\nTP: $"+fmt(entry*(1+TP/100))+"\nSL: $"+fmt(entry*(1-SL/100))+"\nAvisarei quando o preço observado atingir um alvo.")
    except (ValueError,OverflowError) as exc:send(chat,"Erro: "+str(exc))
  elif action=="/remover":
   parts=(msg or {}).get("text","").split()
