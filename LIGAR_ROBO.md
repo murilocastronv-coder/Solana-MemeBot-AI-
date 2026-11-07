@@ -32,3 +32,11 @@ Build command: `pip install -r requirements.txt`.
 Opcional no Render: `ORDER_FRACTION` (padrão `0.20`) e `MAX_ORDER_USD` (padrão `100`).
 
 ⚠️ Memecoins podem ir a zero e o stop loss pode executar bem abaixo de −8% em quedas rápidas. Use só dinheiro que aceita perder.
+
+## 🎯 Modo sniper (moedas recém-criadas) — risco muito alto
+Ligue/desligue com os botões **🎯 Sniper ON / OFF** (o robô principal também precisa estar ligado).
+- A cada ~20 s procura moedas com **menos de 60 min**, liquidez ≥ US$ 10 mil, preço subindo nos últimos 5 min, ≥ 15 compras e 30% mais compras que vendas, volume 5 min ≥ US$ 5 mil.
+- Anti-golpe + os **10 maiores donos** (sem contar a pool) precisam ter **< 30%** das moedas.
+- Compra **5% da conta** (`SNIPER_FRACTION`), no máximo 2 posições sniper (dentro do limite total de 3).
+- Saída: stop **−15%**; a partir de **+30%** stop móvel 15% abaixo do topo; se não decolar em **45 min**, vende.
+- Stops são conferidos a cada ~20 s. Moedas novas podem cair 80–100% em segundos: o stop não garante a perda máxima.

@@ -43,7 +43,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"📊 Status trading real","callback_data":"live_status"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"▶️ Iniciar trading real","callback_data":"live_start"},{"text":"⏹️ Parar trading","callback_data":"live_stop"}],[{"text":"🎯 Sniper ON","callback_data":"sniper_on"},{"text":"🎯 Sniper OFF","callback_data":"sniper_off"}],[{"text":"📊 Status trading real","callback_data":"live_status"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
 def trading_readiness():
  """Report observed switches and ledger state; never imply real trading works."""
  st=trade_state.status()
@@ -61,6 +61,8 @@ def trading_readiness():
 
 def trading_status_text():
  st,checks,running=trading_readiness()
+ try:sniper_on=trade_state.sniper_enabled();sniper_n=trade_state.positions_by_mode("sniper")
+ except Exception:sniper_on=False;sniper_n=0
  try:pnl=trade_state.pnl_summary()
  except Exception:pnl={"day_pnl_usd":0.0,"total_pnl_usd":0.0,"trades_closed":0,"trades_won":0}
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
@@ -68,6 +70,7 @@ def trading_status_text():
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
         "Compras automáticas (20% da conta): "+("SIM" if running else "NÃO"),
         "Vendas automáticas (SL -8% / stop móvel após +15%): "+("SIM" if running else "NÃO"),
+        "🎯 Sniper (moedas novas, 5% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
         "Posições registradas: "+str(st["positions"])+" / 3",
         "Ordens pendentes: "+str(st["pending"]),
         "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ "+format(trade_state.daily_loss_limit(),".2f"),
@@ -276,6 +279,19 @@ def handle(update):
    send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura compra até 1 moeda em alta e aprovada no anti-golpe, usando 20% da conta (máx. 3 posições). Vende sozinho: stop -8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para ao perder 15% da conta no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
   except Exception as exc:
    send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
+ elif action in ("sniper_on","/sniper_on"):
+  try:
+   trade_state.set_sniper(True)
+   extra="" if live_engine.ready() else "\n⚠️ O robô principal está desligado: toque em ▶️ Iniciar trading real para o sniper operar."
+   send(chat,"🎯 SNIPER LIGADO — RISCO MUITO ALTO\nA cada ~20 s procura moedas com menos de 60 min, liquidez ≥ US$ 10 mil e compras fortes nos últimos 5 min. Só compra se passar no anti-golpe e se os 10 maiores donos tiverem < 30%.\nCompra 5% da conta (máx. 2 posições sniper).\nSaída: stop -15%; a partir de +30% deixa o lucro correr e vende 15% abaixo do topo; se não decolar em 45 min, vende.\n⚠️ A maioria das moedas novas vai a zero. Quedas rápidas podem passar muito do stop."+extra,keyboard())
+  except Exception:
+   logging.exception("sniper switch failed");send(chat,"⚠️ Não consegui salvar a configuração do sniper.")
+ elif action in ("sniper_off","/sniper_off"):
+  try:
+   trade_state.set_sniper(False)
+   send(chat,"🎯 Sniper DESLIGADO. Posições sniper abertas continuam com stop e venda automática.",keyboard())
+  except Exception:
+   logging.exception("sniper switch failed");send(chat,"⚠️ Não consegui salvar a configuração do sniper.")
  elif action in ("live_stop","/parar","/live_off"):
   auto.set_enabled(chat,False)
   try:
@@ -321,13 +337,17 @@ def handle(update):
   send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nLiquidez mínima: $"+str(MIN_LIQ)+"\nVolume 24h mínimo: $"+str(MIN_VOLUME)+"\nIdade mínima: "+str(MIN_AGE_HOURS)+" horas\nFDV/liquidez máximo: "+str(MAX_FDV_LIQ)+"\nAlertas por varredura: "+str(MAX_ALERTS)+"\nSem auditoria on-chain. Ajuste no Render.")
  else:menu(chat)
 def loop():
- offset=None;next_scan=0;next_positions=0;last_recovery_notice=0
+ offset=None;next_scan=0;next_positions=0;next_sniper=0;last_recovery_notice=0
  while True:
   try:
    if time.monotonic()>=next_scan:
     next_scan=time.monotonic()+INTERVAL
     try:scan(True)
     except Exception:logging.exception("automatic opportunity scan failed")
+   if active_chat() and time.monotonic()>=next_sniper:
+    next_sniper=time.monotonic()+20
+    try:live_engine.sniper_cycle(send,active_chat())
+    except Exception:logging.exception("sniper cycle failed")
    if active_chat() and time.monotonic()-last_recovery_notice>3600:
     last_recovery_notice=time.monotonic()
     try:
@@ -336,7 +356,7 @@ def loop():
       send(active_chat(),"⚠️ "+str(len(pending))+" operação(ões) pendente(s) após reinício ou falha. Trading bloqueado para evitar duplicidade. Verifique assinaturas e saldos on-chain antes de liberar novas ordens.")
     except Exception:logging.exception("recovery pending inspection failed")
    if active_chat() and time.monotonic()>=next_positions:
-    next_positions=time.monotonic()+60
+    next_positions=time.monotonic()+20
 
     try:
      if os.getenv("LIVE_TRADING_ENABLED")=="true":live_engine.exit_cycle(send,active_chat())
@@ -345,7 +365,7 @@ def loop():
     try:paper.check(active_chat(),send,fmt)
     except Exception:logging.exception("paper position monitoring failed")
    if TOKEN:
-    data=request_api("getUpdates",offset=offset,timeout=15,allowed_updates=["message","callback_query"])
+    data=request_api("getUpdates",offset=offset,timeout=8,allowed_updates=["message","callback_query"])
     for u in data.get("result",[]):
      offset=u["update_id"]+1
      try:handle(u)
