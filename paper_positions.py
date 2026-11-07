@@ -43,7 +43,7 @@ def quote(mints):
    if mint in mints and price>0 and (mint not in prices or liq>prices[mint][1]):prices[mint]=(price,liq)
  return {k:v[0] for k,v in prices.items()}
 def check(chat,send,format_price):
- items=list_open(chat)
+ items=[(mint,p) for mint,p in list_open(chat) if p.get("source")!="auto"]
  if not items:return
  prices=quote([mint for mint,_ in items])
  for mint,p in items:
