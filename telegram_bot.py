@@ -96,10 +96,19 @@ def market_json(url):
    if attempt<2:time.sleep(2**attempt)
  raise RuntimeError("Market API unavailable after retries") from last_error
 
+TOKEN_FEEDS=("https://api.dexscreener.com/token-boosts/top/v1",
+ "https://api.dexscreener.com/token-boosts/latest/v1",
+ "https://api.dexscreener.com/token-profiles/latest/v1")
 def fetch():
- profiles=market_json("https://api.dexscreener.com/token-profiles/latest/v1")
- if not isinstance(profiles,list):raise ValueError("Invalid token profile list")
- addresses=list(dict.fromkeys(x.get("tokenAddress") for x in profiles if isinstance(x,dict) and x.get("chainId")=="solana" and x.get("tokenAddress")))[:90]
+ # Boosted tokens are usually older/more liquid; latest profiles are mostly brand new.
+ profiles=[]
+ for url in TOKEN_FEEDS:
+  try:
+   data=market_json(url)
+   if isinstance(data,list):profiles+=data
+  except RuntimeError:logging.warning("Token feed unavailable: %s",url.rsplit("/",2)[-2])
+ if not profiles:raise RuntimeError("No token feeds available")
+ addresses=list(dict.fromkeys(x.get("tokenAddress") for x in profiles if isinstance(x,dict) and x.get("chainId")=="solana" and x.get("tokenAddress")))[:150]
  pairs=[]
  for i in range(0,len(addresses),30):
   try:

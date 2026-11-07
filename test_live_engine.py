@@ -78,6 +78,16 @@ class LiveEngineTests(unittest.TestCase):
         self.assertIn("COMPROU BONK", self.sent[1])
         self.assertEqual(state.pnl_summary()["total_pnl_usd"], 2.0)
 
+    def test_reports_why_nothing_was_bought(self):
+        live_engine.start()
+        live_engine._last_notice.clear()
+        young = pair(); young["pairCreatedAt"] = time.time() * 1000
+        self.assertIsNone(live_engine.buy_cycle([young], self.send, "1"))
+        self.assertIn("0 passaram nos filtros", self.sent[-1])
+        self.assertIn("1 com idade < 24h", self.sent[-1])
+        live_engine.buy_cycle([young], self.send, "1")
+        self.assertEqual(len(self.sent), 1)  # throttled to once per hour
+
     def test_uncertain_buy_blocks_robot(self):
         live_engine.start()
         self.side = "buy"
