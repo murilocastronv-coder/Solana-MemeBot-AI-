@@ -35,7 +35,7 @@ def send(chat,text,keyboard=None):
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 def keyboard():
- return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"}]]
+ return [[{"text":"🔎 Analisar agora","callback_data":"scan"},{"text":"🪙 Últimas moedas","callback_data":"latest"}],[{"text":"🤖 Trading simulado","callback_data":"autostatus"},{"text":"📊 Simulações","callback_data":"positions"}],[{"text":"➕ Criar carteira","callback_data":"wallet_create"},{"text":"🔐 Conectar carteira","callback_data":"wallet_connect"}],[{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}],[{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}]]
 def menu(chat):
  send(chat,"🤖 Solana MemeBot AI\nRadar de tokens e simulação automática. Use /auto_on para iniciar operações fictícias de US$ 10. Nenhuma compra real é executada.",keyboard())
 def market_json(url):
@@ -176,7 +176,7 @@ def handle(update):
   except Exception:
    logging.warning("Wallet creation unavailable (check persistent disk and secrets)")
    send(chat,"⚠️ Não foi possível criar a carteira. Configure BOT_WALLET_FILE no disco persistente e BOT_WALLET_ENCRYPTION_PASSPHRASE nos segredos do Render. Nenhum endereço foi criado.")
- elif action in ("wallet_connect","/carteira","/wallet","/depositar","/deposito","/sacar","wallet_deposit","wallet_withdraw"):
+ elif action in ("wallet_connect","/carteira","/wallet","/depositar","/deposito","/sacar","wallet_deposit","wallet_withdraw","wallet_balance","/saldo"):
   address=get_address() if os.getenv("BOT_WALLET_FILE") else None
   address=address or CONNECTED_WALLETS.get(str(chat))
   if action in ("/sacar","wallet_withdraw"):
@@ -192,7 +192,7 @@ def handle(update):
     data=response.json()
     if "error" in data:raise ValueError("RPC error")
     balance=int(data["result"]["value"])/1_000_000_000
-    send(chat,"👻 Phantom — endereço público vinculado (somente leitura)\\n"+address+"\\nSaldo: "+fmt(balance)+" SOL\\n/desconectar para remover. Nenhuma transação pode ser assinada.")
+    send(chat,"💰 SALDO REAL — CARTEIRA SOLANA\\n"+address+"\\nSaldo: "+fmt(balance)+" SOL\\nRede: Solana mainnet\\nConsulta pública em tempo real. Sem movimentação de fundos.")
    except (requests.RequestException,ValueError,KeyError,TypeError):
     send(chat,"Endereço vinculado: "+address+"\\nNão foi possível consultar o saldo agora.")
   else:
