@@ -311,14 +311,16 @@ def handle(update):
  elif action in ("sniper_on","/sniper_on"):
   try:
    trade_state.set_sniper(True)
+   trade_state.set_flag("pumpfun_enabled",True)  # sniper also trades pump.fun tokens
    extra="" if live_engine.ready() else "\n⚠️ O robô principal está desligado: toque em ▶️ Iniciar trading real para o sniper operar."
-   send(chat,"🎯 SNIPER LIGADO — RISCO MUITO ALTO\nA cada ~20 s procura moedas de 5 a 60 min, liquidez ≥ US$ 15 mil, compras fortes e espalhadas (sem já ter disparado). Só compra se passar no anti-golpe, se os 10 maiores donos tiverem < 25% e no TESTE DE VENDA (comprar e vender de volta tem que devolver ≥ 92%).\nCompra 5% da conta (máx. 2 posições sniper).\nSaída: stop -12%; a partir de +25% deixa o lucro correr e vende 12% abaixo do topo; se não decolar em 30 min, vende.\n⚠️ A maioria das moedas novas vai a zero. Quedas rápidas podem passar muito do stop."+extra,keyboard())
+   send(chat,"🎯 SNIPER LIGADO (DINHEIRO REAL) — inclui moedas do 🟣 PUMP.FUN — RISCO MUITO ALTO\nA cada ~20 s procura moedas de 5 a 60 min, liquidez ≥ US$ 15 mil, compras fortes e espalhadas (sem já ter disparado). Só compra se passar no anti-golpe, se os 10 maiores donos tiverem < 25% e no TESTE DE VENDA (comprar e vender de volta tem que devolver ≥ 92%).\nCompra 5% da conta (máx. 2 posições sniper).\nSaída: stop -12%; a partir de +25% deixa o lucro correr e vende 12% abaixo do topo; se não decolar em 30 min, vende.\n⚠️ A maioria das moedas novas vai a zero. Quedas rápidas podem passar muito do stop."+extra,keyboard())
   except Exception:
    logging.exception("sniper switch failed");send(chat,"⚠️ Não consegui salvar a configuração do sniper.")
  elif action in ("sniper_off","/sniper_off"):
   try:
    trade_state.set_sniper(False)
-   send(chat,"🎯 Sniper DESLIGADO. Posições sniper abertas continuam com stop e venda automática.",keyboard())
+   trade_state.set_flag("pumpfun_enabled",False)
+   send(chat,"🎯 Sniper DESLIGADO (inclusive pump.fun). Posições abertas continuam com stop e venda automática.",keyboard())
   except Exception:
    logging.exception("sniper switch failed");send(chat,"⚠️ Não consegui salvar a configuração do sniper.")
  elif action in ("live_stop","/parar","/live_off"):
