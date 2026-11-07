@@ -4,6 +4,7 @@ from flask import Flask,Response,request
 import paper_positions as paper
 import paper_auto as auto
 from live_preflight import live_status, risk_settings
+from live_swap_executor import configured as swap_configured
 from bot_wallet_service import create_or_get, get_address, export_private_key
 from datetime import datetime,timezone
 app=Flask(__name__)
@@ -216,7 +217,7 @@ def handle(update):
   send(chat,"⏹️ Trading automático desativado. Nenhuma compra ou venda real estava habilitada.")
  elif action in ("live_status","/status_real"):
   checks=live_status()
-  send(chat,"📊 TRADING REAL\\nStatus: DESATIVADO\\nCarteira: "+(get_address() or "não configurada")+"\\nExecutor on-chain: indisponível\\nCompras e vendas reais: 0 executadas por este bot\\nTP +15% | SL -8% | US$ 10 por ordem.")
+  send(chat,"📊 TRADING REAL\\nStatus: DESATIVADO\\nCarteira: "+(get_address() or "não configurada")+"\\nAPI de swaps: "+("configurada" if swap_configured() else "não configurada")+"\\nAssinatura/envio: BLOQUEADOS até testes e verificações\\nCompras e vendas reais: 0 executadas por este bot\\nTP +15% | SL -8% | US$ 10 por ordem.")
  elif action in ("autostatus","/auto","/autostatus"):
   st=auto.status(chat)
   send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\\nCompra: US$ 10 | TP: +15% | SL: -8%\\nSaldo fictício livre: $"+fmt(st["balance"])+"\\nPosições automáticas: "+str(st["open"])+" / 3\\nResultado realizado: $"+fmt(st["realized"])+"\\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
