@@ -148,6 +148,15 @@ def reconcile_known_signature(order_id, owner):
         tx = rpc("getTransaction", [signature, {"encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
         if not tx:
             return {"status": "waiting_finality", "signature": signature}
+        # Do not reconcile an unrelated signature against the owner's balances.
+        message = (tx.get("transaction") or {}).get("message") or {}
+        keys = message.get("accountKeys") or []
+        owner_signed = any(
+            (k.get("pubkey") == owner and k.get("signer") is True)
+            for k in keys if isinstance(k, dict)
+        )
+        if not owner_signed:
+            return {"status": "manual_review", "reason": "Transaction not signed by tracked wallet", "signature": signature}
         if tx.get("meta", {}).get("err") is not None:
             return {"status": "manual_review", "reason": "On-chain failure; verify fees and balances", "signature": signature}
         before_token = pending.get("before_token_raw")
