@@ -23,9 +23,9 @@ def preflight():
     if not owner or not configured or owner != configured:
         raise TradingNotReady("Owner must be verified and pinned in TELEGRAM_CHAT_ID")
     if not os.getenv("JUPITER_API_KEY"):
-        raise TradingNotReady("Dedicated Jupiter API key required for live execution")
-    if not os.getenv("SOLANA_RPC_URL"):
-        raise TradingNotReady("Dedicated Solana RPC required for live execution")
+        raise TradingNotReady("Jupiter API key required for reliable live execution")
+    if not os.getenv("SOLANA_RPC_URL") or os.getenv("SOLANA_RPC_URL") == "https://api.mainnet-beta.solana.com":
+        raise TradingNotReady("Dedicated Solana RPC required for reliable live execution")
     if not os.getenv("BOT_WALLET_ENCRYPTION_PASSPHRASE"):
         raise TradingNotReady("Wallet decryption secret missing")
     if state._load()["pending"]:
@@ -44,6 +44,11 @@ def submit_swap(mint, side, amount_raw, wallet_address):
         raise ValueError("Invalid order")
     if mint == USDC_MINT:
         raise ValueError("Invalid target mint")
+    from bot_wallet_service import get_address
+    if wallet_address != get_address():
+        raise TradingNotReady("Wallet address does not match encrypted signer")
+    if side == "buy" and int(amount_raw) != 10_000_000:
+        raise TradingNotReady("Buy amount must be exactly 10 USDC raw units")
     if side == "buy":
         allowed, reason = state.can_open()
         if not allowed:
