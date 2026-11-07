@@ -49,7 +49,7 @@ def send(chat,text,keyboard=None):
 def keyboard():
  return [[{"text":"₿ BTC ON","callback_data":"btc_on"},{"text":"₿ BTC OFF","callback_data":"btc_off"}],
   [{"text":"⚙️ Alavancagem","callback_data":"lev"},{"text":"📊 Status BTC","callback_data":"btc_status"}],
-  [{"text":"📈 Estratégia tendência","callback_data":"strat_trend"},{"text":"⚡ Scalping M5","callback_data":"strat_scalp"}],
+  [{"text":"📈 Estratégia tendência","callback_data":"strat_trend"},{"text":"🎯 Compra no fundo","callback_data":"strat_dip"}],
   [{"text":"⏱️ Gráfico 1h","callback_data":"tf_1h"},{"text":"⚡ Gráfico 5m","callback_data":"tf_5m"}],
   [{"text":"💵 Modo REAL","callback_data":"mode_real"},{"text":"🧪 Modo simulação","callback_data":"mode_sim"}],
   [{"text":"🧪 Teste real $5","callback_data":"btc_test"}],
@@ -307,7 +307,7 @@ def handle(update):
   st=btc_perps.summary()
   send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x · "+("💵 DINHEIRO REAL" if st["mode"]=="real" else "🧪 SIMULAÇÃO com preço real")+" · gráfico "+st["timeframe"]+"\nRompimento de 20 velas a favor da média de 200 + stop por ATR e stop móvel. LONG e SHORT, 20% da conta por ordem. Decide a cada vela fechada e controla o stop a cada ~20 s.",keyboard())
  elif action in ("backtest","/backtest"):
-  send(chat,"⏳ Rodando backtest da estratégia M5 nos últimos 30 dias (~9 mil velas do BTC)... leva até 1 minuto.")
+  send(chat,"⏳ Rodando backtest da Compra no fundo em 1 ano de BTC (~105 mil velas de 5 min)... pode levar 2–3 minutos.")
   def run_bt():
    try:
     import backtest
@@ -315,14 +315,13 @@ def handle(update):
    except Exception as exc:
     logging.exception("backtest failed");send(chat,"❌ Backtest falhou: "+type(exc).__name__+": "+str(exc)[:200])
   threading.Thread(target=run_bt,daemon=True).start()
- elif action in ("strat_scalp","strat_scalp_ok"):
+ elif action in ("strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok"):
   st=btc_perps.summary()
-  if st["mode"]=="real" and action=="strat_scalp":
-   lev=st["leverage"]
-   send(chat,"⚠️ SCALPING M5 COM DINHEIRO REAL ("+str(lev)+"x)\nCada operação dura no máximo 5 min. Custos por ida e volta ≈ 0,16% da posição (taxa + deslize). Rode o 📊 Backtest antes: se ficou 🔴, a estratégia tende a perder dinheiro.\nRecomendado: 🧪 Modo simulação.",[[{"text":"✅ Confirmar scalping REAL","callback_data":"strat_scalp_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
+  if st["mode"]=="real" and action in ("strat_dip","strat_scalp"):
+   send(chat,"⚠️ COMPRA NO FUNDO COM DINHEIRO REAL\nCada compra usa $25 de garantia com 10x (posição de $250), até 3 compras ($75). Com 3 compras, uma queda de ~7% abaixo do preço médio aciona o stop de emergência e a perda pode chegar a ~$55; sem o stop, ~9% liquidaria os $75.\nRode o 📊 Backtest (1 ano) antes. Precisa de pelo menos ~$80 em SOL/USDC na carteira.",[[{"text":"✅ Confirmar compra no fundo REAL","callback_data":"strat_dip_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]])
   else:
-   btc_perps.set_option("strategy","scalp")
-   send(chat,"⚡ SCALPING M5 ATIVO ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+")\nCOMPRA: EMA 9 > EMA 21, RSI 52–70, volume acima da média de 20 velas, vela de alta, ATR suficiente e preço perto da EMA 9.\nVENDA (short): EMA 9 < EMA 21, RSI 30–48, volume acima da média, vela de baixa, ATR suficiente.\n10% da conta por operação · stop 0,25% · alvo 0,40% · FECHA no fim da vela sempre · para no dia com −3% · pausa 1 h após 3 perdas seguidas.",keyboard())
+   btc_perps.set_option("strategy","dip")
+   send(chat,"🎯 COMPRA NO FUNDO ATIVA ("+("💵 REAL" if st["mode"]=="real" else "🧪 simulação")+") — só compra, nunca short\n• Compra $25 × 10x quando o BTC cai ≥ 1,5% da máxima de 2 h, RSI < 30 e aparece a primeira vela verde de 5 min.\n• Se cair mais 1% abaixo da última compra, recompra $25 × 10x (máx. 3 compras).\n• 1 compra: fecha com +$2,50 de lucro líquido. 2–3 compras: fecha tudo com +$3,00 líquido.\n• Stop de emergência: −7% abaixo do preço médio (antes da liquidação).",keyboard())
  elif action=="strat_trend":
   btc_perps.set_option("strategy","trend");send(chat,"📈 Estratégia de tendência ativa (rompimento + stop móvel).",keyboard())
  elif action in ("tf_1h","tf_5m"):

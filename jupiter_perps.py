@@ -167,12 +167,12 @@ def _send(instructions):
     return rpc("sendTransaction", [encoded, {"encoding": "base64", "skipPreflight": True, "maxRetries": 3}])
 
 
-def _wait(owner, side, opened):
+def _wait(owner, side, opened, min_size=0.0):
     deadline = time.monotonic() + CONFIRM_TIMEOUT
     while time.monotonic() < deadline:
         pos = read_position(owner, side)
         size = (pos or {}).get("size_usd", 0)
-        if opened and size > 0:
+        if opened and size > min_size + 0.01:
             return pos
         if not opened and size == 0:
             return pos or {"size_usd": 0}
@@ -181,8 +181,9 @@ def _wait(owner, side, opened):
                      "dinheiro volta para a carteira)")
 
 
-def open_position(side, collateral_usd, leverage, btc_price):
-    """Open (or add to) a BTC position with USDC collateral. Returns the on-chain position."""
+def open_position(side, collateral_usd, leverage, btc_price, min_size=0.0):
+    """Open (or add to) a BTC position with USDC collateral. Returns the on-chain position.
+    For an add, pass the current size as min_size so we wait until the keeper increased it."""
     owner = Pubkey.from_string(get_address())
     if usdc_balance(owner) < collateral_usd:
         raise PerpsError("USDC insuficiente na carteira do bot para a garantia de $" + format(collateral_usd, ".2f"))
@@ -196,7 +197,7 @@ def open_position(side, collateral_usd, leverage, btc_price):
         out = int(order(str(USDC_MINT), str(WBTC_MINT), collateral_raw)["outAmount"])
         min_out = int(out * (1 - SLIPPAGE))
     sig = _send([increase_ix(owner, side, collateral_raw, size_raw, int(limit * 1e6), min_out, counter)])
-    pos = _wait(owner, side, opened=True)
+    pos = _wait(owner, side, opened=True, min_size=min_size)
     pos["signature"] = sig
     return pos
 
