@@ -224,11 +224,16 @@ def handle(update):
   CONNECTED_WALLETS.pop(str(chat),None)
   send(chat,"Carteira pública desvinculada desta sessão.")
  elif action in ("live_start","/iniciar","/live_on"):
-  checks=live_status()
-  missing=[]
-  if not get_address():missing.append("carteira no disco persistente")
-  missing.extend(["motor Jupiter V2 conectado; execução ainda não habilitada", "assinatura e envio não testados com segurança", "reconciliação das posições após confirmação ainda não concluída", "compra automática e vendas TP/SL ainda não ligadas ao ciclo", "limites de risco e recuperação ainda não testados"])
-  send(chat,"⛔ TRADING REAL BLOQUEADO — diagnóstico\nNão executei nenhuma compra.\nPendências:\n• "+"\n• ".join(missing)+"\n\nParâmetros aprovados: US$ 10/compra, TP +15%, SL -8%, 3 posições, perdas máximas US$ 3/dia.\nO botão só poderá iniciar após testes completos. Não envie chaves ou senhas pelo Telegram.")
+  # Never acknowledge live activation without an operational and reconciled
+  # trading engine. The bridge alone is not an autonomous trading loop.
+  try:
+   live_order_bridge.preflight()
+   st=trade_state.status()
+   if st["pending"]:
+    raise RuntimeError("Há transação pendente de reconciliação")
+   send(chat,"⛔ Trading real ainda indisponível: o executor Jupiter está instalado, mas o ciclo de compra, liquidação, venda automática TP/SL e recuperação não está concluído. Nenhuma ordem foi enviada. Não é seguro ativar apenas pelo botão.")
+  except Exception as exc:
+   send(chat,"⛔ Não foi possível iniciar trading real. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada. Use /id para verificar o proprietário e configure as credenciais somente nos segredos do Render.")
  elif action in ("live_stop","/parar","/live_off"):
   auto.set_enabled(chat,False)
   try:
