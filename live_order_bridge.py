@@ -84,10 +84,16 @@ def submit_swap(mint, side, amount_raw, wallet_address):
     input_mint, output_mint = (SOL_MINT, mint) if side == "buy" else (mint, SOL_MINT)
     try:
         before = get_token_balance(wallet_address, mint)
+        before_sol = get_sol_balance(wallet_address)
+        state.annotate_pending(order_id, before_token_raw=before, before_sol_raw=before_sol, input_amount_raw=swap_amount, cost_usd=10.0 if side == "buy" else 0.0, stage="quoting")
         response = order(input_mint, output_mint, swap_amount, taker=wallet_address)
+        state.annotate_pending(order_id, request_id=response["requestId"], stage="signing")
         signed = sign_order(response, os.environ["BOT_WALLET_ENCRYPTION_PASSPHRASE"])
+        state.annotate_pending(order_id, stage="submitting")
         result = execute_signed(signed, response["requestId"])
+        state.annotate_pending(order_id, signature=result["signature"], stage="submitted")
         finalized = wait_for_finalized(result["signature"])
+        state.annotate_pending(order_id, stage="finalized")
         after = get_token_balance(wallet_address, mint)
         if side == "buy" and after <= before:
             raise TradingNotReady("Buy token balance not increased: reconciliation needed")
