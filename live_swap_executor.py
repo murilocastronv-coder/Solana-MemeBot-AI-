@@ -3,6 +3,7 @@ No seed phrase is accepted from Telegram. Never log signed transactions.
 Requires a dedicated RPC and Jupiter API key. This is NOT a trading strategy.
 """
 import os, base64, requests, math
+import jupiter_rate_limiter
 from solders.transaction import VersionedTransaction
 from solders.message import to_bytes_versioned
 from solders.signature import Signature
@@ -28,7 +29,7 @@ def quote(input_mint,output_mint,amount,slippage_bps=100):
     if input_mint==output_mint or not 1<=int(amount) or not 1<=int(slippage_bps)<=300:
         raise SwapError("Invalid quote request")
     url="https://api.jup.ag/swap/v1/quote"
-    r=requests.get(url,params={"inputMint":input_mint,"outputMint":output_mint,"amount":str(int(amount)),"slippageBps":int(slippage_bps),"restrictIntermediateTokens":"true"},headers=_headers(),timeout=TIMEOUT)
+    r=jupiter_rate_limiter.get(url,params={"inputMint":input_mint,"outputMint":output_mint,"amount":str(int(amount)),"slippageBps":int(slippage_bps),"restrictIntermediateTokens":"true"},headers=_headers(),timeout=TIMEOUT)
     r.raise_for_status()
     data=r.json()
     if not data.get("routePlan") or data.get("inputMint")!=input_mint or data.get("outputMint")!=output_mint:
@@ -40,7 +41,7 @@ def quote(input_mint,output_mint,amount,slippage_bps=100):
     return data
 
 def build_swap(quote_response,public_address):
-    r=requests.post("https://api.jup.ag/swap/v1/swap",json={"quoteResponse":quote_response,"userPublicKey":public_address,"wrapAndUnwrapSol":True,"dynamicComputeUnitLimit":True},headers=_headers(),timeout=TIMEOUT)
+    r=jupiter_rate_limiter.post("https://api.jup.ag/swap/v1/swap",json={"quoteResponse":quote_response,"userPublicKey":public_address,"wrapAndUnwrapSol":True,"dynamicComputeUnitLimit":True},headers=_headers(),timeout=TIMEOUT)
     r.raise_for_status()
     payload=r.json()
     if not payload.get("swapTransaction"):raise SwapError("No swap transaction")

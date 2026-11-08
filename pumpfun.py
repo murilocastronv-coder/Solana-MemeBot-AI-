@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 
 import requests
+import jupiter_rate_limiter
 
 import live_engine as engine
 import live_trade_state as state
@@ -64,7 +65,7 @@ def fetch():
     tokens, error = {}, None
     for url in FEEDS:
         try:
-            r = requests.get(url, headers=headers(), timeout=12)
+            r = jupiter_rate_limiter.get(url, headers=headers(), timeout=12)
             r.raise_for_status()
             data = r.json()
             items = data if isinstance(data, list) else data.get("tokens") or data.get("data") or []

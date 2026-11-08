@@ -7,6 +7,7 @@ Never log wallet secrets or signed transaction payloads.
 import base64
 import os
 import requests
+import jupiter_rate_limiter
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
 from solders.message import to_bytes_versioned
@@ -34,7 +35,7 @@ def order(input_mint, output_mint, amount, taker=None):
     if taker:
         Pubkey.from_string(taker)
         params["taker"] = taker
-    response = requests.get(BASE + "/order", params=params, headers=headers(), timeout=20)
+    response = jupiter_rate_limiter.get(BASE + "/order", params=params, headers=headers(), timeout=20)
     response.raise_for_status()
     data = response.json()
     if not data.get("requestId") or int(data.get("outAmount", 0)) <= 0:
@@ -77,7 +78,7 @@ def execute_signed(signed_transaction, request_id):
         raise OrderError("Real swaps are disabled")
     if not request_id or not signed_transaction:
         raise OrderError("Missing signed order")
-    response = requests.post(BASE + "/execute", headers=headers(), timeout=45,
+    response = jupiter_rate_limiter.post(BASE + "/execute", headers=headers(), timeout=45,
                              json={"signedTransaction": signed_transaction, "requestId": request_id})
     response.raise_for_status()
     result = response.json()
