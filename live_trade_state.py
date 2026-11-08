@@ -123,20 +123,74 @@ def update_mev_setting(name, value):
                 {"input_lamports": 10_000_000, "min_profit_bps": 75, "jito_tip_lamports": 1_000}.items()}
 
 def record_mev_event(event):
-    """Keep a small, secret-free history for the Telegram menu."""
+    """Keep secret-free MEV history and update an existing bundle as it settles."""
     import time as _time
-    allowed = ("status", "mint", "bundle_id", "estimated_net_lamports", "error")
+    allowed = ("status", "mint", "bundle_id", "estimated_net_lamports",
+               "realized_net_lamports", "signature", "slot", "error", "notification_sent")
     item = {key: event[key] for key in allowed if key in event}
     item["timestamp"] = int(_time.time())
+    if item.get("status") in ("landed", "not_landed"):
+        item.setdefault("notification_sent", False)
     with _LOCK:
         state = _load()
         history = state.setdefault("mev_history", [])
+        bundle_id = item.get("bundle_id")
+        if bundle_id:
+            for index, previous in enumerate(history):
+                if previous.get("bundle_id") == bundle_id:
+                    old_pnl = previous.get("realized_net_lamports") if previous.get("status") == "landed" else None
+                    new_pnl = item.get("realized_net_lamports") if item.get("status") == "landed" else None
+                    if isinstance(new_pnl, int) and not isinstance(new_pnl, bool):
+                        if isinstance(old_pnl, int) and not isinstance(old_pnl, bool):
+                            state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl - old_pnl
+                        else:
+                            state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl
+                            state["mev_confirmed_bundles"] = int(state.get("mev_confirmed_bundles", 0)) + 1
+                    history[index] = {**previous, **item}
+                    state["mev_history"] = history[:30]
+                    _save(state)
+                    return
+        new_pnl = item.get("realized_net_lamports") if item.get("status") == "landed" else None
+        if isinstance(new_pnl, int) and not isinstance(new_pnl, bool):
+            state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl
+            state["mev_confirmed_bundles"] = int(state.get("mev_confirmed_bundles", 0)) + 1
         state["mev_history"] = ([item] + history)[:30]
         _save(state)
 
 def mev_history(limit=5):
     with _LOCK:
         return list(_load().get("mev_history", []))[:max(1, min(int(limit), 20))]
+
+def mev_notifications_pending(limit=5):
+    with _LOCK:
+        events = _load().get("mev_history", [])
+        return [dict(item) for item in events
+                if item.get("status") in ("landed", "not_landed")
+                and not item.get("notification_sent")][:max(1, min(int(limit), 20))]
+
+def mark_mev_notification_sent(bundle_id):
+    if not bundle_id:
+        return
+    with _LOCK:
+        state = _load()
+        for item in state.get("mev_history", []):
+            if item.get("bundle_id") == bundle_id and item.get("status") in ("landed", "not_landed"):
+                item["notification_sent"] = True
+                _save(state)
+                return
+
+def mev_pnl_summary():
+    """Return lifetime confirmed realized P/L in lamports and bundle count."""
+    with _LOCK:
+        state = _load()
+        if "mev_realized_total_lamports" in state or "mev_confirmed_bundles" in state:
+            return int(state.get("mev_realized_total_lamports", 0)), int(state.get("mev_confirmed_bundles", 0))
+        events = state.get("mev_history", [])
+        confirmed = [item for item in events
+                     if item.get("status") == "landed"
+                     and isinstance(item.get("realized_net_lamports"), int)
+                     and not isinstance(item.get("realized_net_lamports"), bool)]
+        return sum(item["realized_net_lamports"] for item in confirmed), len(confirmed)
 
 def positions_by_mode(mode):
     with _LOCK:

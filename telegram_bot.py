@@ -303,9 +303,16 @@ def handle(update):
   return
  elif action=="mev_history":
   try:
-   events=trade_state.mev_history(5);lines=["📜 HISTÓRICO MEV"]
-   for x in events:lines.append(datetime.fromtimestamp(x.get("timestamp",0),timezone.utc).strftime("%d/%m %H:%M UTC")+" · "+str(x.get("status","?"))+" · "+str(x.get("mint","")[:8]))
-   send(chat,"\n".join(lines if events else ["Ainda sem histórico MEV."]),keyboard())
+   events=trade_state.mev_history(8)
+   total_lamports,closed=trade_state.mev_pnl_summary()
+   lines=["📜 HISTÓRICO MEV",
+          "P/L realizado confirmado: "+format(total_lamports/1e9,"+.8f")+" SOL · bundles: "+str(closed)]
+   for x in events:
+    line=datetime.fromtimestamp(x.get("timestamp",0),timezone.utc).strftime("%d/%m %H:%M UTC")+" · "+str(x.get("status","?"))+" · "+str(x.get("mint","")[:8])
+    if isinstance(x.get("realized_net_lamports"),int):
+     line+=" · P/L "+format(x["realized_net_lamports"]/1e9,"+.8f")+" SOL"
+    lines.append(line)
+   send(chat,"\n".join(lines if events else ["Ainda sem histórico MEV.","P/L realizado confirmado: "+format(total_lamports/1e9,"+.8f")+" SOL"]),keyboard())
   except Exception as exc:send(chat,"Histórico indisponível ("+type(exc).__name__+").",keyboard())
   return
  legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","sniper_on","sniper_off","pumpfun_on","pumpfun_off"}
@@ -530,11 +537,30 @@ def startup_notice():
   "\n📦 Posições abertas: "+str(st["positions"])+"/3 (stop e venda automática continuam)"+
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 def loop():
- offset=None;next_scan=0;next_positions=0;next_sniper=0;next_btc=0;last_recovery_notice=time.monotonic()
+ offset=None;next_scan=0;next_positions=0;next_sniper=0;next_btc=0;next_mev_reconcile=0;last_recovery_notice=time.monotonic()
  try:startup_notice()
  except Exception:logging.exception("startup notice failed")
  while True:
   try:
+   if active_chat() and time.monotonic()>=next_mev_reconcile:
+    next_mev_reconcile=time.monotonic()+20
+    try:
+     from jito_arbitrage import reconcile_pending_bundle
+     reconcile_pending_bundle()
+     for settled in trade_state.mev_notifications_pending(3):
+      try:
+       if settled["status"]=="landed":
+        pnl=settled.get("realized_net_lamports")
+        pnl_text=("P/L realizado: "+format(pnl/1e9,"+.8f")+" SOL" if isinstance(pnl,int) else "P/L ainda indisponível no RPC")
+        message="✅ Arbitragem Jito confirmada na Solana.\nContrato: "+str(settled.get("mint",""))+"\n"+pnl_text
+        if settled.get("signature"):message+="\nAssinatura: "+str(settled["signature"])
+       else:
+        message="⚠️ Bundle Jito não aterrissou; ciclo atômico não executado.\nID: "+str(settled.get("bundle_id",""))
+       send(active_chat(),message,keyboard())
+       trade_state.mark_mev_notification_sent(settled.get("bundle_id"))
+      except Exception as exc:
+       logging.warning("MEV Telegram notification deferred type=%s",type(exc).__name__)
+    except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
    if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
     next_scan=time.monotonic()+max(60,INTERVAL)
     try:

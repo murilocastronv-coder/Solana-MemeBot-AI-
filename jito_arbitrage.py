@@ -157,6 +157,98 @@ def _bundle_status(bundle_id):
     return "unknown"
 
 
+def _bundle_detail(bundle_id):
+    result = _jito("getBundleStatuses", [[bundle_id]])
+    values = result.get("value", []) if isinstance(result, dict) else []
+    return values[0] if values and isinstance(values[0], dict) else None
+
+
+def _realized_net_lamports(bundle):
+    """Sum the bot wallet's on-chain SOL balance delta across landed bundle txs."""
+    signatures = bundle.get("transactions") or bundle.get("signatures") or []
+    if not signatures:
+        return None
+    owner = get_address()
+    rpc_url = os.getenv("SOLANA_RPC_URL", "").strip()
+    if not owner or not rpc_url:
+        return None
+    total = 0
+    for item in signatures:
+        signature = item.get("signature") or item.get("transactionId") if isinstance(item, dict) else item
+        if not isinstance(signature, str) or not signature:
+            return None
+        response = requests.post(rpc_url, json={"jsonrpc": "2.0", "id": 1,
+            "method": "getTransaction", "params": [signature, {
+                "encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]}, timeout=15)
+        response.raise_for_status()
+        result = response.json().get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("meta"), dict):
+            return None
+        message = (result.get("transaction") or {}).get("message") or {}
+        keys = message.get("accountKeys") or []
+        key_strings = [key.get("pubkey") if isinstance(key, dict) else key for key in keys]
+        if owner not in key_strings:
+            return None
+        index = key_strings.index(owner)
+        before, after = result["meta"].get("preBalances", []), result["meta"].get("postBalances", [])
+        if index >= len(before) or index >= len(after):
+            return None
+        total += int(after[index]) - int(before[index])
+    return total
+
+
+def reconcile_pending_bundle():
+    """Resolve one Jito bundle and record chain-confirmed P/L for Telegram."""
+    if not _LOCK.acquire(blocking=False):
+        return None
+    try:
+        path = _pending_path()
+        if not path.exists():
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        bundle_id = record.get("bundle_id")
+        if not bundle_id:
+            return None  # uncertain send: fail closed and never retry
+        inflight = "unknown"
+        try:
+            inflight = _bundle_status(bundle_id)
+        except Exception as exc:
+            LOG.warning("Jito inflight status lookup failed type=%s", type(exc).__name__)
+        detail = None
+        try:
+            detail = _bundle_detail(bundle_id)
+        except Exception as exc:
+            LOG.warning("Jito bundle detail lookup failed type=%s", type(exc).__name__)
+        status = str((detail or {}).get("confirmation_status") or
+                     (detail or {}).get("status") or inflight).lower()
+        if status not in ("landed", "confirmed", "finalized", "failed", "invalid"):
+            return None
+        landed = status in ("landed", "confirmed", "finalized")
+        signatures = (detail or {}).get("transactions") or []
+        realized = None
+        if landed:
+            try:
+                realized = _realized_net_lamports(detail or {})
+            except Exception as exc:
+                LOG.warning("MEV realized P/L lookup failed type=%s", type(exc).__name__)
+        event = {"status": "landed" if landed else "not_landed",
+                 "mint": record.get("mint", ""), "bundle_id": bundle_id,
+                 "estimated_net_lamports": record.get("estimated_net_lamports"),
+                 "realized_net_lamports": realized,
+                 "signature": signatures[0] if signatures else None,
+                 "slot": (detail or {}).get("slot") or (detail or {}).get("landed_slot")}
+        import live_trade_state
+        live_trade_state.record_mev_event(event)
+        path.unlink(missing_ok=True)
+        LOG.info("Resolved Jito bundle status=%s id=%s", event["status"], bundle_id[:10])
+        return event
+    finally:
+        _LOCK.release()
+
+
 def _pending_path():
     configured = os.getenv("MEV_PENDING_FILE", "").strip()
     if configured:
@@ -177,30 +269,8 @@ def _save_pending(record):
 
 
 def _has_unresolved_bundle():
-    path = _pending_path()
-    if not path.exists():
-        return False
-    try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return True  # corrupted state blocks new spends
-    bundle_id = record.get("bundle_id")
-    if not bundle_id:
-        return True  # send outcome was uncertain; never resend automatically
-    try:
-        status = _bundle_status(bundle_id)
-        if status == "unknown":
-            result = _jito("getBundleStatuses", [[bundle_id]])
-            values = result.get("value", []) if isinstance(result, dict) else []
-            if values:
-                status = str(values[0].get("confirmation_status") or values[0].get("status") or "unknown").lower()
-        if status in ("landed", "confirmed", "finalized", "failed", "invalid"):
-            path.unlink(missing_ok=True)
-            LOG.info("Resolved previous Jito bundle status=%s id=%s", status, bundle_id[:10])
-            return False
-    except Exception as exc:
-        LOG.warning("Could not reconcile previous Jito bundle: %s", type(exc).__name__)
-    return True
+    # Reconciliation owns terminal bundle cleanup so Telegram can notify and record P/L first.
+    return _pending_path().exists()
 
 
 def _mint_is_fixed(mint):
@@ -314,7 +384,8 @@ def try_arbitrage(mint, quote_only=False):
     bundle_id = _jito("sendBundle", [encoded, {"encoding": "base64"}])
     if not isinstance(bundle_id, str) or not bundle_id:
         raise RuntimeError("Jito did not return a bundle ID")
-    _save_pending({"status": "pending", "bundle_id": bundle_id, "created_at": int(time.time()), "mint": mint})
+    _save_pending({"status": "pending", "bundle_id": bundle_id, "created_at": int(time.time()), "mint": mint,
+                  "estimated_net_lamports": net_minimum, "input_lamports": amount})
     # Do not automatically retry an uncertain bundle; the caller must reconcile it.
     return {"status": "submitted_pending", "bundle_id": bundle_id, "mint": mint,
             "estimated_net_lamports": net_minimum}
