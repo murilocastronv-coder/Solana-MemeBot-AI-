@@ -202,10 +202,17 @@ def _rpc(method, params):
         raise RuntimeError("RPC " + method + " resposta inválida") from None
 
 
+_TIP_CACHE = {"at": 0.0, "accounts": []}
+
+
 def _tip_account():
-    accounts = _jito("getTipAccounts", [])
-    if not isinstance(accounts, list) or not accounts:
-        raise RuntimeError("Jito returned no tip accounts")
+    # The tip account list rarely changes: keep it 10 min instead of asking on every send.
+    if time.monotonic() - _TIP_CACHE["at"] > 600 or not _TIP_CACHE["accounts"]:
+        accounts = _jito("getTipAccounts", [])
+        if not isinstance(accounts, list) or not accounts:
+            raise RuntimeError("Jito returned no tip accounts")
+        _TIP_CACHE.update(at=time.monotonic(), accounts=accounts)
+    accounts = _TIP_CACHE["accounts"]
     # Stable rotation avoids repeatedly contending for the first account.
     return Pubkey.from_string(accounts[int(time.time()) % len(accounts)])
 
@@ -404,6 +411,18 @@ def _live_enabled():
         return False
 
 
+_BALANCE_CACHE = {"at": 0.0, "owner": "", "lamports": -1}
+
+
+def _cached_balance(owner, max_age=15):
+    """Wallet SOL balance, re-read at most every 15 s (saves a round trip per send)."""
+    if _BALANCE_CACHE["owner"] != owner or time.monotonic() - _BALANCE_CACHE["at"] > max_age:
+        payload = _rpc("getBalance", [owner, {"commitment": "confirmed"}])
+        lamports = int(((payload or {}).get("result") or {}).get("value", -1))
+        _BALANCE_CACHE.update(at=time.monotonic(), owner=owner, lamports=lamports)
+    return _BALANCE_CACHE["lamports"]
+
+
 def _preflight(signer, amount, tip_lamports, first, second):
     """MEV-only readiness gate; do not enable the separate spot trader globally."""
     import live_trade_state
@@ -427,8 +446,7 @@ def _preflight(signer, amount, tip_lamports, first, second):
         raise RuntimeError("Configured signer does not match the bot wallet")
     priority = _priority_fee_lamports(first) + _priority_fee_lamports(second)
     rent_reserve = _int_env("MEV_RENT_RESERVE_LAMPORTS", 10_000_000, 0, 100_000_000)
-    payload = _rpc("getBalance", [str(signer.pubkey()), {"commitment": "confirmed"}])
-    balance = int(((payload or {}).get("result") or {}).get("value", -1))
+    balance = _cached_balance(str(signer.pubkey()))
     if balance < amount + tip_lamports + priority + rent_reserve:
         raise RuntimeError("Bot wallet SOL balance is below the trade and fee reserve")
 
@@ -533,7 +551,10 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
     token_amount = int(first["otherAmountThreshold"])
     if token_amount <= 0:
         raise RuntimeError("First Jupiter route returned no tokens")
-    second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()), dexes=sell_dexes)
+    # One sell quote only (no second build): its minimum output is locked at the
+    # expected value (MEV_SELL_SLIPPAGE_BPS=0), which saves >1 s of Jupiter rate limit.
+    second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()), dexes=sell_dexes,
+                    slippage_bps=_int_env("MEV_SELL_SLIPPAGE_BPS", 0, 0, 50))
     required_profit = max(_int_env("MEV_MIN_NET_PROFIT_LAMPORTS", 10_000, 1_000, 10_000_000),
                           amount * min_bps // 10_000)
 
@@ -550,10 +571,6 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
         return {"status": "no_edge", "mint": mint, "input_lamports": amount,
                 "expected_back_lamports": expected_back,
                 "estimated_net_lamports": expected_back - amount - _costs(second)}
-    slippage = _locked_slippage_bps(expected_back, required_back)
-    if slippage < 50:
-        second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()), dexes=sell_dexes,
-                        slippage_bps=slippage)
     minimum_back = int(second["otherAmountThreshold"])
     net_minimum = minimum_back - amount - _costs(second)
     if net_minimum < required_profit:

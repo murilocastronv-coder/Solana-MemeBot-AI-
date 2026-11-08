@@ -364,7 +364,7 @@ def background_loop():
   try:
    beat("reconciliação MEV")
    if active_chat() and time.monotonic()>=next_mev_reconcile:
-    next_mev_reconcile=time.monotonic()+20
+    next_mev_reconcile=time.monotonic()+5
     try:
      from jito_arbitrage import reconcile_pending_bundle
      reconcile_pending_bundle()

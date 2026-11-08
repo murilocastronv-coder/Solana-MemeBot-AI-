@@ -45,14 +45,12 @@ class StrategyTests(unittest.TestCase):
         self.assertLess(result["estimated_net_lamports"], 0)
 
     def test_expected_profit_is_taken_with_locked_floor(self):
-        # +2% expected: old worst-case math (-0.5%) would still pass, but +0.6%
-        # expected would not. Use +0.6% to show the new behaviour.
+        # One sell quote only, with its minimum locked at the expected value.
         expected = REQUIRED + 30_000
-        floor_build = build(expected, REQUIRED + 5_000)
-        result, calls = self.run_with([build(1000, 995), build(expected, expected - 50_000), floor_build])
+        result, calls = self.run_with([build(1000, 995), build(expected, expected)])
         self.assertEqual(result["status"], "dry_run_opportunity")
-        self.assertEqual(len(calls), 3)
-        self.assertLess(calls[-1], 50)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[-1], 0)
         self.assertGreaterEqual(result["estimated_net_lamports"], 10_000)
 
     def test_floor_never_below_required(self):
@@ -79,7 +77,7 @@ class StrategyTests(unittest.TestCase):
 
     def test_live_failure_is_reported(self):
         expected = REQUIRED + 30_000
-        builds = [build(1000, 995), build(expected, expected - 50_000), build(expected, REQUIRED + 5_000)]
+        builds = [build(1000, 995), build(expected, expected)]
         with patch.object(j, "_build", side_effect=lambda *a, **k: builds.pop(0)), \
              patch.object(j, "_live_enabled", return_value=True), \
              patch.object(j, "_preflight", side_effect=RuntimeError("Bot wallet SOL balance is below the trade")):
@@ -196,6 +194,19 @@ class SkipCooldownTests(unittest.TestCase):
             out = self._cycle(fake)
         self.assertEqual(calls, [["A"], None])
         self.assertEqual(out[0]["status"], "no_edge")
+
+
+class CacheTests(unittest.TestCase):
+    def test_tip_accounts_and_balance_are_cached(self):
+        from solders.keypair import Keypair
+        j._TIP_CACHE.update(at=0.0, accounts=[]); j._BALANCE_CACHE.update(at=0.0, owner="", lamports=-1)
+        tip = str(Keypair().pubkey())
+        with patch.object(j, "_jito", return_value=[tip]) as jito, \
+             patch.object(j, "_rpc", return_value={"result": {"value": 123}}) as rpc:
+            for _ in range(3):
+                self.assertEqual(str(j._tip_account()), tip)
+                self.assertEqual(j._cached_balance("W"), 123)
+        self.assertEqual((jito.call_count, rpc.call_count), (1, 1))
 
 
 class ErrorLabelTests(unittest.TestCase):
