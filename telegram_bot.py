@@ -64,6 +64,8 @@ def keyboard():
   [{"text":"📊 Status MEV","callback_data":"mev_status"},{"text":"⚙️ Configurar MEV","callback_data":"mev_config"}],
   [{"text":"🧪 Simulação","callback_data":"mev_mode_sim"},{"text":"💰 Modo REAL","callback_data":"mev_mode_real"}],
   [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
+  [{"text":"🧪 Trading SIM ON","callback_data":"tsim_on"},{"text":"⏹️ Trading SIM OFF","callback_data":"tsim_off"}],
+  [{"text":"📈 Status Trading SIM","callback_data":"tsim_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def mev_config_keyboard():
@@ -282,6 +284,13 @@ def handle(update):
   "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
   "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
   "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off"}
+ if action in ("tsim_on","tsim_off","tsim_status","/tsim","/tsim_reset"):
+  import trading_sim
+  if action=="tsim_on":trading_sim.set_enabled(True)
+  elif action=="tsim_off":trading_sim.set_enabled(False)
+  elif action=="/tsim_reset":trading_sim.reset()
+  prefix={"tsim_on":"🧪 Simulação da Estratégia B LIGADA (nenhuma ordem real).\n\n","tsim_off":"⏹️ Simulação desligada; o histórico fica salvo.\n\n","/tsim_reset":"🔄 Simulação reiniciada.\n\n"}.get(action,"")
+  send(chat,prefix+trading_sim.status_text(),keyboard());return
  if action in legacy or action.startswith("lev_"):
   try:btc_perps.set_enabled(False)
   except Exception:pass
@@ -359,7 +368,7 @@ def beat(step):
  HEARTBEAT.update(at=time.time(),step=step)
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
- next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;next_snipe=0;last_recovery_notice=time.monotonic()
+ next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;next_snipe=0;next_tsim=0;next_tsim_buy=0;last_recovery_notice=time.monotonic()
  while True:
   try:
    beat("reconciliação MEV")
@@ -387,6 +396,18 @@ def background_loop():
     next_sync=time.monotonic()+60
     try:live_engine.sync_positions(send,active_chat())
     except Exception:logging.exception("position sync failed")
+   beat("simulação estratégia B")
+   if active_chat() and time.monotonic()>=next_tsim:
+    next_tsim=time.monotonic()+20
+    try:
+     import trading_sim
+     for c in trading_sim.exit_cycle():
+      send(active_chat(),"🧪 SIM "+("💰 LUCRO" if c["pnl_usd"]>0 else "🔻 PREJUÍZO")+" — vendeu "+str(c["symbol"])+" ("+("TP" if c["reason"]=="take_profit" else "SL")+"): "+format(c["pnl_usd"],"+.2f")+" USD")
+     if trading_sim.enabled() and time.monotonic()>=next_tsim_buy:
+      next_tsim_buy=time.monotonic()+30
+      for o in trading_sim.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES)):
+       send(active_chat(),"🧪 SIM 🟢 comprou "+o["symbol"]+" · US$ "+format(o["cost_usd"],".2f")+"\n"+o["mint"])
+    except Exception:logging.exception("trading sim cycle failed")
    beat("devolução de depósito")
    if active_chat() and time.monotonic()>=next_reclaim:
     next_reclaim=time.monotonic()+600
