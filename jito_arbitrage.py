@@ -361,7 +361,7 @@ def try_arbitrage(mint, quote_only=False):
     second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()))
     minimum_back = int(second["otherAmountThreshold"])
     fixed_cost_reserve = 10_000 + _priority_fee_lamports(first) + _priority_fee_lamports(second)
-    required_profit = max(_int_env("MEV_MIN_NET_PROFIT_LAMPORTS", 100_000, 1_000, 10_000_000),
+    required_profit = max(_int_env("MEV_MIN_NET_PROFIT_LAMPORTS", 10_000, 1_000, 10_000_000),
                           amount * min_bps // 10_000)
     net_minimum = minimum_back - amount - tip_lamports - fixed_cost_reserve
     if net_minimum < required_profit:
