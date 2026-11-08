@@ -237,6 +237,7 @@ def reconcile_pending_bundle():
         event = {"status": "landed" if landed else "not_landed",
                  "mint": record.get("mint", ""), "bundle_id": bundle_id,
                  "estimated_net_lamports": record.get("estimated_net_lamports"),
+                 "submitted_at": record.get("created_at"),
                  "realized_net_lamports": realized,
                  "signature": signatures[0] if signatures else None,
                  "slot": (detail or {}).get("slot") or (detail or {}).get("landed_slot")}
