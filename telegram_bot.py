@@ -436,7 +436,7 @@ def handle(update):
  if action=="candle_on":
   try:
    live_engine.start();trade_state.set_flag("candle_enabled",True)
-   send(chat,"🕯️ VELA 1 MIN LIGADA — DINHEIRO REAL\nA cada vela nova de 1 minuto, compra a moeda com mais hype agora (mais volume em 5 min, liquidez ≥ US$ 100 mil, ≥ 150 negócios em 5 min, 6h+ de vida, anti-golpe OK) e vende quando a vela fecha. Só entra se comprar e vender na hora custar ≤ "+format(live_engine.CANDLE_MAX_ROUNDTRIP_COST*100,".1f")+"%.\nTamanho: "+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta por vela. Stop −6% no meio da vela. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Vela de 1 min é quase cara ou coroa e cada operação paga taxas: o mais provável é perder aos poucos. Acompanhe pelo 📈 Status Trading.",keyboard())
+   send(chat,"🕯️ VELA 1 MIN LIGADA — DINHEIRO REAL\nA cada vela nova de 1 minuto, compra a moeda com mais hype agora (mais volume em 5 min, liquidez ≥ US$ 100 mil, ≥ 150 negócios em 5 min, 6h+ de vida, anti-golpe OK) e vende no ALVO de +"+format(live_engine.CANDLE_TAKE_PROFIT*100,".1f")+"% durante a vela (confere a cada ~4 s), no stop de −"+format(live_engine.CANDLE_STOP*100,".0f")+"%, ou quando a vela fecha. Só entra se comprar e vender na hora custar ≤ "+format(live_engine.CANDLE_MAX_ROUNDTRIP_COST*100,".1f")+"%.\nTamanho: "+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta por vela. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Vela de 1 min é quase cara ou coroa e cada operação paga taxas: o mais provável é perder aos poucos. Acompanhe pelo 📈 Status Trading.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar a vela 1 min: "+str(exc)[:250],keyboard())
   return
  if action=="candle_off":
@@ -802,6 +802,8 @@ def candle_loop():
    if has_open:live_engine.candle_close(send,chat)
    if trade_state.flag("candle_enabled") and trade_state.status()["enabled"]:
     live_engine.candle_open(fetch_cached(MEV_PAIR_SEARCHES,max_age=50),send,chat)
+   if trade_state.positions_by_mode("candle"):
+    live_engine.candle_watch(send,chat,(int(time.time()//60)+1)*60)
   except Exception:logging.exception("candle loop failed");time.sleep(5)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()

@@ -273,7 +273,7 @@ BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
-    "candle": "🕯️ Vende quando a vela de 1 min fechar | 🛑 stop -6% antes disso",
+    "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
@@ -394,6 +394,8 @@ def buy_cycle(rows, send, chat):
 # Buy the hottest token when a 1-minute candle opens, sell when it closes.
 CANDLE_FRACTION = float(os.getenv("CANDLE_FRACTION", "0.05"))
 CANDLE_MAX_ROUNDTRIP_COST = float(os.getenv("CANDLE_MAX_ROUNDTRIP_COST", "0.01"))  # skip if buy+sell costs > 1%
+CANDLE_TAKE_PROFIT = float(os.getenv("CANDLE_TAKE_PROFIT", "0.015"))  # sell inside the candle at +1.5%
+CANDLE_STOP = float(os.getenv("CANDLE_STOP", "0.03"))               # or at -3%
 CANDLE_SCAN = {"at": 0.0, "picked": "", "why": ""}
 
 
@@ -500,6 +502,29 @@ def sell_now(mint, reason, send, chat):
     return "pending"
 
 
+def candle_watch(send, chat, until_ts, check_every=4):
+    """During the candle: sell at the target (peak) or at the stop; otherwise leave it for the close."""
+    from live_exit_monitor import quote_value_usd
+    while time.time() < until_ts - check_every:
+        time.sleep(check_every)
+        for mint, position in list(state._load()["positions"].items()):
+            if position.get("mode") != "candle":
+                continue
+            try:
+                value = quote_value_usd(mint, int(position["token_amount_raw"]))
+                change = value / float(position["cost_usd"]) - 1
+            except Exception:
+                continue
+            reason = "candle_peak" if change >= CANDLE_TAKE_PROFIT else "stop_loss" if change <= -CANDLE_STOP else None
+            if reason:
+                try:
+                    sell_now(mint, reason, send, chat)
+                except Exception as exc:
+                    _failure(send, chat, "venda", mint, exc)
+        if not state.positions_by_mode("candle"):
+            return
+
+
 def candle_close(send, chat):
     """At the candle close: sell every candle position (retries a few times)."""
     for mint, position in list(state._load()["positions"].items()):
@@ -546,7 +571,8 @@ def sell_message(symbol, signal, settled):
     pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0
     why = {"take_profit": "🚀 Stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)",
            "time_stop": "⏱️ Tempo esgotado (não andou a tempo)",
-           "candle_close": "🕯️ Vela de 1 min fechou"}.get(signal["reason"], "🛑 Stop loss")
+           "candle_close": "🕯️ Vela de 1 min fechou",
+           "candle_peak": "🎯 Alvo da vela atingido"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"

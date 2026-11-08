@@ -56,6 +56,23 @@ class CandleTests(unittest.TestCase):
             e.candle_close(lambda *a: None, "1")
         self.assertEqual(sold, [(MINT, "candle_close")])
 
+    def _watch(self, value):
+        sold = []
+        positions = {MINT: {"mode": "candle", "token_amount_raw": "1000", "cost_usd": "10"}}
+        with patch.object(e.state, "_load", return_value={"positions": positions}), \
+             patch.object(e.state, "positions_by_mode", side_effect=lambda m: 0 if sold else 1), \
+             patch("live_exit_monitor.quote_value_usd", return_value=value), \
+             patch.object(e, "sell_now", side_effect=lambda m, r, s, c: sold.append(r)), \
+             patch.object(e.time, "sleep", return_value=None):
+            e.candle_watch(lambda *a: None, "1", time.time() + 0.05, check_every=0.01)
+        return sold
+
+    def test_watch_takes_profit_at_target(self):
+        self.assertEqual(self._watch(10.2), ["candle_peak"])
+
+    def test_watch_stops_loss(self):
+        self.assertEqual(self._watch(9.6), ["stop_loss"])
+
 
 if __name__ == "__main__":
     unittest.main()
