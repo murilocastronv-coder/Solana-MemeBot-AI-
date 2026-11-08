@@ -92,5 +92,42 @@ class TradingSimTests(unittest.TestCase):
         self.assertIn("cotação de venda falhou", t.status_text())
 
 
+class RealModeTests(TradingSimTests):
+    def test_real_buy_goes_through_live_engine_with_fixed_10_usd(self):
+        t.set_real(True)
+        calls = []
+        with patch.object(t, "_real_room", return_value=""), \
+             patch.object(t, "_real_buy", side_effect=lambda p, m, s, send, chat: calls.append((m, s)) or {"status": "settled_buy"}), \
+             patch("live_trade_state._load", return_value={"positions": {}}):
+            opened = t.buy_cycle([pair()], send=lambda *a: None, chat="1")
+        self.assertEqual(calls, [(MINT, "GOOD")])
+        self.assertTrue(opened[0]["real"])
+        self.assertEqual(t._load()["positions"], {})      # simulated book untouched
+
+    def test_real_failure_stops_round_and_limits_respected(self):
+        t.set_real(True)
+        from solders.keypair import Keypair
+        rows = [pair(str(Keypair().pubkey())) for _ in range(3)]
+        with patch.object(t, "_real_room", return_value=""), \
+             patch.object(t, "_real_buy", return_value=None) as buy, \
+             patch("live_trade_state._load", return_value={"positions": {}}):
+            self.assertEqual(t.buy_cycle(rows, send=lambda *a: None, chat="1"), [])
+        self.assertEqual(buy.call_count, 1)
+        with patch.object(t, "_real_room", return_value="5 posições abertas"), patch.object(t, "_real_buy") as buy:
+            t.buy_cycle(rows, send=lambda *a: None, chat="1")
+        buy.assert_not_called()
+
+    def test_real_exit_rules_tp_sl(self):
+        import live_exit_monitor as m
+        pos = {"mode": "tradeB", "peak_ratio": 0}
+        self.assertEqual(m.position_signal(pos, 10, 11.6)["reason"], "take_profit")
+        self.assertEqual(m.position_signal(pos, 10, 9.1)["reason"], "stop_loss")
+        self.assertEqual(m.position_signal(pos, 10, 10.5)["action"], "hold")
+
+    def test_status_says_real(self):
+        t.set_real(True)
+        self.assertIn("DINHEIRO REAL", t.status_text())
+
+
 if __name__ == "__main__":
     unittest.main()

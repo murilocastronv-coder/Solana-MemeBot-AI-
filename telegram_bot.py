@@ -65,7 +65,8 @@ def keyboard():
   [{"text":"🧪 Simulação","callback_data":"mev_mode_sim"},{"text":"💰 Modo REAL","callback_data":"mev_mode_real"}],
   [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
   [{"text":"🧪 Trading SIM ON","callback_data":"tsim_on"},{"text":"⏹️ Trading SIM OFF","callback_data":"tsim_off"}],
-  [{"text":"📈 Status Trading SIM","callback_data":"tsim_status"}],
+  [{"text":"📈 Status Estratégia B","callback_data":"tsim_status"}],
+  [{"text":"💵 Estratégia B REAL ON","callback_data":"tb_real_on"},{"text":"⏹️ Estratégia B REAL OFF","callback_data":"tb_real_off"}],
   [{"text":"💹 Market Making SIM ON","callback_data":"mm_on"},{"text":"⏹️ Market Making OFF","callback_data":"mm_off"}],
   [{"text":"📊 Status Market Making","callback_data":"mm_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -286,6 +287,17 @@ def handle(update):
   "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
   "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
   "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off"}
+ if action in ("tb_real_on","tb_real_off"):
+  import trading_sim
+  try:
+   if action=="tb_real_on":
+    live_engine.start();trading_sim.set_real(True)
+    send(chat,"💵 ESTRATÉGIA B COM DINHEIRO REAL LIGADA\nCompra US$ "+format(trading_sim.ORDER_USD,".0f")+" por moeda (máx. "+str(trading_sim.MAX_POSITIONS)+" posições) só se passar nos filtros, no anti-golpe e no teste de venda. Cada ordem é cotada, assinada, enviada e CONFIRMADA na blockchain antes de contar. Vende sozinho em +"+format(trading_sim.TAKE_PROFIT*100,".0f")+"% ou −"+format(trading_sim.STOP_LOSS*100,".0f")+"%. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Pode dar prejuízo.\n\n"+trading_sim.status_text(),keyboard())
+   else:
+    trading_sim.set_real(False);trade_state.stop()
+    send(chat,"⏹️ Estratégia B REAL desligada: não compra mais. Posições abertas continuam com alvo/stop até vender. A simulação segue.\n\n"+trading_sim.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Não consegui ligar o modo real: "+str(exc)[:200]+"\nNenhuma ordem foi enviada.",keyboard())
+  return
  if action in ("mm_on","mm_off","mm_status","/mm"):
   import mm_sim
   try:
@@ -417,8 +429,8 @@ def background_loop():
       send(active_chat(),"🧪 SIM "+("💰 LUCRO" if c["pnl_usd"]>0 else "🔻 PREJUÍZO")+" — vendeu "+str(c["symbol"])+" ("+("TP" if c["reason"]=="take_profit" else "SL")+"): "+format(c["pnl_usd"],"+.2f")+" USD")
      if trading_sim.enabled() and time.monotonic()>=next_tsim_buy:
       next_tsim_buy=time.monotonic()+30
-      for o in trading_sim.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES)):
-       send(active_chat(),"🧪 SIM 🟢 comprou "+o["symbol"]+" · US$ "+format(o["cost_usd"],".2f")+"\n"+o["mint"])
+      for o in trading_sim.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES),send,active_chat()):
+       if not o.get("real"):send(active_chat(),"🧪 SIM 🟢 comprou "+o["symbol"]+" · US$ "+format(o["cost_usd"],".2f")+"\n"+o["mint"])
     except Exception:logging.exception("trading sim cycle failed")
    beat("devolução de depósito")
    if active_chat() and time.monotonic()>=next_reclaim:

@@ -67,6 +67,15 @@ class LiveEngineTests(unittest.TestCase):
     def send(self, chat, text, *a):
         self.sent.append(text)
 
+    def test_fixed_10_usd_strategy_b_buy_is_confirmed_and_marked(self):
+        live_engine.start(); self.side = "buy"
+        result = live_engine._execute_buy(pair(), MINT, "BONK", self.send, "1", WALLET, None, "tradeB", usd=10)
+        self.assertEqual(result["status"], "settled_buy")
+        pos = state._load()["positions"][MINT]
+        self.assertEqual(pos["mode"], "tradeB")
+        self.assertIn("US$ 10.00 de BONK (valor fixo", self.sent[0])
+        self.assertIn("ESTRATÉGIA B COMPROU BONK", self.sent[1])
+
     def test_buy_then_take_profit_sell(self):
         live_engine.start()
         self.side = "buy"

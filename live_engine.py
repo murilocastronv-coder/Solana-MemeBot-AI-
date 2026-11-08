@@ -126,6 +126,7 @@ def _write_off(send, chat, mint, symbol, no_route):
           if result["halted"] else "") + "\n📄 " + mint)
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
+    "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
     "launch": "🆕 Lançamento: vende se o criador vender, stop móvel 6% abaixo do topo após +10%, alvo +40%, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
     "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
@@ -134,20 +135,24 @@ EXIT_TEXT = {
 }
 
 
-def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode):
+def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
     try:
-        order_usd, value = order_size_usd(wallet, fraction)
+        if usd is not None:   # fixed-size order (Strategy B: US$ 10)
+            value = account_value_usd(wallet)
+            order_usd = round(min(float(usd), bridge.MAX_ORDER_USD), 2)
+        else:
+            order_usd, value = order_size_usd(wallet, fraction)
     except Exception as exc:
         _notice(send, chat, "sizing", "⛔ Não consegui calcular o saldo: " + str(exc)[:150], REPORT_EVERY_SECONDS)
         return None
-    pct = format(fraction * 100, ".0f") + "%"
+    pct = (format(fraction * 100, ".0f") + "%") if usd is None else "valor fixo"
     if order_usd < MIN_ORDER_USD:
         _notice(send, chat, "low_balance_" + mode, "💤 Saldo baixo: conta vale US$ " + format(value, ".2f") +
                 "; " + pct + " = US$ " + format(order_usd, ".2f") + " (mínimo US$ 3). Deposite SOL para operar.",
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B "}.get(mode, "")
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:

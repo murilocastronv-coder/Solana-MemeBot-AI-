@@ -57,7 +57,7 @@ def _path():
 
 
 def _default():
-    return {"enabled": False, "balance": START_USD, "start": START_USD, "positions": {}, "history": []}
+    return {"enabled": False, "real": False, "balance": START_USD, "start": START_USD, "positions": {}, "history": []}
 
 
 def _load():
@@ -91,6 +91,21 @@ def set_enabled(value):
     with _LOCK:
         data = _load()
         data["enabled"] = bool(value)
+        _save(data)
+
+
+def real_enabled():
+    with _LOCK:
+        return bool(_load().get("real"))
+
+
+def set_real(value):
+    """Owner-authorised real mode: orders go through the live engine (Jupiter, confirmed on-chain)."""
+    with _LOCK:
+        data = _load()
+        data["real"] = bool(value)
+        if value:
+            data["enabled"] = True
         _save(data)
 
 
@@ -201,10 +216,32 @@ def _value_usd(mint, tokens):
     return sol_out / 1e9 * _sol_usd()
 
 
-def buy_cycle(rows):
-    """Open simulated positions on the best candidates (most 1h volume first)."""
+def _real_buy(p, mint, symbol, send, chat):
+    """Real order through the live engine: quote, balance, sign, send, confirm on-chain, record."""
+    import live_engine
+    return live_engine._execute_buy(p, mint, symbol, send, chat, live_engine.get_address(), None, "tradeB",
+                                    usd=ORDER_USD)
+
+
+def _real_room():
+    import live_engine
+    import live_trade_state as st
+    if not live_engine.ready():
+        return "robô real bloqueado: " + str(live_engine.why_stopped() or "verificações")
+    allowed, why = st.can_open()
+    if not allowed:
+        return {"Position limit": str(st.MAX_POSITIONS) + " posições abertas",
+                "Daily loss limit": "limite de perda do dia atingido"}.get(why, why)
+    if st.positions_by_mode("tradeB") >= MAX_POSITIONS:
+        return str(MAX_POSITIONS) + " posições abertas"
+    return ""
+
+
+def buy_cycle(rows, send=None, chat=None):
+    """Open positions on the best candidates (most 1h volume first): simulated, or real if authorised."""
     if not enabled():
         return []
+    real = real_enabled() and send is not None and chat is not None
     opened = []
     now = time.monotonic()
     ranked = sorted((p for p in rows or [] if isinstance(p, dict)), key=lambda p: -_f(p, "volume", "h1"))
@@ -215,6 +252,27 @@ def buy_cycle(rows):
             continue
         mint = p["baseToken"]["address"]
         symbol = str(p["baseToken"].get("symbol", "?"))[:20]
+        if real:
+            room = _real_room()
+            if room:
+                _note("blocked", room)
+                break
+            import live_trade_state as st
+            if mint in st._load()["positions"] or now - _tried.get(mint, -RETRY_SECONDS) < RETRY_SECONDS:
+                continue
+            _note("opportunity", symbol)
+            _tried[mint] = now
+            reason = safety_reason(mint)
+            if reason:
+                _note("unsafe", reason)
+                continue
+            settled = _real_buy(p, mint, symbol, send, chat)
+            if settled and settled.get("status") == "settled_buy":
+                _note("bought", symbol)
+                opened.append({"mint": mint, "symbol": symbol, "cost_usd": ORDER_USD, "real": True})
+                continue
+            _note("failed", "compra real não executada")
+            break   # failed/uncertain: stop this round (the engine reconciles pending orders)
         with _LOCK:
             data = _load()
             if len(data["positions"]) >= MAX_POSITIONS:
@@ -300,8 +358,10 @@ def status_text():
     wins = sum(1 for h in hist if h["pnl_usd"] > 0)
     pnl = sum(h["pnl_usd"] for h in hist)
     open_cost = sum(float(p["cost_usd"]) for p in data["positions"].values())
-    lines = ["🧪 ESTRATÉGIA B — TRADING EM SIMULAÇÃO (preço real, dinheiro de mentira)",
-             "Estado: " + ("LIGADA" if data["enabled"] else "DESLIGADA") + " · modo REAL: desativado até sua autorização",
+    real = bool(data.get("real"))
+    lines = [("💵 ESTRATÉGIA B — TRADING COM DINHEIRO REAL" if real else
+              "🧪 ESTRATÉGIA B — TRADING EM SIMULAÇÃO (preço real, dinheiro de mentira)"),
+             "Estado: " + ("LIGADA" if data["enabled"] else "DESLIGADA") + " · modo: " + ("REAL" if real else "simulação"),
              "Regras: US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_POSITIONS) +
              " posições · TP +" + format(TAKE_PROFIT * 100, ".0f") + "% · SL −" + format(STOP_LOSS * 100, ".0f") + "%",
              "Saldo simulado: US$ " + format(data["balance"], ".2f") + " (+ US$ " + format(open_cost, ".2f") +
@@ -313,6 +373,20 @@ def status_text():
     for h in hist[-3:]:
         lines.append(("💰 " if h["pnl_usd"] > 0 else "🔻 ") + str(h["symbol"]) + " " + format(h["pnl_usd"], "+.2f") +
                      " USD · " + ("TP" if h["reason"] == "take_profit" else "SL"))
+    if real:
+        try:
+            import live_trade_state as st
+            pos = {m: p for m, p in st._load()["positions"].items() if p.get("mode") == "tradeB"}
+            pnl_real = st.pnl_summary()
+            lines.append("REAL · posições abertas: " + str(len(pos)) + "/" + str(MAX_POSITIONS) +
+                         " · P/L real hoje: " + format(pnl_real["day_pnl_usd"], "+.2f") + " USD · total: " +
+                         format(pnl_real["total_pnl_usd"], "+.2f") + " USD · perda do dia: US$ " +
+                         format(st.status()["daily_loss_usd"], ".2f") + " / " + format(st.daily_loss_limit(), ".2f"))
+            for m, p in list(pos.items())[:5]:
+                lines.append("💵 " + str(p.get("symbol") or m[:6]) + " · custo US$ " + format(float(p.get("cost_usd", 0)), ".2f"))
+        except Exception as exc:
+            lines.append("REAL · estado indisponível (" + type(exc).__name__ + ")")
+        lines.append("(Saldo simulado abaixo fica parado no modo real.)")
     lines.append(hour_text())
     if LAST_ERROR["text"]:
         lines.append("Último erro: " + LAST_ERROR["text"])

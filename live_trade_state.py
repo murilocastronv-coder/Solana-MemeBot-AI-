@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 _LOCK = threading.RLock()
-MAX_POSITIONS = 3
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
 ORDER_USD = 10.0
 MAX_DAILY_LOSS_USD = 3.0
 # Fixed daily loss limit for spot/sniper trading (owner choice); env overrides.
