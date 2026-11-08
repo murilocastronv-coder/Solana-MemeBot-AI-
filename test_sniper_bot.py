@@ -27,9 +27,10 @@ class SniperFilterTests(unittest.TestCase):
     def test_good_token_passes(self):
         self.assertEqual(s.reasons(token()), [])
 
-    def test_age_window_5_to_25(self):
-        self.assertIn("fora de 5–25 min de vida", s.reasons(token(minutes=3)))
-        self.assertIn("fora de 5–25 min de vida", s.reasons(token(minutes=30)))
+    def test_age_window_5_min_to_3_h(self):
+        self.assertIn("fora da faixa de idade", s.reasons(token(minutes=3)))
+        self.assertNotIn("fora da faixa de idade", s.reasons(token(minutes=150)))
+        self.assertIn("fora da faixa de idade", s.reasons(token(minutes=200)))
 
     def test_needs_more_buyers_and_volume(self):
         self.assertIn("não tem mais compradores que vendedores",
@@ -54,16 +55,25 @@ class SniperFilterTests(unittest.TestCase):
 
 class WatchTests(unittest.TestCase):
     def setUp(self):
-        s.WATCH.clear()
+        s.WATCH.clear(); s.SCORE.clear()
 
     def test_new_tokens_are_followed_until_25_min(self):
         now = time.time() * 1000
-        s.track([token(minutes=1), token(id="B" * 44, minutes=40)], now_ms=now)
-        self.assertEqual(list(s.WATCH), [MINT])                   # 40-min token is not followed
+        s.track([token(minutes=1), token(id="B" * 44, minutes=240)], now_ms=now)
+        self.assertEqual(list(s.WATCH), [MINT])                   # 4-hour token is not followed
         self.assertEqual(s.in_window(now_ms=now), [])            # 1 min old: not yet
         self.assertEqual(s.in_window(now_ms=now + 6 * 60000), [MINT])
-        s.track([], now_ms=now + 30 * 60000)
-        self.assertEqual(s.WATCH, {})                            # dropped after 25 min
+        self.assertEqual(s.in_window(now_ms=now + 120 * 60000), [MINT])   # still followed at 2 h
+        s.track([], now_ms=now + 200 * 60000)
+        self.assertEqual(s.WATCH, {})                            # dropped after 3 h
+
+    def test_refresh_prioritises_liquidity(self):
+        now = time.time() * 1000 - 10 * 60000
+        s.WATCH.update({"LOW": now, "HIGH": now}); s.SCORE.update({"LOW": 1000, "HIGH": 90000})
+        with patch("pumpfun.fetch", return_value=[]), patch.object(s, "_search", return_value=[]) as search, \
+             patch.object(s, "MAX_REFRESH", 1):
+            s.candidates()
+        search.assert_called_once_with(["HIGH"])
 
     def test_candidates_refresh_tokens_in_window(self):
         s.WATCH[MINT] = time.time() * 1000 - 10 * 60000

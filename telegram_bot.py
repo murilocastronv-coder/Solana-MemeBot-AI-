@@ -230,10 +230,10 @@ def handle(update):
  if action in ("vol_sim","vol_real","vol_off","vol_status","/volume"):
   import sniper_bot as sb
   try:
-   if action=="vol_sim":sb.set_mode(True,False);pre="🧪 Sniper de volume (5–25 min) em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
+   if action=="vol_sim":sb.set_mode(True,False);pre="🧪 Sniper de volume (5 min a 3 h) em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
    elif action=="vol_real":
     live_engine.start();sb.set_mode(True,True)
-    pre="📈 SNIPER DE VOLUME COM DINHEIRO REAL LIGADO — moedas do pump.fun com 5 a 25 min, mais compradores que vendedores, volume ≥ US$ "+format(sb.MIN_VOLUME_5M/1000,".0f")+" mil em 5 min, anti-golpe e teste de venda. US$ "+format(sb.ORDER_USD,".0f")+" por compra, máx. "+str(sb.MAX_POSITIONS)+". Stop −12%, stop móvel após +25%, sai em 30 min. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Moeda nova pode virar golpe.\n\n"
+    pre="📈 SNIPER DE VOLUME COM DINHEIRO REAL LIGADO — moedas do pump.fun com "+format(sb.MIN_AGE_MIN,".0f")+" min a "+format(sb.MAX_AGE_MIN/60,"g")+" h, mais compradores que vendedores, volume ≥ US$ "+format(sb.MIN_VOLUME_5M/1000,".0f")+" mil em 5 min, anti-golpe e teste de venda. US$ "+format(sb.ORDER_USD,".0f")+" por compra, máx. "+str(sb.MAX_POSITIONS)+". Stop −12%, stop móvel após +25%, sai em 30 min. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Moeda nova pode virar golpe.\n\n"
    elif action=="vol_off":sb.set_mode(False);pre="⏹️ Sniper de volume desligado. Posições abertas continuam com stop até vender.\n\n"
    else:pre=""
    send(chat,pre+sb.status_text(),keyboard())

@@ -1,10 +1,10 @@
-"""Volume sniper: pump.fun tokens 5-25 minutes old with more buyers than sellers.
+"""Volume sniper: pump.fun tokens 5 min to 3 h old with more buyers than sellers.
 
 Source: Jupiter Tokens API v2 (recent + trending pump.fun tokens) with age,
 liquidity, holders, audit data and 5m/1h trading stats.
 
 Buy only if ALL pass:
-- 5-25 min old;
+- 5 min to 3 h old (SNIPER_MIN_AGE_MIN / SNIPER_MAX_AGE_MIN);
 - more buyers than sellers in the last 5 min (buys >= 1.2x sells) and in 1 h;
 - strong 5-minute volume (>= US$ 10k) and liquidity >= US$ 15k;
 - anti-scam: mint/freeze disabled, top holders < 25%, dev < 5%, >= 100
@@ -36,7 +36,7 @@ def _env(name, default):
 
 ORDER_USD = _env("SNIPER_ORDER_USD", 10)
 MAX_POSITIONS = int(_env("SNIPER_MAX_POSITIONS", 3))
-MIN_AGE_MIN, MAX_AGE_MIN = _env("SNIPER_MIN_AGE_MIN", 5), _env("SNIPER_MAX_AGE_MIN", 25)
+MIN_AGE_MIN, MAX_AGE_MIN = _env("SNIPER_MIN_AGE_MIN", 5), _env("SNIPER_MAX_AGE_MIN", 180)
 MIN_LIQUIDITY = _env("SNIPER_MIN_LIQUIDITY_USD", 15_000)
 MIN_VOLUME_5M = _env("SNIPER_MIN_VOLUME_5M_USD", 10_000)
 BUY_SELL_RATIO = _env("SNIPER_BUY_SELL_RATIO", 1.2)
@@ -52,7 +52,9 @@ HISTORY_MAX = 300
 
 _LOCK = threading.RLock()
 _tried = {}
-WATCH = {}          # pump.fun mint -> creation time (ms): tokens followed until they are 25 min old
+WATCH = {}          # pump.fun mint -> creation time (ms): tokens followed until MAX_AGE_MIN
+SCORE = {}          # mint -> liquidity + 5m volume last seen (refresh priority)
+WATCH_MAX = 3000
 SEARCH_URL = "https://api.jup.ag/tokens/v2/search"
 MAX_REFRESH = int(_env("SNIPER_MAX_REFRESH", 300))
 _RECENT = deque(maxlen=20000)
@@ -141,7 +143,7 @@ def reasons(t, now_ms=None):
     b5, s5 = _num(t, "stats5m", "numBuys"), _num(t, "stats5m", "numSells")
     vol5 = _num(t, "stats5m", "buyVolume") + _num(t, "stats5m", "sellVolume")
     if not MIN_AGE_MIN <= age <= MAX_AGE_MIN:
-        out.append("fora de 5–25 min de vida")
+        out.append("fora da faixa de idade")
     if REQUIRE_GRADUATED and not (t.get("graduatedPool") or t.get("graduatedAt")):
         out.append("ainda na curva do pump.fun (liquidez não queimada)")
     if liq < MIN_LIQUIDITY:
@@ -201,10 +203,14 @@ def track(tokens, now_ms=None):
         created = _created_ms(t) if mint else 0
         if mint and created and (now_ms - created) / 60000 < MAX_AGE_MIN:
             WATCH.setdefault(mint, created)
+            SCORE[mint] = _num(t, "liquidity") + _num(t, "stats5m", "buyVolume") + _num(t, "stats5m", "sellVolume")
     for mint in [m for m, c in WATCH.items() if (now_ms - c) / 60000 > MAX_AGE_MIN]:
         WATCH.pop(mint, None)
-    if len(WATCH) > 5000:
-        WATCH.clear()
+        SCORE.pop(mint, None)
+    if len(WATCH) > WATCH_MAX:   # keep the ones with the most liquidity/volume
+        for mint in sorted(WATCH, key=lambda m: SCORE.get(m, 0))[:len(WATCH) - WATCH_MAX]:
+            WATCH.pop(mint, None)
+            SCORE.pop(mint, None)
 
 
 def in_window(now_ms=None):
@@ -232,11 +238,13 @@ def candidates():
     tokens = pumpfun.fetch()
     track(tokens)
     merged = {(t.get("id") or t.get("address")): t for t in tokens if isinstance(t, dict)}
-    # newest first, capped to keep within the Jupiter rate limit (3 requests per pass)
-    window = sorted(in_window(), key=lambda m: -WATCH.get(m, 0))[:MAX_REFRESH]
+    # most liquidity/volume first, capped to keep within the Jupiter rate limit (3 requests per pass)
+    window = sorted(in_window(), key=lambda m: -SCORE.get(m, 0))[:MAX_REFRESH]
     if window:
         try:
-            for t in _search(window):
+            fresh = _search(window)
+            track(fresh)    # refresh the priority scores
+            for t in fresh:
                 merged[t.get("id") or t.get("address")] = t
         except Exception as exc:
             LAST_ERROR["text"] = "atualização das moedas em acompanhamento falhou: " + type(exc).__name__
@@ -360,7 +368,7 @@ def status_text():
         d = _load()
     mode = "REAL" if d["enabled"] and d["real"] else ("SIMULAÇÃO" if d["enabled"] else "DESLIGADO")
     hist = d["history"]
-    lines = ["📈 SNIPER DE VOLUME 5–25 MIN (pump.fun) — " + mode,
+    lines = ["📈 SNIPER DE VOLUME " + format(MIN_AGE_MIN, ".0f") + " MIN–" + format(MAX_AGE_MIN / 60, "g") + " H (pump.fun) — " + mode,
              "US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_POSITIONS) +
              " posições · stop −12% · stop móvel 12% abaixo do topo após +25% · sai em 30 min",
              "Simulação: saldo US$ " + format(d["balance"], ".2f") + " · operações " + str(len(hist)) + " (" +
