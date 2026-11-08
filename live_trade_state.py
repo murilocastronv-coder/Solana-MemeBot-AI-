@@ -123,20 +123,39 @@ def update_mev_setting(name, value):
                 {"input_lamports": 10_000_000, "min_profit_bps": 75, "jito_tip_lamports": 1_000}.items()}
 
 def record_mev_event(event):
-    """Keep a small, secret-free history for the Telegram menu."""
+    """Keep secret-free MEV history and update an existing bundle as it settles."""
     import time as _time
-    allowed = ("status", "mint", "bundle_id", "estimated_net_lamports", "error")
+    allowed = ("status", "mint", "bundle_id", "estimated_net_lamports",
+               "realized_net_lamports", "signature", "slot", "error")
     item = {key: event[key] for key in allowed if key in event}
     item["timestamp"] = int(_time.time())
     with _LOCK:
         state = _load()
         history = state.setdefault("mev_history", [])
+        bundle_id = item.get("bundle_id")
+        if bundle_id:
+            for index, previous in enumerate(history):
+                if previous.get("bundle_id") == bundle_id:
+                    history[index] = {**previous, **item}
+                    state["mev_history"] = history[:30]
+                    _save(state)
+                    return
         state["mev_history"] = ([item] + history)[:30]
         _save(state)
 
 def mev_history(limit=5):
     with _LOCK:
         return list(_load().get("mev_history", []))[:max(1, min(int(limit), 20))]
+
+def mev_pnl_summary():
+    """Return (confirmed realized P/L in lamports, confirmed bundles with P/L)."""
+    with _LOCK:
+        events = _load().get("mev_history", [])
+        confirmed = [item for item in events
+                     if item.get("status") == "landed"
+                     and isinstance(item.get("realized_net_lamports"), int)
+                     and not isinstance(item.get("realized_net_lamports"), bool)]
+        return sum(item["realized_net_lamports"] for item in confirmed), len(confirmed)
 
 def positions_by_mode(mode):
     with _LOCK:
