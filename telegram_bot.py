@@ -85,7 +85,7 @@ def mev_status_text():
   return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
    "Execução: "+("REAL armada" if armed and trade_state.mev_live_allowed() else "SIMULAÇÃO / cotação")+"\n"+
    "Permissão real no Render: "+("ATIVADA" if trade_state.mev_live_allowed() else "DESATIVADA")+"\n"+
-   "Carteira: "+(wallet or "não configurada")+"\n"+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
+   "Carteira: "+(wallet or "não configurada")+"\n"+__import__("jito_arbitrage").coverage_text()+"\n"+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
    "Limite: 30 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
    "Proteção diária: "+guard_reason)
@@ -794,6 +794,8 @@ def mev_scan_now(chat):
    header+="\n(última análise automática, "+datetime.fromtimestamp(ja.LAST_RESULTS["at"],timezone.utc).strftime("%H:%M:%S UTC")+")"
   if not outcomes:
    send(chat,"⏳ Primeira análise ainda rodando. Tente de novo em 1 minuto.",keyboard());return
+  try:header+="\n"+ja.coverage_text()
+  except Exception:pass
   send(chat,"\n".join([header]+[mev_result_line(x) for x in outcomes[:12]]),keyboard())
  except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
 MEV_SCAN_SECONDS=max(1.0,float(os.getenv("MEV_SCAN_SECONDS","2")))

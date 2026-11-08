@@ -602,6 +602,7 @@ def _send_live(mint, signer, amount, tip_lamports, first, second, net_minimum):
 _LAST_CHECKED = {}
 LAST_RESULTS = {"at": 0.0, "results": []}
 _COOLDOWN = {}
+COVERAGE = {"universe": 0, "waiting": 0}
 _ARB_SKIP_REASONS = {"not_solana", "missing_token_address"}
 
 
@@ -615,7 +616,7 @@ def pick_candidates(assessments, limit=None, now=None):
     every token gets checked over successive cycles.
     """
     limit = limit or _int_env("MEV_TOKENS_PER_CYCLE", 3, 1, 30)
-    recheck = _int_env("MEV_RECHECK_SECONDS", 60, 0, 3600)
+    recheck = _int_env("MEV_RECHECK_SECONDS", 300, 0, 3600)
     now = time.monotonic() if now is None else now
     unique = {}
     for item in assessments or []:
@@ -632,13 +633,24 @@ def pick_candidates(assessments, limit=None, now=None):
     for item in unique.values():
         route = _cross_dex_route(item.get("dex_pools"))
         spread = route["spread_pct"] if route else 0.0
-        fresh = now - _LAST_CHECKED.get(item["token"], -1e9) >= recheck
-        if fresh or spread >= 1.0:
+        # Every token waits its turn (no shortcut for "big spread" tokens, which
+        # are often the same untradeable ones): the whole list rotates.
+        if now - _LAST_CHECKED.get(item["token"], -1e9) >= recheck:
             ranked.append((spread, item, route))
     ranked.sort(key=lambda x: (-x[0], _LAST_CHECKED.get(x[1]["token"], -1e9)))
     if len(_LAST_CHECKED) > 5000:
         _LAST_CHECKED.clear()
+    COVERAGE["universe"] = len(unique)
+    COVERAGE["waiting"] = len(ranked)
     return [(item, route) for _, item, route in ranked[:limit]]
+
+
+def coverage_text(now=None):
+    """How many tokens the rotation is covering."""
+    now = time.monotonic() if now is None else now
+    last_hour = sum(1 for t in _LAST_CHECKED.values() if now - t < 3600)
+    return ("Moedas na lista: " + str(COVERAGE["universe"]) + " | analisadas na última hora: " +
+            str(last_hour) + " | pausadas (sem rota/autoridade): " + str(sum(1 for t in _COOLDOWN.values() if t > now)))
 
 
 _ERROR_LABELS = (

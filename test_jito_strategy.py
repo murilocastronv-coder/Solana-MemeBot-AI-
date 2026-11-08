@@ -106,6 +106,15 @@ class CandidateTests(unittest.TestCase):
         picked = [i["token"] for i, _ in j.pick_candidates(rows, limit=10, now=0)]
         self.assertEqual(picked, ["B", "young", "A"])
 
+    def test_big_spread_token_waits_its_turn(self):
+        rows = [self.item("BIG", prices=(1.0, 1.05)), self.item("A"), self.item("B")]
+        first = [i["token"] for i, _ in j.pick_candidates(rows, limit=1, now=1000)]
+        self.assertEqual(first, ["BIG"])
+        j._LAST_CHECKED["BIG"] = 1000
+        second = [i["token"] for i, _ in j.pick_candidates(rows, limit=1, now=1010)]
+        self.assertNotEqual(second, ["BIG"])
+        self.assertIn("Moedas na lista: 3", j.coverage_text(now=1010))
+
     def test_cooldown_skips_phantom_token(self):
         j._COOLDOWN["B"] = 10_000
         rows = [self.item("A"), self.item("B")]
