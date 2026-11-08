@@ -64,13 +64,6 @@ def keyboard():
   [{"text":"📊 Status MEV","callback_data":"mev_status"},{"text":"⚙️ Configurar MEV","callback_data":"mev_config"}],
   [{"text":"🧪 Simulação","callback_data":"mev_mode_sim"},{"text":"💰 Modo REAL","callback_data":"mev_mode_real"}],
   [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
-  [{"text":"🧪 Trading SIM ON","callback_data":"tsim_on"},{"text":"⏹️ Trading SIM OFF","callback_data":"tsim_off"}],
-  [{"text":"📈 Status Estratégia B","callback_data":"tsim_status"}],
-  [{"text":"💵 Estratégia B REAL ON","callback_data":"tb_real_on"},{"text":"⏹️ Estratégia B REAL OFF","callback_data":"tb_real_off"}],
-  [{"text":"🎯 Sniper SIM","callback_data":"sn_sim"},{"text":"🎯 Sniper REAL","callback_data":"sn_real"}],
-  [{"text":"⏹️ Sniper OFF","callback_data":"sn_off"},{"text":"📊 Status Sniper","callback_data":"sn_status"}],
-  [{"text":"💹 Market Making SIM ON","callback_data":"mm_on"},{"text":"⏹️ Market Making OFF","callback_data":"mm_off"}],
-  [{"text":"📊 Status Market Making","callback_data":"mm_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def mev_config_keyboard():
@@ -288,53 +281,13 @@ def handle(update):
   "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
   "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
   "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
-  "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off"}
- if action in ("sn_sim","sn_real","sn_off","sn_status","/sniper"):
-  import sniper_bot
-  try:
-   if action=="sn_sim":
-    sniper_bot.set_mode(True,False);msg="🧪 Sniper 10–60 min LIGADO em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
-   elif action=="sn_real":
-    live_engine.start();sniper_bot.set_mode(True,True)
-    msg="🎯 SNIPER 10–60 MIN COM DINHEIRO REAL LIGADO — risco muito alto\nSó moedas do pump.fun já formadas (liquidez queimada), ≥ 200 donos, dev < 5%, maiores donos < 25%, não suspeitas, volume real, com redes, compra forte, anti-golpe na blockchain e teste de venda. US$ "+format(sniper_bot.ORDER_USD,".0f")+" por compra, máx. "+str(sniper_bot.MAX_POSITIONS)+". Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Golpes ainda podem passar.\n\n"
-   elif action=="sn_off":
-    sniper_bot.set_mode(False);msg="⏹️ Sniper desligado. Posições abertas continuam com stop até vender.\n\n"
-   else:msg=""
-   send(chat,msg+sniper_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200]+"\nNenhuma ordem foi enviada.",keyboard())
-  return
- if action in ("tb_real_on","tb_real_off"):
-  import trading_sim
-  try:
-   if action=="tb_real_on":
-    live_engine.start();trading_sim.set_real(True)
-    send(chat,"💵 ESTRATÉGIA B COM DINHEIRO REAL LIGADA\nCompra US$ "+format(trading_sim.ORDER_USD,".0f")+" por moeda (máx. "+str(trading_sim.MAX_POSITIONS)+" posições) só se passar nos filtros, no anti-golpe e no teste de venda. Cada ordem é cotada, assinada, enviada e CONFIRMADA na blockchain antes de contar. Vende sozinho em +"+format(trading_sim.TAKE_PROFIT*100,".0f")+"% ou −"+format(trading_sim.STOP_LOSS*100,".0f")+"%. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Pode dar prejuízo.\n\n"+trading_sim.status_text(),keyboard())
-   else:
-    trading_sim.set_real(False);trade_state.stop()
-    send(chat,"⏹️ Estratégia B REAL desligada: não compra mais. Posições abertas continuam com alvo/stop até vender. A simulação segue.\n\n"+trading_sim.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Não consegui ligar o modo real: "+str(exc)[:200]+"\nNenhuma ordem foi enviada.",keyboard())
-  return
- if action in ("mm_on","mm_off","mm_status","/mm"):
-  import mm_sim
-  try:
-   if action=="mm_on":
-    capital=mm_sim.start()
-    send(chat,"💹 Market Making em SIMULAÇÃO iniciado com US$ "+format(capital,".2f")+" (calculado pelo saldo real da carteira, máx. US$ "+format(mm_sim.CAPITAL_USD,".0f")+"). Nenhuma ordem real é enviada.\n\n"+mm_sim.status_text(),keyboard());return
-   if action=="mm_off":
-    mm_sim.stop();send(chat,"⏹️ Market Making parado. Resultados salvos.\n\n"+mm_sim.status_text(),keyboard());return
-   send(chat,mm_sim.status_text(),keyboard());return
-  except Exception as exc:send(chat,"⛔ Market Making: "+str(exc)[:200],keyboard());return
- if action in ("tsim_on","tsim_off","tsim_status","/tsim","/tsim_reset"):
-  import trading_sim
-  if action=="tsim_on":trading_sim.set_enabled(True)
-  elif action=="tsim_off":trading_sim.set_enabled(False)
-  elif action=="/tsim_reset":trading_sim.reset()
-  prefix={"tsim_on":"🧪 Simulação da Estratégia B LIGADA (nenhuma ordem real).\n\n","tsim_off":"⏹️ Simulação desligada; o histórico fica salvo.\n\n","/tsim_reset":"🔄 Simulação reiniciada.\n\n"}.get(action,"")
-  send(chat,prefix+trading_sim.status_text(),keyboard());return
+  "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off",
+  "tsim_on","tsim_off","tsim_status","/tsim","/tsim_reset","tb_real_on","tb_real_off","sn_sim","sn_real","sn_off","sn_status","/sniper",
+  "mm_on","mm_off","mm_status","/mm"}
  if action in legacy or action.startswith("lev_"):
   try:btc_perps.set_enabled(False)
   except Exception:pass
-  send(chat,"Esse controle foi removido: o bot agora opera só MEV. Use o menu abaixo.",keyboard());return
+  send(chat,"Esse controle foi removido: o bot agora é só o robô de arbitragem (MEV). Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("wallet_export","/exportar_chave"):
   if not get_address():
@@ -408,7 +361,7 @@ def beat(step):
  HEARTBEAT.update(at=time.time(),step=step)
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
- next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;next_snipe=0;next_tsim=0;next_sniper2=0;next_tsim_buy=0;last_recovery_notice=time.monotonic()
+ next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_sync=0;last_recovery_notice=time.monotonic()
  while True:
   try:
    beat("reconciliação MEV")
@@ -436,29 +389,6 @@ def background_loop():
     next_sync=time.monotonic()+60
     try:live_engine.sync_positions(send,active_chat())
     except Exception:logging.exception("position sync failed")
-   beat("sniper 10-60 min")
-   if active_chat() and time.monotonic()>=next_sniper2:
-    next_sniper2=time.monotonic()+20
-    try:
-     import sniper_bot
-     for c in sniper_bot.exit_cycle():
-      send(active_chat(),"🧪 SNIPER SIM "+("💰 LUCRO" if c["pnl_usd"]>0 else "🔻 PREJUÍZO")+" — "+str(c["symbol"])+": "+format(c["pnl_usd"],"+.2f")+" USD ("+c["reason"]+")")
-     if sniper_bot.enabled():
-      for o in sniper_bot.buy_cycle(None,send,active_chat()):
-       if not o.get("real"):send(active_chat(),"🧪 SNIPER SIM 🟢 comprou "+o["symbol"]+" · US$ "+format(o["cost_usd"],".2f")+"\n"+o["mint"])
-    except Exception:logging.exception("sniper cycle failed")
-   beat("simulação estratégia B")
-   if active_chat() and time.monotonic()>=next_tsim:
-    next_tsim=time.monotonic()+20
-    try:
-     import trading_sim
-     for c in trading_sim.exit_cycle():
-      send(active_chat(),"🧪 SIM "+("💰 LUCRO" if c["pnl_usd"]>0 else "🔻 PREJUÍZO")+" — vendeu "+str(c["symbol"])+" ("+("TP" if c["reason"]=="take_profit" else "SL")+"): "+format(c["pnl_usd"],"+.2f")+" USD")
-     if trading_sim.enabled() and time.monotonic()>=next_tsim_buy:
-      next_tsim_buy=time.monotonic()+30
-      for o in trading_sim.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES),send,active_chat()):
-       if not o.get("real"):send(active_chat(),"🧪 SIM 🟢 comprou "+o["symbol"]+" · US$ "+format(o["cost_usd"],".2f")+"\n"+o["mint"])
-    except Exception:logging.exception("trading sim cycle failed")
    beat("devolução de depósito")
    if active_chat() and time.monotonic()>=next_reclaim:
     next_reclaim=time.monotonic()+600
@@ -544,21 +474,6 @@ def mev_loop():
       send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
   except Exception as exc:logging.error("MEV cycle stopped: %s",type(exc).__name__)
   time.sleep(MEV_SCAN_SECONDS)
-MM_TICK_SECONDS=max(2.0,float(os.getenv("MM_TICK_SECONDS","5")))
-def mm_loop():
- """Market making simulation: one real-price tick every MM_TICK_SECONDS (respecting the Jupiter limit)."""
- last_pause=""
- while True:
-  time.sleep(MM_TICK_SECONDS)
-  try:
-   import mm_sim
-   if not active_chat() or not mm_sim.enabled():continue
-   for f in mm_sim.tick():
-    send(active_chat(),"💹 SIM "+("🟢 compra" if f["side"]=="buy" else "🔴 venda")+" executada"+(" (parcial)" if f["partial"] else "")+": US$ "+format(f["usd"],".2f")+" a "+format(f["price"],".2f"))
-   paused=mm_sim._load()["paused"]
-   if paused and paused!=last_pause:send(active_chat(),"⏸️ Market Making pausado: "+paused)
-   last_pause=paused
-  except Exception as exc:logging.warning("mm tick failed: %s",type(exc).__name__)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
 def loop():
@@ -567,7 +482,6 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=mev_loop,daemon=True).start()
- threading.Thread(target=mm_loop,daemon=True).start()
  while True:
   try:
    if TOKEN:
