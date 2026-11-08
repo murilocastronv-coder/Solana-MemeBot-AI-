@@ -400,11 +400,14 @@ def cycle(send, chat, candles=None, price=None):
         return
     with _LOCK:
         data = _load()
-        if not data.get("enabled"):
-            return
         pos_key, _ = _keys(data)
+        if not data.get("enabled") and not data.get(pos_key):
+            return
         price = price if price is not None else fetch_price()
         manage(data, price, send, chat)
+        if not data.get("enabled"):
+            _save(data)
+            return
         if data.get("strategy") == "dip":
             _dip_step(data, price, send, chat, candles if candles is not None else fetch_candles("5m"))
             _save(data)
