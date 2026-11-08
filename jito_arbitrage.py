@@ -2,8 +2,8 @@
 
 The strategy only trades against public pool prices. It never reads pending
 user transactions and never constructs sandwich/front-running transactions.
-Dry-run is the default. Live execution requires three independent switches:
-MEV_AUTOTRADE_ENABLED=true, MEV_LIVE_ENABLED=true, LIVE_TRADING_ENABLED=true.
+Dry-run is the default. Live execution requires two dedicated switches:
+MEV_AUTOTRADE_ENABLED=true and MEV_LIVE_ENABLED=true.
 """
 import base64
 import json
@@ -232,8 +232,38 @@ def _simulate_bundle(transactions):
 
 def _live_enabled():
     return (os.getenv("MEV_AUTOTRADE_ENABLED") == "true" and
-            os.getenv("MEV_LIVE_ENABLED") == "true" and
-            os.getenv("LIVE_TRADING_ENABLED") == "true")
+            os.getenv("MEV_LIVE_ENABLED") == "true")
+
+
+def _preflight(signer, amount, tip_lamports, first, second):
+    """MEV-only readiness gate; do not enable the separate spot trader globally."""
+    import live_trade_state
+    import telegram_owner
+    if not _live_enabled():
+        raise RuntimeError("MEV live switches are disabled")
+    owner = telegram_owner.get_owner()
+    configured_owner = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not owner or (configured_owner and str(owner) != configured_owner):
+        raise RuntimeError("Private Telegram owner is not verified")
+    if live_trade_state._load().get("pending"):
+        raise RuntimeError("Unreconciled spot order: MEV paused")
+    if not os.getenv("JUPITER_API_KEY", "").strip():
+        raise RuntimeError("Jupiter API key missing")
+    rpc_url = os.getenv("SOLANA_RPC_URL", "").strip()
+    if not rpc_url or rpc_url == "https://api.mainnet-beta.solana.com":
+        raise RuntimeError("Dedicated Solana RPC missing")
+    if len(os.getenv("BOT_WALLET_ENCRYPTION_PASSPHRASE", "")) < 24:
+        raise RuntimeError("Bot wallet passphrase missing")
+    if get_address() != str(signer.pubkey()):
+        raise RuntimeError("Configured signer does not match the bot wallet")
+    priority = _priority_fee_lamports(first) + _priority_fee_lamports(second)
+    rent_reserve = _int_env("MEV_RENT_RESERVE_LAMPORTS", 10_000_000, 0, 100_000_000)
+    response = requests.post(rpc_url, json={"jsonrpc": "2.0", "id": 1,
+        "method": "getBalance", "params": [str(signer.pubkey()), {"commitment": "confirmed"}]}, timeout=12)
+    response.raise_for_status()
+    balance = int(response.json().get("result", {}).get("value", -1))
+    if balance < amount + tip_lamports + priority + rent_reserve:
+        raise RuntimeError("Bot wallet SOL balance is below the trade and fee reserve")
 
 
 def try_arbitrage(mint):
@@ -264,10 +294,8 @@ def try_arbitrage(mint):
         return {"status": "dry_run_opportunity", "mint": mint, "input_lamports": amount,
                 "minimum_back_lamports": minimum_back, "estimated_net_lamports": net_minimum}
 
-    # Existing project preflight checks the encrypted wallet, owner, RPC, Jupiter,
-    # global live switch and unresolved spot orders before any signing/submission.
-    import live_order_bridge
-    live_order_bridge.preflight()
+    # Check MEV readiness without turning on the separate spot-trading engine.
+    _preflight(signer, amount, tip_lamports, first, second)
     if _has_unresolved_bundle():
         raise RuntimeError("A prior Jito bundle is unresolved; new submissions are paused")
     tip_ix = transfer(TransferParams(
