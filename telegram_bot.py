@@ -40,8 +40,15 @@ last=[]
 ALERTS_ENABLED=True
 def request_api(method,**params):
  if not TOKEN:return {}
- r=session.post(BASE+"/"+method,json=params,timeout=25);r.raise_for_status()
- return r.json()
+ try:
+  r=session.post(BASE+"/"+method,json=params,timeout=25)
+ except requests.RequestException as exc:
+  logging.warning("Telegram API transport failed method=%s type=%s",method,type(exc).__name__)
+  raise RuntimeError("Telegram API transport failed") from None
+ if not r.ok:
+  raise RuntimeError("Telegram API returned HTTP "+str(r.status_code))
+ try:return r.json()
+ except ValueError:raise RuntimeError("Telegram API returned invalid JSON") from None
 def send(chat,text,keyboard=None):
  args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
@@ -466,6 +473,18 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  while True:
   try:
+   if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and time.monotonic()>=next_scan:
+    next_scan=time.monotonic()+max(60,INTERVAL)
+    try:
+     from bot import assess_pair
+     from jito_arbitrage import scan_cycle
+     assessments=[assess_pair(pair) for pair in scan(False)]
+     outcomes=scan_cycle(assessments)
+     for outcome in outcomes:
+      if outcome.get("status")=="submitted_pending":
+       send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
+    except Exception as exc:
+     logging.error("MEV cycle stopped: %s",type(exc).__name__)
    if active_chat() and time.monotonic()>=next_btc:
     next_btc=time.monotonic()+10
     try:btc_perps.cycle(send,active_chat())
