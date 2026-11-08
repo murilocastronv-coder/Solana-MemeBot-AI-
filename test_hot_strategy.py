@@ -61,10 +61,10 @@ class SniperFilterTests(unittest.TestCase):
 
 
 class DailyLimitTests(unittest.TestCase):
-    def test_fixed_30_usd(self):
+    def test_fixed_50_usd(self):
         import live_trade_state as st
-        self.assertEqual(st._loss_limit({"max_daily_loss_usd": 11.46}), 30.0)
-        self.assertEqual(st.set_daily_loss_limit(500), 30.0)
+        self.assertEqual(st._loss_limit({"max_daily_loss_usd": 11.46}), 50.0)
+        self.assertEqual(st.set_daily_loss_limit(500), 50.0)
 
 
 class SyncTests(unittest.TestCase):

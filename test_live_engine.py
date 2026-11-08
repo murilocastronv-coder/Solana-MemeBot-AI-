@@ -90,7 +90,7 @@ class LiveEngineTests(unittest.TestCase):
         self.assertIn("COMPROU BONK", self.sent[1])
         self.assertEqual(state.pnl_summary()["total_pnl_usd"], 3.0)
         self.assertIn("US$ 20.00 de BONK (10% da conta de US$ 200.00)", self.sent[0])
-        self.assertEqual(state.daily_loss_limit(), 30.0)
+        self.assertEqual(state.daily_loss_limit(), state.DAILY_LOSS_LIMIT_USD)
 
     def test_reports_why_nothing_was_bought(self):
         live_engine.start()

@@ -8,7 +8,7 @@ MAX_POSITIONS = 3
 ORDER_USD = 10.0
 MAX_DAILY_LOSS_USD = 3.0
 # Fixed daily loss limit for spot/sniper trading (owner choice); env overrides.
-DAILY_LOSS_LIMIT_USD = float(os.getenv("DAILY_LOSS_LIMIT_USD", "30"))
+DAILY_LOSS_LIMIT_USD = float(os.getenv("DAILY_LOSS_LIMIT_USD", "50"))
 
 def _path():
     wallet = os.environ.get("BOT_WALLET_FILE", "")
