@@ -237,6 +237,7 @@ def reconcile_pending_bundle():
         event = {"status": "landed" if landed else "not_landed",
                  "mint": record.get("mint", ""), "bundle_id": bundle_id,
                  "estimated_net_lamports": record.get("estimated_net_lamports"),
+                 "submitted_at": record.get("created_at"),
                  "realized_net_lamports": realized,
                  "signature": signatures[0] if signatures else None,
                  "slot": (detail or {}).get("slot") or (detail or {}).get("landed_slot")}
@@ -397,6 +398,11 @@ def scan_cycle(assessments, force=False, quote_only=False):
     if not force and (os.getenv("MEV_AUTOTRADE_ENABLED") != "true" or
                       not live_trade_state.flag("mev_enabled")):
         return []
+    if _live_enabled() and not quote_only:
+        allowed, reason, _, _ = live_trade_state.mev_daily_guard()
+        if not allowed:
+            LOG.warning("MEV daily risk guard blocked live bundle: %s", reason)
+            return []
     if not _LOCK.acquire(blocking=False):
         return []
     try:
@@ -405,7 +411,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
             if isinstance(item, dict) and item.get("status") == "WATCH_ONLY" and item.get("token"):
                 candidates.append(item["token"])
         results = []
-        for mint in list(dict.fromkeys(candidates))[:2]:
+        for mint in list(dict.fromkeys(candidates))[:5]:
             try:
                 result = try_arbitrage(mint, quote_only=quote_only)
                 LOG.info("MEV cycle status=%s mint=%s net_min_lamports=%s",

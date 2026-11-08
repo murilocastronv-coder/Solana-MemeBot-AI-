@@ -122,14 +122,46 @@ def update_mev_setting(name, value):
         return {key: int(settings.get(key, default)) for key, default in
                 {"input_lamports": 10_000_000, "min_profit_bps": 75, "jito_tip_lamports": 1_000}.items()}
 
+def _update_mev_daily(state, previous, item):
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    daily = state.get("mev_daily", {})
+    if daily.get("day") != today:
+        daily = {"day": today, "bundle_ids": [], "bundle_count": 0, "realized_net_lamports": 0}
+    bundle_id = item.get("bundle_id") or (previous or {}).get("bundle_id")
+    submitted_at = item.get("submitted_at") or (previous or {}).get("submitted_at")
+    if bundle_id and submitted_at and datetime.fromtimestamp(int(submitted_at), timezone.utc).date().isoformat() == today:
+        bundle_ids = daily.setdefault("bundle_ids", [])
+        if bundle_id not in bundle_ids:
+            bundle_ids.append(bundle_id)
+            daily["bundle_count"] = int(daily.get("bundle_count", 0)) + 1
+    old_pnl = (previous or {}).get("realized_net_lamports") if (previous or {}).get("status") == "landed" else None
+    new_pnl = item.get("realized_net_lamports") if item.get("status") == "landed" else None
+    settled_at = item.get("settled_at") or (previous or {}).get("settled_at")
+    settled_today = bool(settled_at) and datetime.fromtimestamp(int(settled_at), timezone.utc).date().isoformat() == today
+    if settled_today and isinstance(new_pnl, int) and not isinstance(new_pnl, bool):
+        if isinstance(old_pnl, int) and not isinstance(old_pnl, bool) and (previous or {}).get("settled_at"):
+            old_settled = datetime.fromtimestamp(int(previous["settled_at"]), timezone.utc).date().isoformat()
+            if old_settled == today:
+                daily["realized_net_lamports"] = int(daily.get("realized_net_lamports", 0)) + new_pnl - old_pnl
+            else:
+                daily["realized_net_lamports"] = int(daily.get("realized_net_lamports", 0)) + new_pnl
+        else:
+            daily["realized_net_lamports"] = int(daily.get("realized_net_lamports", 0)) + new_pnl
+    daily["bundle_ids"] = daily.get("bundle_ids", [])[-100:]
+    state["mev_daily"] = daily
+
 def record_mev_event(event):
     """Keep secret-free MEV history and update an existing bundle as it settles."""
     import time as _time
     allowed = ("status", "mint", "bundle_id", "estimated_net_lamports",
-               "realized_net_lamports", "signature", "slot", "error", "notification_sent")
+               "realized_net_lamports", "signature", "slot", "error", "notification_sent", "submitted_at", "settled_at")
     item = {key: event[key] for key in allowed if key in event}
     item["timestamp"] = int(_time.time())
+    if item.get("status") == "submitted_pending":
+        item.setdefault("submitted_at", item["timestamp"])
     if item.get("status") in ("landed", "not_landed"):
+        item.setdefault("settled_at", item["timestamp"])
         item.setdefault("notification_sent", False)
     with _LOCK:
         state = _load()
@@ -146,6 +178,7 @@ def record_mev_event(event):
                         else:
                             state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl
                             state["mev_confirmed_bundles"] = int(state.get("mev_confirmed_bundles", 0)) + 1
+                    _update_mev_daily(state, previous, item)
                     history[index] = {**previous, **item}
                     state["mev_history"] = history[:30]
                     _save(state)
@@ -154,6 +187,7 @@ def record_mev_event(event):
         if isinstance(new_pnl, int) and not isinstance(new_pnl, bool):
             state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl
             state["mev_confirmed_bundles"] = int(state.get("mev_confirmed_bundles", 0)) + 1
+        _update_mev_daily(state, None, item)
         state["mev_history"] = ([item] + history)[:30]
         _save(state)
 
@@ -178,6 +212,25 @@ def mark_mev_notification_sent(bundle_id):
                 item["notification_sent"] = True
                 _save(state)
                 return
+
+def mev_daily_guard():
+    """Cap confirmed live bundles and realized daily loss in UTC."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    max_bundles = 20
+    max_loss_lamports = 10_000_000  # 0.01 SOL
+    with _LOCK:
+        daily = _load().get("mev_daily", {})
+        if daily.get("day") != today:
+            count, daily_pnl = 0, 0
+        else:
+            count = int(daily.get("bundle_count", 0))
+            daily_pnl = int(daily.get("realized_net_lamports", 0))
+        if count >= max_bundles:
+            return False, "Limite diário de 20 bundles atingido", count, daily_pnl
+        if daily_pnl <= -max_loss_lamports:
+            return False, "Limite diário de perda de 0,01 SOL atingido", count, daily_pnl
+        return True, "Ready", count, daily_pnl
 
 def mev_pnl_summary():
     """Return lifetime confirmed realized P/L in lamports and bundle count."""
