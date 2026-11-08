@@ -563,7 +563,7 @@ def startup_notice():
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
- next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;last_recovery_notice=time.monotonic()
+ next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;last_recovery_notice=time.monotonic()
  while True:
   try:
    if active_chat() and time.monotonic()>=next_mev_reconcile:
@@ -602,6 +602,15 @@ def background_loop():
        send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
     except Exception as exc:
      logging.error("MEV cycle stopped: %s",type(exc).__name__)
+   if active_chat() and time.monotonic()>=next_reclaim:
+    next_reclaim=time.monotonic()+600
+    try:
+     import jito_arbitrage as ja, rent_reclaim
+     if ja._live_enabled() and not ja._has_unresolved_bundle():
+      closed,lamports,sig=rent_reclaim.reclaim(ja._rpc,ja._wallet())
+      if closed:
+       send(active_chat(),"♻️ Fechei "+str(closed)+" conta(s) de token vazia(s) e devolvi "+format(lamports/1e9,".6f")+" SOL de depósito para a carteira.")
+    except Exception as exc:logging.warning("rent reclaim failed: %s",str(exc)[:120])
    if active_chat() and time.monotonic()>=next_btc:
     next_btc=time.monotonic()+10
     try:btc_perps.cycle(send,active_chat())

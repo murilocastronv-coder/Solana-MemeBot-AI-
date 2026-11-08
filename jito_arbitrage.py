@@ -349,6 +349,18 @@ def _mint_is_fixed(mint):
     return parsed.get("type") == "mint" and not info.get("mintAuthority") and not info.get("freezeAuthority")
 
 
+def _simulation_reason(value):
+    """Short reason from a failed simulateBundle result (which leg, which error)."""
+    text = json.dumps(value.get("summary"), default=str)
+    for index, item in enumerate(value.get("transactionResults") or []):
+        if item.get("err"):
+            logs = [line for line in (item.get("logs") or []) if "rror" in line or "failed" in line or "Slippage" in line]
+            text = ("compra" if index == 0 else "venda") + ": " + json.dumps(item.get("err"), default=str) + (" | " + logs[-1] if logs else "")
+            break
+    text = re.sub(r"[1-9A-HJ-NP-Za-km-z]{60,}", "", text)  # drop signatures
+    return text[:160]
+
+
 def _simulate_bundle(transactions):
     """Pre-check the bundle before sending.
 
@@ -377,7 +389,7 @@ def _simulate_bundle(transactions):
         raise RuntimeError("Jito bundle simulation returned no result")
     value = result.get("value") or result
     if str(value.get("summary", "")).lower() != "succeeded":
-        raise RuntimeError("Jito bundle simulation did not succeed")
+        raise RuntimeError("simulation failed: " + _simulation_reason(value))
     for item in value.get("transactionResults", []):
         if item.get("err"):
             raise RuntimeError("Jito bundle simulation reported a transaction error")
@@ -512,7 +524,11 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
     amount = settings["input_lamports"]
     min_bps = settings["min_profit_bps"]
     tip_lamports = settings["jito_tip_lamports"]
-    first = _build(SOL_MINT, mint, amount, str(signer.pubkey()), dexes=buy_dexes)
+    # Zero slippage on the buy: it either delivers at least outAmount tokens or
+    # fails, so the sell leg (which sells exactly outAmount) always has them.
+    # A failed leg drops the whole Jito bundle at no cost.
+    first = _build(SOL_MINT, mint, amount, str(signer.pubkey()), dexes=buy_dexes,
+                   slippage_bps=_int_env("MEV_BUY_SLIPPAGE_BPS", 0, 0, 50))
     token_amount = int(first["outAmount"])
     if token_amount <= 0:
         raise RuntimeError("First Jupiter route returned no tokens")
@@ -631,6 +647,7 @@ _ERROR_LABELS = (
     ("passphrase", "falta senha da carteira"),
     ("balance is below", "saldo SOL insuficiente"),
     ("unresolved", "bundle anterior pendente"),
+    ("simulation failed: ", None),
     ("simulation", "simulação do bundle falhou"),
     ("no tokens", "rota sem tokens"),
 )
@@ -646,7 +663,7 @@ def _error_code(exc):
             return text[:120]
         for needle, label in _ERROR_LABELS:
             if needle in text:
-                return label
+                return label or ("simulação: " + text.split(needle, 1)[1])[:160]
     return type(exc).__name__
 
 
