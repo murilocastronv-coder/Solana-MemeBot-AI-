@@ -98,6 +98,46 @@ def flag(name):
     with _LOCK:
         return bool(_load().get(name, False))
 
+def mev_config():
+    """Persisted settings for the Telegram MEV controls."""
+    defaults = {"input_lamports": 10_000_000, "min_profit_bps": 75, "jito_tip_lamports": 1_000}
+    with _LOCK:
+        state = _load()
+        saved = state.get("mev_settings", {})
+        return {key: int(saved.get(key, value)) for key, value in defaults.items()}
+
+def update_mev_setting(name, value):
+    bounds = {"input_lamports": (1_000_000, 100_000_000),
+              "min_profit_bps": (1, 500), "jito_tip_lamports": (1_000, 10_000)}
+    if name not in bounds or isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("Configuração MEV inválida")
+    low, high = bounds[name]
+    if not low <= value <= high:
+        raise ValueError("Valor fora dos limites MEV")
+    with _LOCK:
+        state = _load()
+        settings = state.setdefault("mev_settings", {})
+        settings[name] = value
+        _save(state)
+        return {key: int(settings.get(key, default)) for key, default in
+                {"input_lamports": 10_000_000, "min_profit_bps": 75, "jito_tip_lamports": 1_000}.items()}
+
+def record_mev_event(event):
+    """Keep a small, secret-free history for the Telegram menu."""
+    import time as _time
+    allowed = ("status", "mint", "bundle_id", "estimated_net_lamports", "error")
+    item = {key: event[key] for key in allowed if key in event}
+    item["timestamp"] = int(_time.time())
+    with _LOCK:
+        state = _load()
+        history = state.setdefault("mev_history", [])
+        state["mev_history"] = ([item] + history)[:30]
+        _save(state)
+
+def mev_history(limit=5):
+    with _LOCK:
+        return list(_load().get("mev_history", []))[:max(1, min(int(limit), 20))]
+
 def positions_by_mode(mode):
     with _LOCK:
         return sum(1 for p in _load()["positions"].values() if p.get("mode", "normal") == mode)
