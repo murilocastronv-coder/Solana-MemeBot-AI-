@@ -67,14 +67,14 @@ def _headers():
     return {"x-api-key": key, "Accept": "application/json"}
 
 
-def _build(input_mint, output_mint, amount, taker, dexes=None):
+def _build(input_mint, output_mint, amount, taker, dexes=None, slippage_bps=50):
     global _LAST_BUILD_AT
     params = {
         "inputMint": input_mint,
         "outputMint": output_mint,
         "amount": str(int(amount)),
         "taker": taker,
-        "slippageBps": "50",
+        "slippageBps": str(int(max(0, min(50, slippage_bps)))),
         "computeUnitPricePercentile": "medium",
         "forJitoBundle": "true",
         "wrapAndUnwrapSol": "true",
@@ -107,11 +107,22 @@ def _instruction(raw):
     return Instruction(Pubkey.from_string(raw["programId"]), data, accounts)
 
 
+def _is_cu_limit(raw):
+    try:
+        data = base64.b64decode((raw or {}).get("data", ""), validate=True)
+    except ValueError:
+        return False
+    return (raw or {}).get("programId") == str(COMPUTE_BUDGET_PROGRAM) and data[:1] == b"\x02"
+
+
 def _compile_and_sign(build, signer, extra_instructions=()):
     cu_limit = _int_env("MEV_COMPUTE_UNIT_LIMIT", 1_000_000, 200_000, 1_400_000)
     instructions = [Instruction(COMPUTE_BUDGET_PROGRAM, b"\x02" + struct.pack("<I", cu_limit), [])]
-    for group in ("computeBudgetInstructions", "setupInstructions"):
-        instructions.extend(_instruction(ix) for ix in build.get(group, []))
+    for raw in build.get("computeBudgetInstructions", []):
+        if _is_cu_limit(raw):
+            continue  # we already set our own limit; a duplicate makes the tx invalid
+        instructions.append(_instruction(raw))
+    instructions.extend(_instruction(ix) for ix in build.get("setupInstructions", []))
     instructions.append(_instruction(build["swapInstruction"]))
     if build.get("cleanupInstruction"):
         instructions.append(_instruction(build["cleanupInstruction"]))
@@ -428,6 +439,13 @@ def _cross_dex_route(pools):
             "sell_dex_id": best[2][0]}
 
 
+def _locked_slippage_bps(expected_back, required_back):
+    """Largest slippage (max 0.5%) that still guarantees required_back."""
+    if expected_back <= 0 or expected_back < required_back:
+        return 0
+    return int(min(50, (expected_back - required_back) * 10_000 // expected_back))
+
+
 def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
     """Quote a SOL -> token -> SOL cycle; send only if Jito simulation is profitable."""
     Pubkey.from_string(mint)
@@ -445,11 +463,28 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
     if token_amount <= 0:
         raise RuntimeError("First Jupiter route returned no tokens")
     second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()), dexes=sell_dexes)
-    minimum_back = int(second["otherAmountThreshold"])
-    fixed_cost_reserve = 10_000 + _priority_fee_lamports(first) + _priority_fee_lamports(second)
     required_profit = max(_int_env("MEV_MIN_NET_PROFIT_LAMPORTS", 10_000, 1_000, 10_000_000),
                           amount * min_bps // 10_000)
-    net_minimum = minimum_back - amount - tip_lamports - fixed_cost_reserve
+
+    def _costs(build):
+        return tip_lamports + 10_000 + _priority_fee_lamports(first) + _priority_fee_lamports(build)
+
+    # Judge the cycle by the EXPECTED return, then lock the profit on-chain:
+    # the sell leg's minimum output is set to cover entry + costs + required
+    # profit. If the price moves against us, the sell fails and the Jito
+    # bundle (all-or-nothing) never lands, so nothing is spent.
+    expected_back = int(second["outAmount"])
+    required_back = amount + _costs(second) + required_profit
+    if expected_back < required_back:
+        return {"status": "no_edge", "mint": mint, "input_lamports": amount,
+                "expected_back_lamports": expected_back,
+                "estimated_net_lamports": expected_back - amount - _costs(second)}
+    slippage = _locked_slippage_bps(expected_back, required_back)
+    if slippage < 50:
+        second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()), dexes=sell_dexes,
+                        slippage_bps=slippage)
+    minimum_back = int(second["otherAmountThreshold"])
+    net_minimum = minimum_back - amount - _costs(second)
     if net_minimum < required_profit:
         return {"status": "no_edge", "mint": mint, "input_lamports": amount,
                 "minimum_back_lamports": minimum_back, "estimated_net_lamports": net_minimum}
