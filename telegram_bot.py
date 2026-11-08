@@ -546,16 +546,20 @@ def loop():
     next_mev_reconcile=time.monotonic()+20
     try:
      from jito_arbitrage import reconcile_pending_bundle
-     settled=reconcile_pending_bundle()
-     if settled:
-      if settled["status"]=="landed":
-       pnl=settled.get("realized_net_lamports")
-       pnl_text=("P/L realizado: "+format(pnl/1e9,"+.8f")+" SOL" if isinstance(pnl,int) else "P/L ainda indisponível no RPC")
-       message="✅ Arbitragem Jito confirmada na Solana.\nContrato: "+str(settled.get("mint",""))+"\n"+pnl_text
-       if settled.get("signature"):message+="\nAssinatura: "+str(settled["signature"])
+     reconcile_pending_bundle()
+     for settled in trade_state.mev_notifications_pending(3):
+      try:
+       if settled["status"]=="landed":
+        pnl=settled.get("realized_net_lamports")
+        pnl_text=("P/L realizado: "+format(pnl/1e9,"+.8f")+" SOL" if isinstance(pnl,int) else "P/L ainda indisponível no RPC")
+        message="✅ Arbitragem Jito confirmada na Solana.\nContrato: "+str(settled.get("mint",""))+"\n"+pnl_text
+        if settled.get("signature"):message+="\nAssinatura: "+str(settled["signature"])
+       else:
+        message="⚠️ Bundle Jito não aterrissou; ciclo atômico não executado.\nID: "+str(settled.get("bundle_id",""))
        send(active_chat(),message,keyboard())
-      else:
-       send(active_chat(),"⚠️ Bundle Jito não aterrissou; o ciclo atômico não foi executado.\nID: "+str(settled.get("bundle_id","")),keyboard())
+       trade_state.mark_mev_notification_sent(settled.get("bundle_id"))
+      except Exception as exc:
+       logging.warning("MEV Telegram notification deferred type=%s",type(exc).__name__)
     except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
    if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
     next_scan=time.monotonic()+max(60,INTERVAL)
