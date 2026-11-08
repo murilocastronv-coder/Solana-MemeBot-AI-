@@ -52,6 +52,28 @@ class SniperFilterTests(unittest.TestCase):
             self.assertIn(reason, s.reasons(t))
 
 
+class WatchTests(unittest.TestCase):
+    def setUp(self):
+        s.WATCH.clear()
+
+    def test_new_tokens_are_followed_until_25_min(self):
+        now = time.time() * 1000
+        s.track([token(minutes=1), token(id="B" * 44, minutes=40)], now_ms=now)
+        self.assertEqual(list(s.WATCH), [MINT])                   # 40-min token is not followed
+        self.assertEqual(s.in_window(now_ms=now), [])            # 1 min old: not yet
+        self.assertEqual(s.in_window(now_ms=now + 6 * 60000), [MINT])
+        s.track([], now_ms=now + 30 * 60000)
+        self.assertEqual(s.WATCH, {})                            # dropped after 25 min
+
+    def test_candidates_refresh_tokens_in_window(self):
+        s.WATCH[MINT] = time.time() * 1000 - 10 * 60000
+        fresh = token(minutes=10, symbol="FRESH")
+        with patch("pumpfun.fetch", return_value=[]), patch.object(s, "_search", return_value=[fresh]) as search:
+            rows = s.candidates()
+        search.assert_called_once_with([MINT])
+        self.assertEqual(rows[0]["symbol"], "FRESH")
+
+
 class SniperCycleTests(unittest.TestCase):
     def setUp(self):
         d = tempfile.mkdtemp()

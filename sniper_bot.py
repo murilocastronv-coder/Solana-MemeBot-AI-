@@ -52,6 +52,9 @@ HISTORY_MAX = 300
 
 _LOCK = threading.RLock()
 _tried = {}
+WATCH = {}          # pump.fun mint -> creation time (ms): tokens followed until they are 25 min old
+SEARCH_URL = "https://api.jup.ag/tokens/v2/search"
+MAX_REFRESH = int(_env("SNIPER_MAX_REFRESH", 300))
 _RECENT = deque(maxlen=20000)
 LAST_ERROR = {"text": ""}
 
@@ -190,12 +193,61 @@ def _real_buy(t, mint, symbol, send, chat):
                                     usd=ORDER_USD)
 
 
+def track(tokens, now_ms=None):
+    """Remember new pump.fun tokens so they are re-checked while 5-25 min old."""
+    now_ms = time.time() * 1000 if now_ms is None else now_ms
+    for t in tokens or []:
+        mint = isinstance(t, dict) and (t.get("id") or t.get("address"))
+        created = _created_ms(t) if mint else 0
+        if mint and created and (now_ms - created) / 60000 < MAX_AGE_MIN:
+            WATCH.setdefault(mint, created)
+    for mint in [m for m, c in WATCH.items() if (now_ms - c) / 60000 > MAX_AGE_MIN]:
+        WATCH.pop(mint, None)
+    if len(WATCH) > 5000:
+        WATCH.clear()
+
+
+def in_window(now_ms=None):
+    now_ms = time.time() * 1000 if now_ms is None else now_ms
+    return [m for m, c in WATCH.items() if MIN_AGE_MIN <= (now_ms - c) / 60000 <= MAX_AGE_MIN]
+
+
+def _search(mints):
+    """Fresh Jupiter data (stats, audit, holders) for up to 100 mints per request."""
+    import jupiter_rate_limiter
+    from jupiter_v2_executor import headers
+    out = []
+    for i in range(0, len(mints), 100):
+        r = jupiter_rate_limiter.get(SEARCH_URL, params={"query": ",".join(mints[i:i + 100])},
+                                     headers=headers(), timeout=12)
+        r.raise_for_status()
+        data = r.json()
+        out += [t for t in (data if isinstance(data, list) else data.get("tokens") or []) if isinstance(t, dict)]
+    return out
+
+
+def candidates():
+    """Feed tokens + fresh data for every followed token now 5-25 min old."""
+    import pumpfun
+    tokens = pumpfun.fetch()
+    track(tokens)
+    merged = {(t.get("id") or t.get("address")): t for t in tokens if isinstance(t, dict)}
+    # newest first, capped to keep within the Jupiter rate limit (3 requests per pass)
+    window = sorted(in_window(), key=lambda m: -WATCH.get(m, 0))[:MAX_REFRESH]
+    if window:
+        try:
+            for t in _search(window):
+                merged[t.get("id") or t.get("address")] = t
+        except Exception as exc:
+            LAST_ERROR["text"] = "atualização das moedas em acompanhamento falhou: " + type(exc).__name__
+    return list(merged.values())
+
+
 def buy_cycle(tokens=None, send=None, chat=None):
     if not enabled():
         return []
     if tokens is None:
-        import pumpfun
-        tokens = pumpfun.fetch()
+        tokens = candidates()
     real = real_enabled() and send is not None and chat is not None
     opened = []
     now = time.monotonic()
@@ -328,7 +380,9 @@ def status_text():
     now = time.time()
     rows = [(k, x) for t, k, x in _RECENT if now - t < 3600]
     c = Counter(k for k, _ in rows)
-    lines.append("Última hora: " + str(len(rows)) + " moedas vistas · oportunidades: " + str(c["opportunity"]) +
+    lines.append("Acompanhando " + str(len(WATCH)) + " moedas novas · " + str(len(in_window())) + " agora entre " +
+                 format(MIN_AGE_MIN, ".0f") + " e " + format(MAX_AGE_MIN, ".0f") + " min")
+    lines.append("Última hora: " + str(len(rows)) + " análises · oportunidades: " + str(c["opportunity"]) +
                  " · compras: " + str(c["bought"]) + " · vendas: " + str(c["sold"]))
     top = Counter(x for k, x in rows if k in ("rejected", "unsafe", "blocked")).most_common(4)
     if top:
