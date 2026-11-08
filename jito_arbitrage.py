@@ -16,6 +16,7 @@ from pathlib import Path
 
 import requests
 import re
+import jupiter_rate_limiter
 from solders.address_lookup_table_account import AddressLookupTableAccount
 from solders.hash import Hash
 from solders.instruction import AccountMeta, Instruction
@@ -85,7 +86,7 @@ def _build(input_mint, output_mint, amount, taker, dexes=None):
         if wait > 0:
             time.sleep(wait)
         try:
-            response = requests.get(JUPITER_BUILD, params=params, headers=_headers(), timeout=20)
+            response = jupiter_rate_limiter.get(JUPITER_BUILD, params=params, headers=_headers(), timeout=20)
         finally:
             _LAST_BUILD_AT = time.monotonic()
     response.raise_for_status()
@@ -369,7 +370,7 @@ def _dex_label_names():
         now = time.monotonic()
         if now < _DEX_LABELS_CACHE["expires"]:
             return _DEX_LABELS_CACHE["labels"]
-        response = requests.get("https://api.jup.ag/swap/v2/program-id-to-label",
+        response = jupiter_rate_limiter.get("https://api.jup.ag/swap/v2/program-id-to-label",
                                 headers=_headers(), timeout=15)
         response.raise_for_status()
         payload = response.json()
