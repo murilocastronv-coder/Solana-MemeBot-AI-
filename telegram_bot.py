@@ -675,10 +675,14 @@ def handle(update):
  else:menu(chat)
 def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
+ try:applied=trade_state.apply_mev_only_once()
+ except Exception:logging.exception("mev-only switch failed");applied=False
  chat=active_chat()
  if not chat:return
  try:btc_perps.set_enabled(False)
  except Exception:logging.warning("legacy BTC entry stop unavailable")
+ if applied:
+  send(chat,"✅ Modo SÓ MEV aplicado: Trading, Sniper, Pump.fun, Vela 1m e Lançamento foram DESLIGADOS. Posições abertas (se houver) continuam com stop até vender. O MEV segue ligado com entrada de 0,05 SOL e gorjeta máxima.")
  send(chat,"🔄 Bot MEV reiniciado (deploy).\n"+mev_status_text(),keyboard())
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  st=trade_state.status()

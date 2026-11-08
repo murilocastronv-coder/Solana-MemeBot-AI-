@@ -17,5 +17,19 @@ class MevDefaultsTests(unittest.TestCase):
             self.assertEqual(s.mev_config()["input_lamports"], 10_000_000)
 
 
+    def test_mev_only_applied_once(self):
+        d = tempfile.mkdtemp()
+        with patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")}):
+            s.start(); s.set_sniper(True); s.set_flag("launch_enabled", True); s.set_flag("candle_enabled", True)
+            self.assertTrue(s.apply_mev_only_once())
+            st = s.status()
+            self.assertFalse(st["enabled"])
+            self.assertFalse(s.sniper_enabled() or s.flag("launch_enabled") or s.flag("candle_enabled") or s.flag("pumpfun_enabled"))
+            self.assertTrue(s.flag("hot_disabled") and s.flag("mev_enabled"))
+            s.set_flag("launch_enabled", True)          # owner turns one back on later
+            self.assertFalse(s.apply_mev_only_once())   # not undone again
+            self.assertTrue(s.flag("launch_enabled"))
+
+
 if __name__ == "__main__":
     unittest.main()

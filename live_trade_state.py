@@ -287,6 +287,25 @@ def stop():
         _save(state)
         return status()
 
+def apply_mev_only_once():
+    """Owner's choice: keep only MEV running. Turns every memecoin strategy off
+    once (open positions keep their exit rules) and keeps the MEV scan on.
+    Returns True the first time it is applied."""
+    with _LOCK:
+        state = _load()
+        if state.get("mev_only_v1"):
+            return False
+        state["enabled"] = False
+        state["halted"] = True
+        state["sniper_enabled"] = False
+        for name in ("pumpfun_enabled", "candle_enabled", "launch_enabled"):
+            state[name] = False
+        state["hot_disabled"] = True
+        state["mev_enabled"] = True
+        state["mev_only_v1"] = True
+        _save(state)
+        return True
+
 def start():
     """Owner pressed start. Refuses while any order is unreconciled."""
     with _LOCK:
