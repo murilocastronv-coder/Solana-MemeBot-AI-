@@ -52,6 +52,13 @@ class SniperFilterTests(unittest.TestCase):
         self.assertFalse(pumpfun.candidate(token(isSus=True)))
         self.assertFalse(pumpfun.candidate(token(organicScoreLabel="low")))
 
+    def test_sniper_reasons_match_candidate(self):
+        from test_live_engine import new_pair
+        self.assertEqual(e.sniper_reasons(new_pair()), [])
+        self.assertIn("fora de 5–60 min de vida", e.sniper_reasons(new_pair(minutes=90)))
+        weak = new_pair(); weak["txns"]["m5"] = {"buys": 5, "sells": 40}
+        self.assertIn("compra fraca", e.sniper_reasons(weak))
+
 
 class SyncTests(unittest.TestCase):
     def test_drops_positions_sold_by_hand(self):

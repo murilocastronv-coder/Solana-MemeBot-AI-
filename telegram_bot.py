@@ -113,6 +113,27 @@ def trading_readiness():
  running=live_engine.ready()
  return st,checks,running
 
+def robot_alive_line():
+ if not HEARTBEAT["at"]:return "⏳ Rotina automática ainda não começou"
+ ago=int(time.time()-HEARTBEAT["at"])
+ if ago>180:return "🚨 Rotina automática PARADA há "+str(ago//60)+" min (em: "+HEARTBEAT["step"]+"). Faça um Manual Deploy no Render."
+ return "💓 Rotina automática ativa ("+str(ago)+" s atrás · "+HEARTBEAT["step"]+")"
+def sniper_scan_lines():
+ s=live_engine.SNIPER_SCAN
+ out=[]
+ if not s["at"]:out.append("🎯 Sniper: ainda não varreu (liga o 🎯 Sniper ON).")
+ else:
+  out+=["🎯 SNIPER — última varredura ("+datetime.fromtimestamp(s["at"],timezone.utc).strftime("%H:%M:%S UTC")+")",
+        "Moedas novas vistas: "+str(s["total"])+" | passaram nos filtros: "+str(s["passed"])]
+  top=sorted(s["reasons"].items(),key=lambda kv:-kv[1])[:5]
+  out+=["• "+str(n)+" × "+r for r,n in top]
+  if s["unsafe"]:out.append("🛡️ Anti-golpe recusou: "+"; ".join(s["unsafe"]))
+ try:
+  import pumpfun
+  ps=pumpfun.last_scan
+  out.append("🟣 Pump.fun: "+(("erro ao ler lista: "+str(ps["error"])[:80]) if ps.get("error") else str(ps.get("tokens",0))+" moedas lidas, "+str(ps.get("passed",0))+" passaram"))
+ except Exception:pass
+ return out
 def last_scan_lines():
  s=live_engine.LAST_SCAN
  if not s["at"]:return ["🔎 Ainda não houve varredura (liga o 🚀 Trading ON e espera ~1 min)."]
@@ -135,7 +156,8 @@ def trading_status_text():
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
         "🟢 ROBÔ LIGADO" if running else "🔴 ROBÔ PARADO — "+(live_engine.why_stopped() or ""),
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
-        "Compras automáticas (volume alto, 10% da conta): "+("SIM" if running else "NÃO"),
+        robot_alive_line(),
+        "🚀 Trading de volume (10% da conta): "+("LIGADO" if running and not trade_state.flag("hot_disabled") else "DESLIGADO"),
         "Vendas automáticas (stop −6% / stop móvel após +8% / 45 min): "+("SIM" if running else "NÃO"),
         "🎯 Sniper (moedas novas, 15% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
         "🟣 Pump.fun (15% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
@@ -147,7 +169,7 @@ def trading_status_text():
         "",
         "VERIFICAÇÕES:"]
  lines += [("✅ " if ok else "❌ ")+name for name,ok in checks.items()]
- lines += [""]+last_scan_lines()
+ lines += [""]+last_scan_lines()+[""]+sniper_scan_lines()
  lines += ["","⚠️ DINHEIRO REAL. Memecoins podem cair a zero; o SL pode não segurar em quedas bruscas."]
  return "\n".join(lines)
 
@@ -631,11 +653,15 @@ def startup_notice():
   ("🟢 Robô LIGADO e operando" if reason is None else "🔴 Robô parado: "+reason)+
   "\n📦 Posições abertas: "+str(st["positions"])+"/3 (stop e venda automática continuam)"+
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
+HEARTBEAT={"at":0.0,"step":"iniciando"}
+def beat(step):
+ HEARTBEAT.update(at=time.time(),step=step)
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
  next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;next_snipe=0;last_recovery_notice=time.monotonic()
  while True:
   try:
+   beat("reconciliação MEV")
    if active_chat() and time.monotonic()>=next_mev_reconcile:
     next_mev_reconcile=time.monotonic()+20
     try:
@@ -655,6 +681,7 @@ def background_loop():
       except Exception as exc:
        logging.warning("MEV Telegram notification deferred type=%s",type(exc).__name__)
     except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
+   beat("varredura MEV")
    if active_chat() and trade_state.mev_autotrade_allowed() and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
     next_scan=time.monotonic()+max(30,INTERVAL)
     try:
@@ -672,20 +699,24 @@ def background_loop():
        send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
     except Exception as exc:
      logging.error("MEV cycle stopped: %s",type(exc).__name__)
+   beat("conferência de posições")
    if active_chat() and time.monotonic()>=next_sync:
     next_sync=time.monotonic()+60
     try:live_engine.sync_positions(send,active_chat())
     except Exception:logging.exception("position sync failed")
+   beat("sniper/pump.fun")
    if active_chat() and time.monotonic()>=next_snipe and trade_state.status()["enabled"]:
     next_snipe=time.monotonic()+20
     try:live_engine.sniper_cycle(send,active_chat())
     except Exception:logging.exception("sniper cycle failed")
     try:pumpfun.cycle(send,active_chat())
     except Exception:logging.exception("pump.fun cycle failed")
+   beat("trading de volume")
    if active_chat() and time.monotonic()>=next_trade and trade_state.status()["enabled"] and not trade_state.flag("hot_disabled"):
     next_trade=time.monotonic()+60
     try:live_engine.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES),send,active_chat())
     except Exception:logging.exception("trading buy cycle failed")
+   beat("devolução de depósito")
    if active_chat() and time.monotonic()>=next_reclaim:
     next_reclaim=time.monotonic()+600
     try:
@@ -706,6 +737,7 @@ def background_loop():
      if pending:
       send(active_chat(),"⏳ "+str(len(pending))+" operação(ões) pendente(s). Estou conferindo sozinho os saldos na blockchain; o robô volta a operar assim que confirmar.")
     except Exception:logging.exception("recovery pending inspection failed")
+   beat("vendas automáticas")
    if active_chat() and time.monotonic()>=next_positions:
     next_positions=time.monotonic()+20
 
@@ -716,6 +748,7 @@ def background_loop():
      else:live_exit_monitor.monitor(send,active_chat())
     except Exception:logging.exception("live exit cycle failed")
   except Exception:logging.exception("background worker error")
+  beat("aguardando")
   time.sleep(1)
 def mev_result_line(x):
  net=x.get("estimated_net_lamports")

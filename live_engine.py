@@ -553,6 +553,41 @@ def has_socials(p):
     return bool(info.get("websites") or info.get("socials"))
 
 
+def sniper_reasons(p):
+    """Why a new pair is NOT a sniper buy (empty list = buy signal)."""
+    try:
+        age_min = (time.time() * 1000 - float(p.get("pairCreatedAt") or 0)) / 60000
+        liq = float((p.get("liquidity") or {}).get("usd") or 0)
+        fdv = float(p.get("fdv") or 0)
+        ch = p.get("priceChange") or {}
+        tx = p.get("txns") or {}
+        m5, h1 = tx.get("m5") or {}, tx.get("h1") or {}
+        buys, sells = int(m5.get("buys") or 0), int(m5.get("sells") or 0)
+        vol5 = float((p.get("volume") or {}).get("m5") or 0)
+        m5_change, h1_change = float(ch.get("m5") or 0), float(ch.get("h1") or 0)
+    except (TypeError, ValueError):
+        return ["dados inválidos"]
+    reasons = []
+    if not SNIPER_MIN_AGE_MINUTES <= age_min <= SNIPER_MAX_AGE_MINUTES:
+        reasons.append("fora de 5–60 min de vida")
+    if liq < SNIPER_MIN_LIQUIDITY:
+        reasons.append("liquidez < US$ 15 mil")
+    if not (liq > 0 and 0 < fdv / liq <= 20):
+        reasons.append("valor > 20× a liquidez")
+    if not (0 < m5_change <= 40 and h1_change <= 300):
+        reasons.append("sem subida ou já disparou")
+    if not (buys >= 25 and buys > sells * 1.3 and int(h1.get("buys") or 0) >= 100):
+        reasons.append("compra fraca")
+    if not (5000 <= vol5 <= liq * 3):
+        reasons.append("volume 5 min fora da faixa")
+    if not has_socials(p):
+        reasons.append("sem site/redes sociais")
+    return reasons
+
+
+SNIPER_SCAN = {"at": 0.0, "total": 0, "passed": 0, "reasons": {}, "unsafe": []}
+
+
 def sniper_candidate(p):
     """New token (5-60 min) with real, broad buying that is not already parabolic."""
     try:
@@ -600,7 +635,14 @@ def sniper_cycle(send, chat):
     wallet = get_address()
     open_mints = set(state._load()["positions"])
     now = time.monotonic()
-    for p in sniper_fetch():
+    pairs = sniper_fetch()
+    counts = {}
+    for p in pairs:
+        for r in sniper_reasons(p):
+            counts[r] = counts.get(r, 0) + 1
+    SNIPER_SCAN.update(at=time.time(), total=len(pairs), reasons=counts, unsafe=[],
+                       passed=sum(1 for p in pairs if sniper_candidate(p)))
+    for p in pairs:
         mint = (p.get("baseToken") or {}).get("address")
         if not mint or mint in open_mints or mint in _sniper_seen and now - _sniper_seen[mint] < 600:
             continue
@@ -617,6 +659,7 @@ def sniper_cycle(send, chat):
             safe, why = roundtrip_ok(mint)
         if not safe:
             logging.info("Sniper skipped %s: %s", symbol, why)
+            SNIPER_SCAN["unsafe"] = (SNIPER_SCAN["unsafe"] + [symbol + ": " + why])[-5:]
             continue
         return _execute_buy(p, mint, symbol, send, chat, wallet, SNIPER_FRACTION, "sniper")
     if len(_sniper_seen) > 5000:
