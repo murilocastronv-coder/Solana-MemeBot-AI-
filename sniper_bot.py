@@ -6,7 +6,7 @@ liquidity, holders, audit data and 5m/1h trading stats.
 Buy only if ALL pass:
 - 5 min to 3 h old (SNIPER_MIN_AGE_MIN / SNIPER_MAX_AGE_MIN);
 - more buyers than sellers in the last 5 min (buys >= 1.2x sells) and in 1 h;
-- strong 5-minute volume (>= US$ 10k) and liquidity >= US$ 15k;
+- strong 5-minute volume (>= US$ 10k) and liquidity >= US$ 8k;
 - anti-scam: mint/freeze disabled, top holders < 25%, dev < 5%, >= 100
   holders, not flagged suspicious, organic score not low, has socials;
 - not already parabolic; on-chain re-check and a sell test >= 92%.
@@ -37,7 +37,7 @@ def _env(name, default):
 ORDER_USD = _env("SNIPER_ORDER_USD", 10)
 MAX_POSITIONS = int(_env("SNIPER_MAX_POSITIONS", 3))
 MIN_AGE_MIN, MAX_AGE_MIN = _env("SNIPER_MIN_AGE_MIN", 5), _env("SNIPER_MAX_AGE_MIN", 180)
-MIN_LIQUIDITY = _env("SNIPER_MIN_LIQUIDITY_USD", 15_000)
+MIN_LIQUIDITY = _env("SNIPER_MIN_LIQUIDITY_USD", 8_000)
 MIN_VOLUME_5M = _env("SNIPER_MIN_VOLUME_5M_USD", 10_000)
 BUY_SELL_RATIO = _env("SNIPER_BUY_SELL_RATIO", 1.2)
 MIN_HOLDERS = _env("SNIPER_MIN_HOLDERS", 100)
@@ -266,7 +266,9 @@ def buy_cycle(tokens=None, send=None, chat=None):
         symbol = str(t.get("symbol") or "?")[:20]
         why = reasons(t)
         if why:
-            _note("rejected", why[0])
+            # out of the age window: nothing else matters; otherwise count EVERY failed rule
+            for r in (why[:1] if why[0] == "fora da faixa de idade" else why):
+                _note("rejected", r)
             continue
         if now - _tried.get(mint, -86400) < 86400:
             continue
@@ -392,9 +394,9 @@ def status_text():
                  format(MIN_AGE_MIN, ".0f") + " e " + format(MAX_AGE_MIN, ".0f") + " min")
     lines.append("Última hora: " + str(len(rows)) + " análises · oportunidades: " + str(c["opportunity"]) +
                  " · compras: " + str(c["bought"]) + " · vendas: " + str(c["sold"]))
-    top = Counter(x for k, x in rows if k in ("rejected", "unsafe", "blocked")).most_common(4)
+    top = Counter(x for k, x in rows if k in ("rejected", "unsafe", "blocked")).most_common(6)
     if top:
-        lines.append("Recusas: " + "; ".join(str(n) + "× " + r for r, n in top))
+        lines.append("Recusas (uma moeda pode ter vários motivos): " + "; ".join(str(n) + "× " + r for r, n in top))
     if LAST_ERROR["text"]:
         lines.append("Último erro: " + LAST_ERROR["text"])
     return "\n".join(lines)
