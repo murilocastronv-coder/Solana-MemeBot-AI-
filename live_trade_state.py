@@ -110,12 +110,26 @@ def mev_autotrade_allowed():
 def mev_live_allowed():
     return mev_autotrade_allowed() and _env_on("MEV_LIVE_ENABLED")
 
+MEV_DEFAULTS = {"input_lamports": 50_000_000, "min_profit_bps": 10, "jito_tip_lamports": 10_000}
+
+
 def mev_config():
     """Persisted settings for the Telegram MEV controls."""
-    defaults = {"input_lamports": 10_000_000, "min_profit_bps": 10, "jito_tip_lamports": 1_000}
+    defaults = dict(MEV_DEFAULTS)
     with _LOCK:
         state = _load()
         saved = state.get("mev_settings", {})
+        # One-time move from the old defaults (0.01 SOL entry, minimum tip) to
+        # 0.05 SOL and the maximum tip: fixed fees weigh less and bundles win
+        # more often. Values the owner sets afterwards are kept.
+        if not state.get("mev_defaults_v2"):
+            if saved.get("input_lamports", 10_000_000) == 10_000_000:
+                saved["input_lamports"] = MEV_DEFAULTS["input_lamports"]
+            if saved.get("jito_tip_lamports", 1_000) == 1_000:
+                saved["jito_tip_lamports"] = MEV_DEFAULTS["jito_tip_lamports"]
+            state["mev_settings"] = saved
+            state["mev_defaults_v2"] = True
+            _save(state)
         # The previous 0.75% value was the shipped default; migrate it to this requested test threshold.
         if saved.get("min_profit_bps") == 75:
             saved["min_profit_bps"] = 10
@@ -136,8 +150,7 @@ def update_mev_setting(name, value):
         settings = state.setdefault("mev_settings", {})
         settings[name] = value
         _save(state)
-        return {key: int(settings.get(key, default)) for key, default in
-                {"input_lamports": 10_000_000, "min_profit_bps": 10, "jito_tip_lamports": 1_000}.items()}
+        return {key: int(settings.get(key, default)) for key, default in MEV_DEFAULTS.items()}
 
 def _update_mev_daily(state, previous, item):
     from datetime import datetime, timezone

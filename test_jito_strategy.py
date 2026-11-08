@@ -9,7 +9,10 @@ from solders.keypair import Keypair
 import jito_arbitrage as j
 
 MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
-AMOUNT = 10_000_000
+import live_trade_state as _lts
+AMOUNT = _lts.MEV_DEFAULTS["input_lamports"]
+# required back = AMOUNT + tip + 10k base fees + max(10k, 0.1% of AMOUNT)
+REQUIRED = AMOUNT + _lts.MEV_DEFAULTS["jito_tip_lamports"] + 10_000 + max(10_000, AMOUNT * 10 // 10_000)
 
 
 def build(out, threshold):
@@ -43,8 +46,8 @@ class StrategyTests(unittest.TestCase):
     def test_expected_profit_is_taken_with_locked_floor(self):
         # +2% expected: old worst-case math (-0.5%) would still pass, but +0.6%
         # expected would not. Use +0.6% to show the new behaviour.
-        expected = AMOUNT + 60_000
-        floor_build = build(expected, AMOUNT + 25_000)
+        expected = REQUIRED + 30_000
+        floor_build = build(expected, REQUIRED + 5_000)
         result, calls = self.run_with([build(1000, 995), build(expected, expected - 50_000), floor_build])
         self.assertEqual(result["status"], "dry_run_opportunity")
         self.assertEqual(len(calls), 3)
@@ -74,8 +77,8 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(j._priority_fee_lamports(b), 100_000)
 
     def test_live_failure_is_reported(self):
-        expected = AMOUNT + 60_000
-        builds = [build(1000, 995), build(expected, expected - 50_000), build(expected, AMOUNT + 25_000)]
+        expected = REQUIRED + 30_000
+        builds = [build(1000, 995), build(expected, expected - 50_000), build(expected, REQUIRED + 5_000)]
         with patch.object(j, "_build", side_effect=lambda *a, **k: builds.pop(0)), \
              patch.object(j, "_live_enabled", return_value=True), \
              patch.object(j, "_preflight", side_effect=RuntimeError("Bot wallet SOL balance is below the trade")):
