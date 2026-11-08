@@ -7,9 +7,9 @@ WALLET = "11111111111111111111111111111112"
 
 def pair():
     return {"baseToken": {"address": MINT, "symbol": "BONK"}, "priceUsd": "0.00002",
-            "liquidity": {"usd": 900000}, "volume": {"h24": 500000}, "fdv": 1500000,
+            "liquidity": {"usd": 900000}, "volume": {"h24": 5000000, "h1": 600000}, "fdv": 1500000,
             "pairCreatedAt": (time.time() - 30 * 86400) * 1000,
-            "priceChange": {"m5": 1, "h1": 4, "h6": 9, "h24": 5}, "txns": {"h1": {"buys": 120, "sells": 80}}}
+            "priceChange": {"m5": 1, "h1": 4, "h6": 9, "h24": 5}, "txns": {"m5": {"buys": 90, "sells": 60}, "h1": {"buys": 120, "sells": 80}}}
 
 SAFE_MINT = {"value": {"data": {"parsed": {"type": "mint", "info": {"mintAuthority": None, "freezeAuthority": None}}}}}
 
@@ -98,7 +98,7 @@ class LiveEngineTests(unittest.TestCase):
         young = pair(); young["pairCreatedAt"] = time.time() * 1000
         self.assertIsNone(live_engine.buy_cycle([young], self.send, "1"))
         self.assertIn("0 passaram nos filtros", self.sent[-1])
-        self.assertIn("1 com idade < 24h", self.sent[-1])
+        self.assertIn("1 com idade < 6h", self.sent[-1])
         live_engine.buy_cycle([young], self.send, "1")
         self.assertEqual(len(self.sent), 1)  # throttled to once per hour
 
@@ -119,7 +119,7 @@ class LiveEngineTests(unittest.TestCase):
         live_engine.start()
         falling = pair(); falling["priceChange"]["h1"] = -3
         self.assertIsNone(live_engine.buy_cycle([falling], self.send, "1"))
-        self.assertIn("sem tendência de alta", self.sent[-1])
+        self.assertIn("sem subida saudável", self.sent[-1])
 
     def test_anti_rug_blocks_mint_authority(self):
         live_engine.start()

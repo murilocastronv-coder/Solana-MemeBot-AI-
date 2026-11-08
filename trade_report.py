@@ -1,7 +1,7 @@
 """Plain-language trade history and per-strategy statistics for Telegram."""
 REASONS = {"stop_loss": "stop", "take_profit": "stop móvel", "time_stop": "tempo", "dead": "zerada", "?": "?",
            "trailing": "stop móvel", "reversal": "virada", "liquidated": "LIQUIDADO"}
-MODES = {"normal": "Normal", "sniper": "Sniper", "pumpfun": "Pump.fun", "btc": "BTC"}
+MODES = {"hot": "Volume", "normal": "Normal", "sniper": "Sniper", "pumpfun": "Pump.fun", "btc": "BTC"}
 
 
 def stats(trades):
@@ -17,7 +17,7 @@ def _block(title, trades):
     lines = [title]
     if not trades:
         return lines + ["Nenhuma operação fechada ainda."]
-    for mode in ("normal", "sniper", "pumpfun"):
+    for mode in ("hot", "normal", "sniper", "pumpfun"):
         s = stats([t for t in trades if t.get("mode", "normal") == mode])
         if not s["n"]:
             continue

@@ -38,10 +38,10 @@ class HistoryTests(LiveEngineTests):
             live_engine.exit_cycle(self.send, "1")
         h = state.history()
         self.assertEqual(len(h), 1)
-        self.assertEqual((h[0]["symbol"], h[0]["mode"], h[0]["reason"], h[0]["pnl_usd"]), ("BONK", "normal", "stop_loss", -2.0))
+        self.assertEqual((h[0]["symbol"], h[0]["mode"], h[0]["reason"], h[0]["pnl_usd"]), ("BONK", "hot", "stop_loss", -2.0))
         text = trade_report.history_text(h, sim_engine.summary())
-        self.assertIn("Normal: 1 operações | acerto 0% | P/L -2.00", text)
-        self.assertIn("🔻 BONK [N] -2.00 USD (-10%) · stop", text)
+        self.assertIn("Volume: 1 operações | acerto 0% | P/L -2.00", text)
+        self.assertIn("🔻 BONK [V] -2.00 USD (-10%) · stop", text)
 
 
 class SimTests(LiveEngineTests):

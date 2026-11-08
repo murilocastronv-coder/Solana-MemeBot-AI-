@@ -16,6 +16,8 @@ CHECK_INTERVAL_SECONDS = 20
 SNIPER_MAX_HOLD_SECONDS = 30 * 60  # sniper trade that never took off is closed
 
 SNIPER_EXIT = {"stop_loss": "0.12", "arm": "1.25", "drop": "0.12"}
+HOT_EXIT = {"stop_loss": "0.06", "arm": "1.08", "drop": "0.05"}
+HOT_MAX_HOLD_SECONDS = 45 * 60  # fast mover that did not move is closed
 
 
 def quote_value_usd(mint, amount):
@@ -32,6 +34,12 @@ def position_signal(position, cost, proceeds):
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **SNIPER_EXIT)
         held = time.time() - float(position.get("opened_at") or time.time())
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
+            signal.update(action="sell", reason="time_stop")
+        return signal
+    if position.get("mode") == "hot":
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **HOT_EXIT)
+        held = time.time() - float(position.get("opened_at") or time.time())
+        if signal["action"] == "hold" and held > HOT_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
     return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0))

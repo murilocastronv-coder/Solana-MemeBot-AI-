@@ -161,6 +161,26 @@ TOKEN_FEEDS=("https://api.dexscreener.com/token-boosts/top/v1",
 ESTABLISHED_PAIR_SEARCHES=("SOL","USDC")
 # Extra established Solana tokens searched only for the MEV scan.
 MEV_PAIR_SEARCHES=tuple(x.strip() for x in os.getenv("MEV_PAIR_SEARCHES","USDT,JUP,BONK,WIF,POPCAT,RAY,JTO,PYTH,TRUMP,PENGU,FARTCOIN,MEW,PNUT,GIGA,MOODENG,AI16Z,GOAT,ORCA,RENDER,W").split(",") if x.strip())
+JUPITER_TOP_FEEDS=("https://api.jup.ag/tokens/v2/toptraded/1h?limit=100","https://api.jup.ag/tokens/v2/toptrending/1h?limit=100")
+_TOP_CACHE={"at":0.0,"mints":[]}
+SKIP_MINTS={"So11111111111111111111111111111111111111112","EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"}
+def jupiter_top_traded():
+ """Top traded/trending Solana tokens of the last hour (cached 2 min)."""
+ if time.monotonic()-_TOP_CACHE["at"]<120:return _TOP_CACHE["mints"]
+ mints=[]
+ try:
+  import jupiter_rate_limiter
+  from jupiter_v2_executor import headers as jup_headers
+  for url in JUPITER_TOP_FEEDS:
+   try:
+    r=jupiter_rate_limiter.get(url,headers=jup_headers(),timeout=12)
+    if r.ok and isinstance(r.json(),list):
+     mints+=[str(t.get("id") or "") for t in r.json() if isinstance(t,dict)]
+   except Exception as exc:logging.warning("Jupiter top feed unavailable: %s",type(exc).__name__)
+ except Exception as exc:logging.warning("Jupiter top feeds unavailable: %s",type(exc).__name__)
+ mints=[m for m in dict.fromkeys(mints) if m and m not in SKIP_MINTS]
+ _TOP_CACHE.update(at=time.monotonic(),mints=mints)
+ return mints
 _FETCH_CACHE={"at":0.0,"key":None,"rows":[]}
 _FETCH_LOCK=threading.Lock()
 def fetch_cached(extra_searches=(),max_age=25):
@@ -179,6 +199,8 @@ def fetch(extra_searches=()):
    data=market_json(url)
    if isinstance(data,list):profiles+=data
   except RuntimeError:logging.warning("Token feed unavailable: %s",url.rsplit("/",2)[-2])
+ # Most traded tokens on Jupiter right now go first (high volume, fast movers).
+ profiles=[{"chainId":"solana","tokenAddress":m} for m in jupiter_top_traded()]+profiles
  try:
   profiles.extend({"chainId":"solana","tokenAddress":t.get("id") or t.get("address")} for t in pumpfun.fetch() if isinstance(t,dict) and (t.get("id") or t.get("address")))
  except Exception as exc:logging.warning("Pump.fun discovery unavailable: %s",type(exc).__name__)
@@ -356,7 +378,7 @@ def handle(update):
  if action=="trade_on":
   try:
    live_engine.start()
-   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL\nA cada ~1 min procura moedas em alta (liquidez ≥ US$ 30 mil, 24h+ de vida, subindo em 1h e 6h, mais compras que vendas) e aprovadas no anti-golpe e no teste de venda. Compra até 2 por rodada com 10% da conta cada (máx. 3 abertas).\nVende sozinho: stop −8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
+   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 1 mi, ≥ US$ 150 mil na última hora (girando ≥ 50% da liquidez), liquidez ≥ US$ 100 mil, ≥ 100 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar o trading: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.",keyboard())
   return
  if action=="trade_off":

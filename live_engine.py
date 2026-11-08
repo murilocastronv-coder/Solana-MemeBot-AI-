@@ -96,8 +96,63 @@ def momentum_ok(p):
         return False
 
 
+# High-volume, fast-moving memecoins ("hot" strategy).
+HOT_MIN_LIQUIDITY = float(os.getenv("HOT_MIN_LIQUIDITY_USD", "100000"))
+HOT_MIN_VOLUME_24H = float(os.getenv("HOT_MIN_VOLUME_24H_USD", "1000000"))
+HOT_MIN_VOLUME_1H = float(os.getenv("HOT_MIN_VOLUME_1H_USD", "150000"))
+HOT_MIN_TURNOVER_1H = 0.5      # 1h volume >= 50% of liquidity: money is moving fast
+HOT_MIN_TXNS_5M = 100          # busy right now
+HOT_MIN_AGE_HOURS = 6          # skip the first hours, when most rugs happen
+HOT_RETRY_SECONDS = 2 * 3600   # a hot token can be traded again after 2 h
+
+
+def _f(d, *path):
+    for key in path:
+        d = (d or {}).get(key) if isinstance(d, dict) else None
+    try:
+        return float(d or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def hot_reasons(p, now_ms=None):
+    """Why a pair is NOT a hot candidate (empty list = buy signal)."""
+    now_ms = now_ms if now_ms is not None else time.time() * 1000
+    liq = _f(p, "liquidity", "usd")
+    vol24, vol1h = _f(p, "volume", "h24"), _f(p, "volume", "h1")
+    m5, h1, h6 = _f(p, "priceChange", "m5"), _f(p, "priceChange", "h1"), _f(p, "priceChange", "h6")
+    b5, s5 = _f(p, "txns", "m5", "buys"), _f(p, "txns", "m5", "sells")
+    b1, s1 = _f(p, "txns", "h1", "buys"), _f(p, "txns", "h1", "sells")
+    fdv = _f(p, "fdv")
+    created = _f(p, "pairCreatedAt")
+    age = (now_ms - created) / 3_600_000 if created else 0
+    reasons = []
+    mint = (p.get("baseToken") or {}).get("address")
+    if p.get("chainId", "solana") != "solana" or not mint or _f(p, "priceUsd") <= 0:
+        reasons.append("dados inválidos")
+    if liq < HOT_MIN_LIQUIDITY:
+        reasons.append("liquidez < US$ " + format(HOT_MIN_LIQUIDITY / 1000, ".0f") + " mil")
+    if vol24 < HOT_MIN_VOLUME_24H:
+        reasons.append("volume 24h < US$ " + format(HOT_MIN_VOLUME_24H / 1e6, ".1f") + " mi")
+    if vol1h < HOT_MIN_VOLUME_1H or (liq > 0 and vol1h / liq < HOT_MIN_TURNOVER_1H):
+        reasons.append("pouco volume na última hora")
+    if b5 + s5 < HOT_MIN_TXNS_5M or b5 <= s5 or b1 <= s1 * 1.05:
+        reasons.append("sem pressão compradora agora")
+    if not (0 < m5 <= 8 and 2 <= h1 <= 40 and h6 > 0):
+        reasons.append("sem subida saudável (5m/1h/6h)")
+    if age < HOT_MIN_AGE_HOURS:
+        reasons.append("idade < " + str(HOT_MIN_AGE_HOURS) + "h")
+    if not (fdv > 0 and liq > 0 and fdv / liq <= 50):
+        reasons.append("FDV/liquidez > 50")
+    return reasons
+
+
+def hot_candidate(p):
+    return not hot_reasons(p)
+
+
 def live_candidate(p):
-    return candidate(p) and momentum_ok(p)
+    return hot_candidate(p)
 
 
 def token_safety(mint):
@@ -160,24 +215,12 @@ def order_size_usd(wallet, fraction=None):
 
 def _skip_reasons(rows):
     """Count why scanned tokens did not qualify (for the hourly report)."""
-    counts = {"liquidez < US$ 30 mil": 0, "volume 24h < US$ 20 mil": 0, "idade < 24h": 0,
-              "FDV/liquidez > 100": 0, "variação 24h fora de -20%..+80%": 0, "sem tendência de alta agora": 0}
-    now_ms = time.time() * 1000
+    counts = {}
     for p in rows:
-        try:
-            liq = float(p.get("liquidity", {}).get("usd") or 0)
-            vol = float(p.get("volume", {}).get("h24") or 0)
-            fdv = float(p.get("fdv") or 0)
-            age = (now_ms - float(p.get("pairCreatedAt") or now_ms)) / 3_600_000
-            change = float(p.get("priceChange", {}).get("h24") or 0)
-        except (TypeError, ValueError):
+        if not isinstance(p, dict):
             continue
-        if liq < 30000: counts["liquidez < US$ 30 mil"] += 1
-        if vol < 20000: counts["volume 24h < US$ 20 mil"] += 1
-        if age < 24: counts["idade < 24h"] += 1
-        if not (fdv > 0 and liq > 0 and fdv / liq <= 100): counts["FDV/liquidez > 100"] += 1
-        if not -20 <= change <= 80: counts["variação 24h fora de -20%..+80%"] += 1
-        if not momentum_ok(p): counts["sem tendência de alta agora"] += 1
+        for reason in hot_reasons(p):
+            counts[reason] = counts.get(reason, 0) + 1
     return counts
 
 
@@ -218,6 +261,7 @@ BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
+    "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
 }
@@ -286,12 +330,14 @@ def buy_cycle(rows, send, chat):
     qualified = 0
     unsafe = []
     bought = []
-    for p in rows:
+    # Most traded in the last hour first.
+    ranked = sorted((p for p in rows if isinstance(p, dict)), key=lambda p: -_f(p, "volume", "h1"))
+    for p in ranked:
         if not live_candidate(p):
             continue
         qualified += 1
         mint = p["baseToken"]["address"]
-        if mint in open_mints or now - _tried.get(mint, -RETRY_MINT_AFTER_SECONDS) < RETRY_MINT_AFTER_SECONDS:
+        if mint in open_mints or now - _tried.get(mint, -HOT_RETRY_SECONDS) < HOT_RETRY_SECONDS:
             continue
         symbol = str(p["baseToken"].get("symbol", "?"))[:20]
         safe, why = token_safety(mint)
@@ -300,7 +346,7 @@ def buy_cycle(rows, send, chat):
         if not safe:
             unsafe.append(symbol + ": " + why)
             continue
-        result = _execute_buy(p, mint, symbol, send, chat, wallet, ORDER_FRACTION, "normal")
+        result = _execute_buy(p, mint, symbol, send, chat, wallet, ORDER_FRACTION, "hot")
         if not result or result.get("status") != "settled_buy":
             return result  # failed, uncertain or no balance: stop buying this scan
         bought.append(result)
@@ -327,7 +373,7 @@ def sell_message(symbol, signal, settled):
     pnl = settled["pnl_usd"]
     pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0
     why = {"take_profit": "🚀 Stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)",
-           "time_stop": "⏱️ Tempo esgotado (não decolou em 30 min)"}.get(signal["reason"], "🛑 Stop loss")
+           "time_stop": "⏱️ Tempo esgotado (não andou a tempo)"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"
