@@ -551,11 +551,11 @@ def loop():
       if settled["status"]=="landed":
        pnl=settled.get("realized_net_lamports")
        pnl_text=("P/L realizado: "+format(pnl/1e9,"+.8f")+" SOL" if isinstance(pnl,int) else "P/L ainda indisponível no RPC")
-       message="✅ Arbitragem Jito confirmada na Solana.\\nContrato: "+str(settled.get("mint",""))+"\\n"+pnl_text
-       if settled.get("signature"):message+="\\nAssinatura: "+str(settled["signature"])
+       message="✅ Arbitragem Jito confirmada na Solana.\nContrato: "+str(settled.get("mint",""))+"\n"+pnl_text
+       if settled.get("signature"):message+="\nAssinatura: "+str(settled["signature"])
        send(active_chat(),message,keyboard())
       else:
-       send(active_chat(),"⚠️ Bundle Jito não aterrissou; o ciclo atômico não foi executado.\\nID: "+str(settled.get("bundle_id","")),keyboard())
+       send(active_chat(),"⚠️ Bundle Jito não aterrissou; o ciclo atômico não foi executado.\nID: "+str(settled.get("bundle_id","")),keyboard())
     except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
    if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
     next_scan=time.monotonic()+max(60,INTERVAL)
