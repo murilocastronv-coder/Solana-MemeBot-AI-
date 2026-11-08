@@ -390,7 +390,7 @@ def handle(update):
  if action=="trade_on":
   try:
    live_engine.start()
-   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 1 mi, ≥ US$ 150 mil na última hora (girando ≥ 30% da liquidez), liquidez ≥ US$ 100 mil, ≥ 100 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
+   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 500 mil, ≥ US$ 50 mil na última hora (girando ≥ 15% da liquidez), liquidez ≥ US$ 50 mil, ≥ 60 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar o trading: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.",keyboard())
   return
  if action=="trade_off":

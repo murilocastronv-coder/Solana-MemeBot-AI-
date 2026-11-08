@@ -97,11 +97,11 @@ def momentum_ok(p):
 
 
 # High-volume, fast-moving memecoins ("hot" strategy).
-HOT_MIN_LIQUIDITY = float(os.getenv("HOT_MIN_LIQUIDITY_USD", "100000"))
-HOT_MIN_VOLUME_24H = float(os.getenv("HOT_MIN_VOLUME_24H_USD", "1000000"))
-HOT_MIN_VOLUME_1H = float(os.getenv("HOT_MIN_VOLUME_1H_USD", "150000"))
-HOT_MIN_TURNOVER_1H = 0.3      # 1h volume >= 30% of liquidity: money is moving fast
-HOT_MIN_TXNS_5M = 100          # busy right now
+HOT_MIN_LIQUIDITY = float(os.getenv("HOT_MIN_LIQUIDITY_USD", "50000"))
+HOT_MIN_VOLUME_24H = float(os.getenv("HOT_MIN_VOLUME_24H_USD", "500000"))
+HOT_MIN_VOLUME_1H = float(os.getenv("HOT_MIN_VOLUME_1H_USD", "50000"))
+HOT_MIN_TURNOVER_1H = float(os.getenv("HOT_MIN_TURNOVER_1H", "0.15"))  # 1h volume vs liquidity
+HOT_MIN_TXNS_5M = int(os.getenv("HOT_MIN_TXNS_5M", "60"))  # busy right now
 HOT_MIN_AGE_HOURS = 6          # skip the first hours, when most rugs happen
 HOT_RETRY_SECONDS = 2 * 3600   # a hot token can be traded again after 2 h
 
