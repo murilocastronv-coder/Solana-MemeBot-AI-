@@ -701,9 +701,12 @@ def why_text(now=None):
         lines.append("Puladas: " + "; ".join(str(n) + "× " + r[:40] for r, n in skipped.most_common(3)))
     if not failed and not count["submitted_pending"]:
         lines.append("Motivo de não abrir: nenhuma diferença de preço deu lucro depois das taxas.")
-    summary = pending_summary()
-    lines.append("Ordens aguardando confirmação: " + str(summary["in_flight"]) + "/" + str(MAX_PENDING) +
-                 (" · ⚠️ envio incerto bloqueando (confira no Solscan)" if summary["uncertain"] else ""))
+    try:
+        summary = pending_summary()
+        lines.append("Ordens aguardando confirmação: " + str(summary["in_flight"]) + "/" + str(MAX_PENDING) +
+                     (" · ⚠️ envio incerto bloqueando (confira no Solscan)" if summary["uncertain"] else ""))
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

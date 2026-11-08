@@ -50,6 +50,10 @@ class PendingTests(unittest.TestCase):
 
 
 class WhyTextTests(unittest.TestCase):
+    def setUp(self):
+        p = patch.dict(os.environ, {"MEV_PENDING_FILE": str(Path(tempfile.mkdtemp()) / "p.json")})
+        p.start(); self.addCleanup(p.stop)
+
     def test_explains_last_hour(self):
         j._RECENT.clear()
         for _ in range(5):
