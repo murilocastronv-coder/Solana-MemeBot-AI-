@@ -112,6 +112,17 @@ def trading_readiness():
  running=live_engine.ready()
  return st,checks,running
 
+def last_scan_lines():
+ s=live_engine.LAST_SCAN
+ if not s["at"]:return ["🔎 Ainda não houve varredura (liga o 🚀 Trading ON e espera ~1 min)."]
+ out=["🔎 ÚLTIMA VARREDURA ("+datetime.fromtimestamp(s["at"],timezone.utc).strftime("%H:%M:%S UTC")+")",
+      "Moedas analisadas: "+str(s["total"])+" | passaram em tudo: "+str(s["qualified"])]
+ if s["blocked"]:out.append("⛔ Compra bloqueada: "+str(s["blocked"])[:200])
+ top=sorted(s["reasons"].items(),key=lambda kv:-kv[1])[:6]
+ if top:out.append("Motivos de recusa:");out+=["• "+str(n)+" × "+r for r,n in top]
+ if s["near"]:out.append("Quase passaram:");out+=["• "+x for x in s["near"]]
+ if s["unsafe"]:out.append("🛡️ Anti-golpe/teste de venda recusou: "+"; ".join(s["unsafe"]))
+ return out
 def trading_status_text():
  st,checks,running=trading_readiness()
  try:sniper_on=trade_state.sniper_enabled();sniper_n=trade_state.positions_by_mode("sniper")
@@ -123,8 +134,8 @@ def trading_status_text():
  lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
         "🟢 ROBÔ LIGADO" if running else "🔴 ROBÔ PARADO — "+(live_engine.why_stopped() or ""),
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
-        "Compras automáticas (10% da conta): "+("SIM" if running else "NÃO"),
-        "Vendas automáticas (SL -8% / stop móvel após +15%): "+("SIM" if running else "NÃO"),
+        "Compras automáticas (volume alto, 10% da conta): "+("SIM" if running else "NÃO"),
+        "Vendas automáticas (stop −6% / stop móvel após +8% / 45 min): "+("SIM" if running else "NÃO"),
         "🎯 Sniper (moedas novas, 5% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
         "🟣 Pump.fun (5% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
         "Posições registradas: "+str(st["positions"])+" / 3",
@@ -135,6 +146,7 @@ def trading_status_text():
         "",
         "VERIFICAÇÕES:"]
  lines += [("✅ " if ok else "❌ ")+name for name,ok in checks.items()]
+ lines += [""]+last_scan_lines()
  lines += ["","⚠️ DINHEIRO REAL. Memecoins podem cair a zero; o SL pode não segurar em quedas bruscas."]
  return "\n".join(lines)
 
@@ -378,7 +390,7 @@ def handle(update):
  if action=="trade_on":
   try:
    live_engine.start()
-   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 1 mi, ≥ US$ 150 mil na última hora (girando ≥ 50% da liquidez), liquidez ≥ US$ 100 mil, ≥ 100 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
+   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 1 mi, ≥ US$ 150 mil na última hora (girando ≥ 30% da liquidez), liquidez ≥ US$ 100 mil, ≥ 100 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar o trading: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.",keyboard())
   return
  if action=="trade_off":

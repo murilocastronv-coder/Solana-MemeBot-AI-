@@ -100,7 +100,7 @@ def momentum_ok(p):
 HOT_MIN_LIQUIDITY = float(os.getenv("HOT_MIN_LIQUIDITY_USD", "100000"))
 HOT_MIN_VOLUME_24H = float(os.getenv("HOT_MIN_VOLUME_24H_USD", "1000000"))
 HOT_MIN_VOLUME_1H = float(os.getenv("HOT_MIN_VOLUME_1H_USD", "150000"))
-HOT_MIN_TURNOVER_1H = 0.5      # 1h volume >= 50% of liquidity: money is moving fast
+HOT_MIN_TURNOVER_1H = 0.3      # 1h volume >= 30% of liquidity: money is moving fast
 HOT_MIN_TXNS_5M = 100          # busy right now
 HOT_MIN_AGE_HOURS = 6          # skip the first hours, when most rugs happen
 HOT_RETRY_SECONDS = 2 * 3600   # a hot token can be traded again after 2 h
@@ -138,13 +138,25 @@ def hot_reasons(p, now_ms=None):
         reasons.append("pouco volume na última hora")
     if b5 + s5 < HOT_MIN_TXNS_5M or b5 <= s5 or b1 <= s1 * 1.05:
         reasons.append("sem pressão compradora agora")
-    if not (0 < m5 <= 8 and 2 <= h1 <= 40 and h6 > 0):
+    if not (-1 <= m5 <= 8 and 1 <= h1 <= 50 and h6 > 0):
         reasons.append("sem subida saudável (5m/1h/6h)")
     if age < HOT_MIN_AGE_HOURS:
         reasons.append("idade < " + str(HOT_MIN_AGE_HOURS) + "h")
     if not (fdv > 0 and liq > 0 and fdv / liq <= 50):
         reasons.append("FDV/liquidez > 50")
     return reasons
+
+
+def _near_misses(rows, limit=3):
+    """Highest-volume tokens that failed only one rule (to show what is close)."""
+    near = []
+    for p in sorted((r for r in rows if isinstance(r, dict)), key=lambda r: -_f(r, "volume", "h1")):
+        reasons = hot_reasons(p)
+        if len(reasons) == 1:
+            near.append(str((p.get("baseToken") or {}).get("symbol", "?"))[:12] + ": " + reasons[0])
+        if len(near) >= limit:
+            break
+    return near
 
 
 def hot_candidate(p):
@@ -305,6 +317,9 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode):
     return settled
 
 
+LAST_SCAN = {"at": 0.0, "total": 0, "qualified": 0, "blocked": "", "reasons": {}, "unsafe": [], "near": []}
+
+
 def buy_cycle(rows, send, chat):
     """Buy up to BUYS_PER_SCAN new tokens per scan (10% of account value each).
 
@@ -312,8 +327,11 @@ def buy_cycle(rows, send, chat):
     """
     if not chat:
         return None
+    LAST_SCAN.update(at=time.time(), total=len(rows or []), qualified=0, blocked="", unsafe=[],
+                     reasons=_skip_reasons(rows or []), near=_near_misses(rows or []))
     if not ready():
         problem = _why_not_ready()
+        LAST_SCAN["blocked"] = problem or "trading desligado"
         if problem:
             _notice(send, chat, "not_ready", "⚠️ Robô ligado mas bloqueado: " + problem, REPORT_EVERY_SECONDS)
         return None
@@ -322,6 +340,7 @@ def buy_cycle(rows, send, chat):
         labels = {"Position limit": "3 posições abertas; espera vender para comprar de novo",
                   "Daily loss limit": "limite de perda do dia (US$ " + format(state.daily_loss_limit(), ".2f") + ") atingido",
                   "Unreconciled transaction": "transação pendente de conferência"}
+        LAST_SCAN["blocked"] = labels.get(reason, reason)
         _notice(send, chat, "cannot_open", "⏸️ Sem novas compras: " + labels.get(reason, reason), REPORT_EVERY_SECONDS)
         return None
     wallet = get_address()
@@ -353,6 +372,7 @@ def buy_cycle(rows, send, chat):
         open_mints.add(mint)
         if len(bought) >= BUYS_PER_SCAN or not state.can_open()[0]:
             break
+    LAST_SCAN.update(qualified=qualified, unsafe=unsafe[:5])
     if bought:
         return bought[-1]
     reasons = sorted(_skip_reasons(rows).items(), key=lambda kv: -kv[1])
