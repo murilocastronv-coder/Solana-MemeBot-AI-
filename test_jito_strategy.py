@@ -102,6 +102,13 @@ class CandidateTests(unittest.TestCase):
         picked = [i["token"] for i, _ in j.pick_candidates(rows, limit=10, now=0)]
         self.assertEqual(picked, ["B", "young", "A"])
 
+    def test_cooldown_skips_phantom_token(self):
+        j._COOLDOWN["B"] = 10_000
+        rows = [self.item("A"), self.item("B")]
+        self.assertEqual([i["token"] for i, _ in j.pick_candidates(rows, now=5_000)], ["A"])
+        self.assertEqual(len(j.pick_candidates(rows, now=20_000)), 2)
+        j._COOLDOWN.clear()
+
     def test_rotation_skips_recently_checked(self):
         rows = [self.item(str(n)) for n in range(25)]
         first = {i["token"] for i, _ in j.pick_candidates(rows, limit=10, now=1000)}

@@ -524,12 +524,13 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
     amount = settings["input_lamports"]
     min_bps = settings["min_profit_bps"]
     tip_lamports = settings["jito_tip_lamports"]
-    # Zero slippage on the buy: it either delivers at least outAmount tokens or
-    # fails, so the sell leg (which sells exactly outAmount) always has them.
-    # A failed leg drops the whole Jito bundle at no cost.
+    # Small slippage on the buy so a tiny price move does not kill the cycle;
+    # the sell leg only sells the buy's guaranteed minimum, so it always has
+    # the tokens. The profit floor stays locked on the sell leg, and a failed
+    # leg drops the whole Jito bundle at no cost.
     first = _build(SOL_MINT, mint, amount, str(signer.pubkey()), dexes=buy_dexes,
-                   slippage_bps=_int_env("MEV_BUY_SLIPPAGE_BPS", 0, 0, 50))
-    token_amount = int(first["outAmount"])
+                   slippage_bps=_int_env("MEV_BUY_SLIPPAGE_BPS", 20, 0, 50))
+    token_amount = int(first["otherAmountThreshold"])
     if token_amount <= 0:
         raise RuntimeError("First Jupiter route returned no tokens")
     second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()), dexes=sell_dexes)
@@ -600,6 +601,7 @@ def _send_live(mint, signer, amount, tip_lamports, first, second, net_minimum):
 
 _LAST_CHECKED = {}
 LAST_RESULTS = {"at": 0.0, "results": []}
+_COOLDOWN = {}
 _ARB_SKIP_REASONS = {"not_solana", "missing_token_address"}
 
 
@@ -622,6 +624,8 @@ def pick_candidates(assessments, limit=None, now=None):
         if _ARB_SKIP_REASONS.intersection(item.get("reasons") or []):
             continue
         if float(item.get("liquidity_usd") or 0) < MIN_ARB_POOL_LIQUIDITY_USD:
+            continue
+        if _COOLDOWN.get(item["token"], 0) > now:
             continue
         unique.setdefault(item["token"], item)
     ranked = []
@@ -702,6 +706,9 @@ def scan_cycle(assessments, force=False, quote_only=False):
                 if result["status"] == "submitted_pending":
                     break
             except LiveSendError as exc:
+                if exc.reason.startswith("simulação"):
+                    # Quotes that keep failing on-chain are phantom; give others the slot.
+                    _COOLDOWN[mint] = time.monotonic() + _int_env("MEV_FAIL_COOLDOWN_SECONDS", 1800, 0, 86400)
                 event = {"status": "live_failed", "mint": str(mint)[:64], "error": exc.reason,
                          "estimated_net_lamports": exc.net}
                 live_trade_state.record_mev_event(event)
