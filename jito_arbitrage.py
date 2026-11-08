@@ -712,9 +712,60 @@ def why_text(now=None):
 
 _LAST_CHECKED = {}
 LAST_RESULTS = {"at": 0.0, "results": []}
-_COOLDOWN = {}
+_COOLDOWN = {}          # mint -> wall-clock time until which the token is paused
+_FAILS = {}             # mint -> phantom (simulation) failures so far
+_COOLDOWN_LOADED = [False]
 COVERAGE = {"universe": 0, "waiting": 0}
 _ARB_SKIP_REASONS = {"not_solana", "missing_token_address"}
+
+
+def _cooldown_path():
+    return _pending_path().with_name("mev_cooldown.json")
+
+
+def _load_cooldown():
+    if _COOLDOWN_LOADED[0]:
+        return
+    _COOLDOWN_LOADED[0] = True
+    try:
+        data = json.loads(_cooldown_path().read_text(encoding="utf-8"))
+        now = time.time()
+        _COOLDOWN.update({m: t for m, t in data.get("until", {}).items() if t > now})
+        _FAILS.update(data.get("fails", {}))
+    except Exception:
+        pass
+
+
+def _persist_cooldown():
+    try:
+        now = time.time()
+        path = _cooldown_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"until": {m: t for m, t in _COOLDOWN.items() if t > now},
+                                   "fails": {m: n for m, n in _FAILS.items() if m in _COOLDOWN}}), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        pass   # pausing still works in memory
+
+
+def _pause(mint, seconds):
+    _load_cooldown()
+    _COOLDOWN[mint] = time.time() + seconds
+    _persist_cooldown()
+
+
+def _pause_phantom(mint):
+    """Quotes that keep failing on-chain are phantom: 30 min, then 1 h, 2 h... up to 24 h."""
+    _load_cooldown()
+    _FAILS[mint] = _FAILS.get(mint, 0) + 1
+    base = _int_env("MEV_FAIL_COOLDOWN_SECONDS", 1800, 0, 86400)
+    _pause(mint, min(86400, base * 2 ** (_FAILS[mint] - 1)))
+
+
+def _cooling(mint, now=None):
+    _load_cooldown()
+    return _COOLDOWN.get(mint, 0) > (time.time() if now is None else now)
 
 
 def pick_candidates(assessments, limit=None, now=None):
@@ -737,7 +788,7 @@ def pick_candidates(assessments, limit=None, now=None):
             continue
         if float(item.get("liquidity_usd") or 0) < MIN_ARB_POOL_LIQUIDITY_USD:
             continue
-        if _COOLDOWN.get(item["token"], 0) > now:
+        if _cooling(item["token"]):
             continue
         unique.setdefault(item["token"], item)
     ranked = []
@@ -761,7 +812,7 @@ def coverage_text(now=None):
     now = time.monotonic() if now is None else now
     last_hour = sum(1 for t in _LAST_CHECKED.values() if now - t < 3600)
     return ("Moedas na lista: " + str(COVERAGE["universe"]) + " | analisadas na última hora: " +
-            str(last_hour) + " | pausadas (sem rota/autoridade): " + str(sum(1 for t in _COOLDOWN.values() if t > now)))
+            str(last_hour) + " | pausadas (sem rota/autoridade/fantasma): " + str(sum(1 for t in _COOLDOWN.values() if t > time.time())))
 
 
 _ERROR_LABELS = (
@@ -842,7 +893,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
             except LiveSendError as exc:
                 if exc.reason.startswith("simulação"):
                     # Quotes that keep failing on-chain are phantom; give others the slot.
-                    _COOLDOWN[mint] = time.monotonic() + _int_env("MEV_FAIL_COOLDOWN_SECONDS", 1800, 0, 86400)
+                    _pause_phantom(mint)
                 event = {"status": "live_failed", "mint": str(mint)[:64], "error": exc.reason,
                          "estimated_net_lamports": exc.net}
                 live_trade_state.record_mev_event(event)
@@ -858,7 +909,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
                     pause = 600
                 else:
                     pause = 300
-                _COOLDOWN[mint] = time.monotonic() + pause
+                _pause(mint, pause)
                 event = {"status": "skipped", "mint": str(mint)[:64], "error": error_code}
                 live_trade_state.record_mev_event(event)
                 results.append(event)

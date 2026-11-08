@@ -114,11 +114,29 @@ class CandidateTests(unittest.TestCase):
         self.assertIn("Moedas na lista: 3", j.coverage_text(now=1010))
 
     def test_cooldown_skips_phantom_token(self):
-        j._COOLDOWN["B"] = 10_000
+        j._COOLDOWN["B"] = time.time() + 600
         rows = [self.item("A"), self.item("B")]
         self.assertEqual([i["token"] for i, _ in j.pick_candidates(rows, now=5_000)], ["A"])
+        j._COOLDOWN["B"] = time.time() - 1
         self.assertEqual(len(j.pick_candidates(rows, now=20_000)), 2)
         j._COOLDOWN.clear()
+
+    def test_phantom_pause_grows_and_survives_restart(self):
+        import tempfile, os
+        from pathlib import Path
+        d = tempfile.mkdtemp()
+        with patch.dict(os.environ, {"MEV_PENDING_FILE": str(Path(d) / "p.json")}):
+            j._COOLDOWN.clear(); j._FAILS.clear(); j._COOLDOWN_LOADED[0] = True
+            j._pause_phantom("X")
+            first = j._COOLDOWN["X"] - time.time()
+            j._pause_phantom("X")
+            second = j._COOLDOWN["X"] - time.time()
+            self.assertAlmostEqual(first, 1800, delta=5)
+            self.assertAlmostEqual(second, 3600, delta=5)
+            j._COOLDOWN.clear(); j._FAILS.clear(); j._COOLDOWN_LOADED[0] = False   # restart
+            self.assertTrue(j._cooling("X"))
+            self.assertEqual(j._FAILS["X"], 2)
+        j._COOLDOWN.clear(); j._FAILS.clear(); j._COOLDOWN_LOADED[0] = False
 
     def test_rotation_skips_recently_checked(self):
         rows = [self.item(str(n)) for n in range(25)]

@@ -497,8 +497,9 @@ def mev_loop():
     for outcome in outcomes:
      if outcome.get("status")=="live_failed":
       reason=str(outcome.get("error",""))
-      if time.monotonic()-LIVE_FAIL_NOTICES.get(reason,-1e9)>600:
-       LIVE_FAIL_NOTICES[reason]=time.monotonic()
+      notice_key=str(outcome.get("mint",""))
+      if time.monotonic()-LIVE_FAIL_NOTICES.get(notice_key,-1e9)>7200:
+       LIVE_FAIL_NOTICES[notice_key]=time.monotonic()
        send(active_chat(),"❌ Achei oportunidade com lucro mas a ordem NÃO foi enviada.\nMotivo: "+reason+"\nContrato: "+str(outcome.get("mint","")))
      if outcome.get("status")=="submitted_pending":
       send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
