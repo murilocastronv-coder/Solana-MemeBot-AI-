@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import requests
+import re
 from solders.address_lookup_table_account import AddressLookupTableAccount
 from solders.hash import Hash
 from solders.instruction import AccountMeta, Instruction
@@ -64,7 +65,7 @@ def _headers():
     return {"x-api-key": key, "Accept": "application/json"}
 
 
-def _build(input_mint, output_mint, amount, taker):
+def _build(input_mint, output_mint, amount, taker, dexes=None):
     global _LAST_BUILD_AT
     params = {
         "inputMint": input_mint,
@@ -77,6 +78,8 @@ def _build(input_mint, output_mint, amount, taker):
         "wrapAndUnwrapSol": "true",
         "transactionVersion": "0",
     }
+    if dexes:
+        params["dexes"] = ",".join(dexes) if isinstance(dexes, (list, tuple)) else str(dexes)
     with _BUILD_LOCK:
         wait = _BUILD_MIN_INTERVAL_SECONDS - (time.monotonic() - _LAST_BUILD_AT)
         if wait > 0:
@@ -353,7 +356,80 @@ def _preflight(signer, amount, tip_lamports, first, second):
         raise RuntimeError("Bot wallet SOL balance is below the trade and fee reserve")
 
 
-def try_arbitrage(mint, quote_only=False):
+_DEX_LABELS_CACHE = {"expires": 0.0, "labels": []}
+_DEX_LABELS_LOCK = threading.Lock()
+MIN_ARB_POOL_LIQUIDITY_USD = float(os.getenv("MEV_MIN_ARB_POOL_LIQUIDITY_USD", "50000"))
+
+
+def _dex_label_names():
+    now = time.monotonic()
+    if now < _DEX_LABELS_CACHE["expires"]:
+        return _DEX_LABELS_CACHE["labels"]
+    with _DEX_LABELS_LOCK:
+        now = time.monotonic()
+        if now < _DEX_LABELS_CACHE["expires"]:
+            return _DEX_LABELS_CACHE["labels"]
+        response = requests.get("https://api.jup.ag/swap/v2/program-id-to-label",
+                                headers=_headers(), timeout=15)
+        response.raise_for_status()
+        payload = response.json()
+        labels = sorted(set(str(value) for value in payload.values()
+                            if isinstance(value, str) and value.strip()))
+        _DEX_LABELS_CACHE.update(expires=now + 3600, labels=labels)
+        return labels
+
+
+def _labels_for_dex_id(dex_id):
+    target = re.sub(r"[^a-z0-9]", "", str(dex_id).lower())
+    if not target:
+        return []
+    try:
+        labels = _dex_label_names()
+    except Exception as exc:
+        LOG.warning("Jupiter DEX labels unavailable type=%s", type(exc).__name__)
+        return []
+    matched = []
+    for label in labels:
+        normalized = re.sub(r"[^a-z0-9]", "", label.lower())
+        if target in normalized or normalized.startswith(target):
+            matched.append(label)
+    return matched[:4]
+
+
+def _cross_dex_route(pools):
+    """Pick the strongest same-quote-token price spread across distinct DEXs."""
+    parsed = []
+    for pool in pools or []:
+        try:
+            dex_id = str(pool.get("dex_id") or "")
+            quote_mint = str(pool.get("quote_mint") or "")
+            price = float(pool.get("price_native") or 0)
+            liquidity = float(pool.get("liquidity_usd") or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if dex_id and quote_mint and price > 0 and liquidity >= MIN_ARB_POOL_LIQUIDITY_USD:
+            parsed.append((dex_id, quote_mint, price, liquidity))
+    best = None
+    for i, left in enumerate(parsed):
+        for right in parsed[i + 1:]:
+            if left[0].lower() == right[0].lower() or left[1] != right[1]:
+                continue
+            buy, sell = (left, right) if left[2] < right[2] else (right, left)
+            spread = sell[2] / buy[2] - 1
+            if spread > 0 and (best is None or spread > best[0]):
+                best = (spread, buy, sell)
+    if not best:
+        return None
+    buy_labels = _labels_for_dex_id(best[1][0])
+    sell_labels = _labels_for_dex_id(best[2][0])
+    if not buy_labels or not sell_labels:
+        return None
+    return {"buy_dexes": buy_labels, "sell_dexes": sell_labels,
+            "spread_pct": best[0] * 100, "buy_dex_id": best[1][0],
+            "sell_dex_id": best[2][0]}
+
+
+def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
     """Quote a SOL -> token -> SOL cycle; send only if Jito simulation is profitable."""
     Pubkey.from_string(mint)
     signer = _wallet()
@@ -365,11 +441,11 @@ def try_arbitrage(mint, quote_only=False):
     amount = settings["input_lamports"]
     min_bps = settings["min_profit_bps"]
     tip_lamports = settings["jito_tip_lamports"]
-    first = _build(SOL_MINT, mint, amount, str(signer.pubkey()))
+    first = _build(SOL_MINT, mint, amount, str(signer.pubkey()), dexes=buy_dexes)
     token_amount = int(first["outAmount"])
     if token_amount <= 0:
         raise RuntimeError("First Jupiter route returned no tokens")
-    second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()))
+    second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()), dexes=sell_dexes)
     minimum_back = int(second["otherAmountThreshold"])
     fixed_cost_reserve = 10_000 + _priority_fee_lamports(first) + _priority_fee_lamports(second)
     required_profit = max(_int_env("MEV_MIN_NET_PROFIT_LAMPORTS", 10_000, 1_000, 10_000_000),
@@ -420,13 +496,26 @@ def scan_cycle(assessments, force=False, quote_only=False):
         candidates = []
         for item in assessments or []:
             if isinstance(item, dict) and item.get("status") == "WATCH_ONLY" and item.get("token"):
-                candidates.append(item["token"])
+                candidates.append(item)
+        unique = {}
+        for item in candidates:
+            unique.setdefault(item["token"], item)
         results = []
-        for mint in list(dict.fromkeys(candidates))[:10]:
+        for item in list(unique.values())[:10]:
+            mint = item["token"]
             try:
-                result = try_arbitrage(mint, quote_only=quote_only)
-                LOG.info("MEV cycle status=%s mint=%s net_min_lamports=%s",
-                         result["status"], mint[:8], result.get("estimated_net_lamports", "n/a"))
+                route = _cross_dex_route(item.get("dex_pools"))
+                if route:
+                    result = try_arbitrage(mint, quote_only=quote_only,
+                                           buy_dexes=route["buy_dexes"],
+                                           sell_dexes=route["sell_dexes"])
+                    result["route"] = route["buy_dex_id"] + " -> " + route["sell_dex_id"]
+                    result["observed_spread_pct"] = route["spread_pct"]
+                else:
+                    result = try_arbitrage(mint, quote_only=quote_only)
+                LOG.info("MEV cycle status=%s mint=%s net_min_lamports=%s route=%s",
+                         result["status"], mint[:8], result.get("estimated_net_lamports", "n/a"),
+                         result.get("route", "aggregated"))
                 results.append(result)
                 live_trade_state.record_mev_event(result)
                 if result["status"] == "submitted_pending":

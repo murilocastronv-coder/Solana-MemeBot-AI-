@@ -182,11 +182,29 @@ def fetch():
    if isinstance(result,dict) and isinstance(result.get("pairs"),list):pairs.extend(result["pairs"])
   except RuntimeError:logging.warning("Established pair search unavailable: %s",query)
  unique={}
+ pools_by_mint={}
  for p in pairs:
   if not isinstance(p,dict):continue
   mint=p.get("baseToken",{}).get("address")
   if p.get("chainId")!="solana" or not mint:continue
-  if mint not in unique or float(p.get("liquidity",{}).get("usd") or 0)>float(unique[mint].get("liquidity",{}).get("usd") or 0):unique[mint]=p
+  liquidity=float(p.get("liquidity",{}).get("usd") or 0)
+  quote=p.get("quoteToken") or {}
+  dex_id=str(p.get("dexId") or "")
+  quote_mint=str(quote.get("address") or "")
+  try:price_native=float(p.get("priceNative") or 0)
+  except (TypeError,ValueError):price_native=0
+  if dex_id and quote_mint and price_native>0:
+   pools_by_mint.setdefault(mint,[]).append({"dex_id":dex_id,"quote_mint":quote_mint,
+    "price_native":price_native,"liquidity_usd":liquidity})
+  if mint not in unique or liquidity>float(unique[mint].get("liquidity",{}).get("usd") or 0):unique[mint]=p
+ for mint,p in unique.items():
+  seen_pools=set();selected=[]
+  for pool in sorted(pools_by_mint.get(mint,[]),key=lambda x:x["liquidity_usd"],reverse=True):
+   key=(pool["dex_id"].lower(),pool["quote_mint"])
+   if key in seen_pools:continue
+   seen_pools.add(key);selected.append(pool)
+   if len(selected)>=6:break
+  p["_mev_pools"]=selected
  return sorted(unique.values(),key=lambda p:p.get("pairCreatedAt") or 0,reverse=True)
 def fmt(v):
  if v == 0:return "0"
