@@ -479,7 +479,7 @@ def _cached_balance(owner, max_age=15):
     return _BALANCE_CACHE["lamports"]
 
 
-def _preflight(signer, amount, tip_lamports, first, second):
+def _preflight(signer, amount, tip_lamports, *builds):
     """MEV-only readiness gate; do not enable the separate spot trader globally."""
     import live_trade_state
     import telegram_owner
@@ -500,7 +500,7 @@ def _preflight(signer, amount, tip_lamports, first, second):
         raise RuntimeError("Bot wallet passphrase missing")
     if get_address() != str(signer.pubkey()):
         raise RuntimeError("Configured signer does not match the bot wallet")
-    priority = _priority_fee_lamports(first) + _priority_fee_lamports(second)
+    priority = sum(_priority_fee_lamports(b) for b in builds)
     rent_reserve = _int_env("MEV_RENT_RESERVE_LAMPORTS", 10_000_000, 0, 100_000_000)
     balance = _cached_balance(str(signer.pubkey()))
     if balance < amount + tip_lamports + priority + rent_reserve:
@@ -638,9 +638,56 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
                 "minimum_back_lamports": minimum_back, "estimated_net_lamports": net_minimum}
 
     try:
-        return _send_live(mint, signer, amount, tip_lamports, first, second, net_minimum)
+        return _send_live(mint, signer, amount, tip_lamports, [first, second], net_minimum)
     except Exception as exc:
         raise LiveSendError(_error_code(exc), net_minimum) from exc
+
+
+def try_triangular(mint, usdc_first=True, quote_only=False):
+    """Triangular cycle SOL -> USDC -> token -> SOL (or SOL -> token -> USDC -> SOL).
+
+    Each leg sells the previous leg's guaranteed minimum, so the next leg always
+    has the tokens; the last leg's minimum output is locked at its expected value.
+    The three swaps go in one Jito bundle: all land or nothing does.
+    """
+    from jupiter_v2_executor import USDC_MINT
+    Pubkey.from_string(mint)
+    signer = _wallet()
+    if not _mint_is_fixed(mint):
+        raise RuntimeError("Mint or freeze authority remains active, or the RPC safety check failed")
+    import live_trade_state
+    settings = live_trade_state.mev_config()
+    amount = settings["input_lamports"]
+    tip_lamports = settings["jito_tip_lamports"]
+    path = [SOL_MINT, USDC_MINT, mint, SOL_MINT] if usdc_first else [SOL_MINT, mint, USDC_MINT, SOL_MINT]
+    leg_slippage = _int_env("MEV_BUY_SLIPPAGE_BPS", 20, 0, 50)
+    taker = str(signer.pubkey())
+    builds, size = [], amount
+    for i in range(3):
+        last = i == 2
+        build = _build(path[i], path[i + 1], size, taker,
+                       slippage_bps=_int_env("MEV_SELL_SLIPPAGE_BPS", 0, 0, 50) if last else leg_slippage)
+        builds.append(build)
+        size = int(build["otherAmountThreshold"])
+        if size <= 0:
+            raise RuntimeError("Jupiter route returned no tokens")
+    route = "SOL→USDC→token→SOL" if usdc_first else "SOL→token→USDC→SOL"
+    costs = tip_lamports + 5_000 * 3 + sum(_priority_fee_lamports(b) for b in builds)
+    required_profit = max(_int_env("MEV_MIN_NET_PROFIT_LAMPORTS", 10_000, 1_000, 10_000_000),
+                          amount * settings["min_profit_bps"] // 10_000)
+    minimum_back = int(builds[-1]["otherAmountThreshold"])
+    net_minimum = minimum_back - amount - costs
+    result = {"mint": mint, "input_lamports": amount, "route": route,
+              "minimum_back_lamports": minimum_back, "estimated_net_lamports": net_minimum}
+    if net_minimum < required_profit:
+        return dict(result, status="no_edge")
+    if quote_only or not _live_enabled():
+        return dict(result, status="dry_run_opportunity")
+    try:
+        sent = _send_live(mint, signer, amount, tip_lamports, builds, net_minimum)
+    except Exception as exc:
+        raise LiveSendError(_error_code(exc), net_minimum) from exc
+    return dict(sent, route=route)
 
 
 class LiveSendError(RuntimeError):
@@ -651,17 +698,18 @@ class LiveSendError(RuntimeError):
         self.net = net
 
 
-def _send_live(mint, signer, amount, tip_lamports, first, second, net_minimum):
+def _send_live(mint, signer, amount, tip_lamports, builds, net_minimum):
+    """Sign every leg (tip on the last), simulate, send as one all-or-nothing Jito bundle."""
     # Check MEV readiness without turning on the separate spot-trading engine.
-    _preflight(signer, amount, tip_lamports, first, second)
+    _preflight(signer, amount, tip_lamports, *builds)
     allowed, why = _can_submit(mint)
     if not allowed:
         raise RuntimeError("Pending limit: " + why)
     tip_ix = transfer(TransferParams(
         from_pubkey=signer.pubkey(), to_pubkey=_tip_account(), lamports=tip_lamports))
-    tx1 = _compile_and_sign(first, signer)
-    tx2 = _compile_and_sign(second, signer, [tip_ix])
-    encoded = _simulate_bundle([tx1, tx2])
+    txs = [_compile_and_sign(b, signer) for b in builds[:-1]]
+    txs.append(_compile_and_sign(builds[-1], signer, [tip_ix]))
+    encoded = _simulate_bundle(txs)
     key = mint + ":" + str(time.time_ns())
     _save_pending({"status": "submitting", "created_at": int(time.time()), "mint": mint}, key)
     bundle_id = _jito("sendBundle", [encoded, {"encoding": "base64"}])
@@ -711,6 +759,8 @@ def why_text(now=None):
 
 
 _LAST_CHECKED = {}
+_VISITS = {}
+TRIANGULAR = os.getenv("MEV_TRIANGULAR", "true").strip().lower() != "false"
 LAST_RESULTS = {"at": 0.0, "results": []}
 _COOLDOWN = {}          # mint -> wall-clock time until which the token is paused
 _FAILS = {}             # mint -> phantom (simulation) failures so far
@@ -869,7 +919,11 @@ def scan_cycle(assessments, force=False, quote_only=False):
             _LAST_CHECKED[mint] = time.monotonic()
             try:
                 result = None
-                if route:
+                visit = _VISITS[mint] = _VISITS.get(mint, 0) + 1
+                if TRIANGULAR and visit % 2 == 0:
+                    # every other visit: triangular cycle, alternating the direction
+                    result = try_triangular(mint, usdc_first=(visit % 4 == 0), quote_only=quote_only)
+                elif route:
                     try:
                         result = try_arbitrage(mint, quote_only=quote_only,
                                                buy_dexes=route["buy_dexes"],

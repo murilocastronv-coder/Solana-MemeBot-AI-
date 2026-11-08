@@ -183,7 +183,7 @@ class SimulationTests(unittest.TestCase):
 
 class SkipCooldownTests(unittest.TestCase):
     def setUp(self):
-        j._COOLDOWN.clear(); j._LAST_CHECKED.clear()
+        j._COOLDOWN.clear(); j._LAST_CHECKED.clear(); j._VISITS.clear()
         self.addCleanup(j._COOLDOWN.clear)
 
     def _cycle(self, side_effect):
@@ -225,6 +225,52 @@ class CacheTests(unittest.TestCase):
                 self.assertEqual(str(j._tip_account()), tip)
                 self.assertEqual(j._cached_balance("W"), 123)
         self.assertEqual((jito.call_count, rpc.call_count), (1, 1))
+
+
+class TriangularTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")}).start()
+        patch.object(j, "_wallet", return_value=Keypair()).start()
+        patch.object(j, "_mint_is_fixed", return_value=True).start()
+        self.addCleanup(patch.stopall)
+
+    def run_tri(self, builds, usdc_first=True, **kw):
+        calls = []
+
+        def fake(inp, out, amount, taker, dexes=None, slippage_bps=50):
+            calls.append((inp, out, amount, slippage_bps))
+            return builds.pop(0)
+        with patch.object(j, "_build", side_effect=fake):
+            return j.try_triangular(MINT, usdc_first=usdc_first, quote_only=kw.get("quote_only", True)), calls
+
+    def test_path_and_minimum_chaining(self):
+        from jupiter_v2_executor import USDC_MINT
+        result, calls = self.run_tri([build(9_000_000, 8_980_000), build(5_000, 4_990), build(AMOUNT, AMOUNT)])
+        self.assertEqual([(c[0], c[1]) for c in calls], [(j.SOL_MINT, USDC_MINT), (USDC_MINT, MINT), (MINT, j.SOL_MINT)])
+        self.assertEqual(calls[1][2], 8_980_000)      # leg 2 sells leg 1's guaranteed minimum
+        self.assertEqual(calls[2][2], 4_990)
+        self.assertEqual(calls[2][3], 0)              # last leg locked at expected value
+        self.assertEqual(result["status"], "no_edge")  # came back with what went in: costs make it negative
+        self.assertEqual(result["route"], "SOL→USDC→token→SOL")
+
+    def test_profitable_triangle_and_reverse_direction(self):
+        back = AMOUNT + 200_000
+        result, calls = self.run_tri([build(5_000, 4_990), build(9_000_000, 8_980_000), build(back, back)], usdc_first=False)
+        self.assertEqual(result["status"], "dry_run_opportunity")
+        self.assertEqual(result["route"], "SOL→token→USDC→SOL")
+        self.assertEqual(calls[0][1], MINT)
+
+    def test_live_send_bundles_three_legs(self):
+        back = AMOUNT + 200_000
+        sent = {}
+        with patch.object(j, "_live_enabled", return_value=True), \
+             patch.object(j, "_send_live", side_effect=lambda m, s, a, t, builds, n: sent.update(n=len(builds)) or
+                          {"status": "submitted_pending", "bundle_id": "B", "mint": m, "estimated_net_lamports": n}):
+            result, _ = self.run_tri([build(9_000_000, 8_980_000), build(5_000, 4_990), build(back, back)], quote_only=False)
+        self.assertEqual(sent["n"], 3)
+        self.assertEqual(result["status"], "submitted_pending")
+        self.assertEqual(result["route"], "SOL→USDC→token→SOL")
 
 
 class ErrorLabelTests(unittest.TestCase):

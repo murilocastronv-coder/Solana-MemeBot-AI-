@@ -76,7 +76,7 @@ def mev_status_text():
   return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
    "Execução: "+("REAL armada" if armed and trade_state.mev_live_allowed() else "SIMULAÇÃO / cotação")+"\n"+
    "Permissão real no Render: "+("ATIVADA" if trade_state.mev_live_allowed() else "DESATIVADA")+"\n"+
-   "Carteira: "+(wallet or "não configurada")+"\n"+__import__("jito_arbitrage").coverage_text()+"\n"+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
+   "Carteira: "+(wallet or "não configurada")+"\n"+__import__("jito_arbitrage").coverage_text()+"\n"+("Arbitragem triangular 🔺: LIGADA (SOL→USDC→moeda→SOL e o inverso, uma visita sim, outra não)\n" if __import__("jito_arbitrage").TRIANGULAR else "")+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
    "Limite: "+os.getenv("MEV_MAX_BUNDLES_PER_DAY","100")+" bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
    "Proteção diária: "+guard_reason+"\n"+robot_alive_line()+"\n\n"+__import__("jito_arbitrage").why_text())
@@ -426,7 +426,7 @@ def background_loop():
 def mev_result_line(x):
  net=x.get("estimated_net_lamports")
  net_text=(" · "+format(net/1e9,"+.6f")+" SOL") if isinstance(net,int) else ""
- mint=str(x.get("mint",""))[:8]
+ mint=str(x.get("mint",""))[:8]+(" 🔺" if "→" in str(x.get("route","")) else "")
  status=x.get("status","?")
  if status=="submitted_pending":return "⚡ ORDEM ENVIADA · "+mint+net_text
  if status=="live_failed":return "❌ LUCRO ACHADO MAS NÃO ENVIOU · "+mint+net_text+" · "+str(x.get("error",""))
