@@ -53,15 +53,15 @@ class ConfirmTests(unittest.TestCase):
         ls.track_trade({"mint": self.mint, "user": user, "sol": sol, "is_buy": is_buy, "tokens": 1})
 
     def test_broad_demand_confirms(self):
-        for i in range(12):
-            self.buy("u" + str(i), 0.3)
+        for i in range(40):
+            self.buy("u" + str(i), 0.2)
         self.buy(self.creator, 5.0)            # creator buys do not count
         self.assertEqual(ls.confirm_reasons(ls.TRACK[self.mint]), [])
 
     def test_bundle_and_creator_sell_rejected(self):
-        for i in range(11):
+        for i in range(39):
             self.buy("u" + str(i), 0.1)
-        self.buy("whale", 3.0)
+        self.buy("whale", 6.0)
         self.assertIn("uma carteira domina as compras (bundle)", ls.confirm_reasons(ls.TRACK[self.mint]))
         self.buy(self.creator, 1.0, is_buy=False)
         self.assertIn("criador vendeu", ls.confirm_reasons(ls.TRACK[self.mint]))
@@ -69,22 +69,29 @@ class ConfirmTests(unittest.TestCase):
 
     def test_decide_waits_then_buys(self):
         ls.TRACK[self.mint]["static"] = ""
-        for i in range(12):
-            self.buy("u" + str(i), 0.3)
+        for i in range(40):
+            self.buy("u" + str(i), 0.2)
         with patch.object(ls, "_buy_and_watch", return_value="sold") as b:
-            self.assertIsNone(ls.decide_once(None, "1", now=1005))   # still inside the 20 s wait
-            self.assertEqual(ls.decide_once(None, "1", now=1021), "sold")
+            self.assertIsNone(ls.decide_once(None, "1", now=1060))   # still inside the 3 min wait
+            self.assertEqual(ls.decide_once(None, "1", now=1181), "sold")
         self.assertEqual(b.call_count, 1)
 
     def test_weak_token_expires(self):
         ls.TRACK[self.mint]["static"] = ""
         self.buy("u1", 0.1)
         with patch.object(ls, "_buy_and_watch") as b:
-            ls.decide_once(None, "1", now=1021)
+            ls.decide_once(None, "1", now=1181)
             self.assertFalse(ls.TRACK[self.mint]["decided"])          # keeps watching in the window
-            ls.decide_once(None, "1", now=1050)
+            ls.decide_once(None, "1", now=1301)
         self.assertTrue(ls.TRACK[self.mint]["decided"])
         b.assert_not_called()
+
+    def test_money_leaving_is_rejected(self):
+        for i in range(40):
+            self.buy("u" + str(i), 0.2)
+        for i in range(15):
+            self.buy("s" + str(i), 0.4, is_buy=False)
+        self.assertIn("dinheiro saindo (vendas comendo as compras)", ls.confirm_reasons(ls.TRACK[self.mint]))
 
 
 class FilterTests(unittest.TestCase):

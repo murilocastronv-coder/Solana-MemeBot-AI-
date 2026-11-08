@@ -15,6 +15,7 @@ How it works
   loss; hard take profit; time limit.
 
 Very high risk: most brand-new tokens die or are rugged within minutes.
+The decision is taken after watching the token for 3 minutes (LAUNCH_CONFIRM_SECONDS).
 """
 import base64
 import hashlib
@@ -44,12 +45,15 @@ def _env(name, default):
 LAUNCH_FRACTION = _env("LAUNCH_FRACTION", 0.12)
 
 # Confirmation (all measured inside the first CONFIRM_SECONDS, creator excluded)
-CONFIRM_SECONDS = int(_env("LAUNCH_CONFIRM_SECONDS", 20))
-CONFIRM_WINDOW = 25            # a token can still be bought until CONFIRM_SECONDS + 25 s
-MIN_BUYS = int(_env("LAUNCH_MIN_BUYS", 12))
-MIN_BUYERS = int(_env("LAUNCH_MIN_BUYERS", 10))
-MIN_SOL_IN = _env("LAUNCH_MIN_SOL_IN", 2.0)          # SOL bought by others
-MAX_SELL_RATIO = _env("LAUNCH_MAX_SELL_RATIO", 0.4)   # sells <= 40% of buys
+# Watch each new token for 3 minutes before deciding (the first minutes are
+# where most rugs happen); thresholds are sized for a 3-minute window.
+CONFIRM_SECONDS = int(_env("LAUNCH_CONFIRM_SECONDS", 180))
+CONFIRM_WINDOW = int(_env("LAUNCH_CONFIRM_WINDOW", 120))  # still buyable until 5 min of age
+MIN_BUYS = int(_env("LAUNCH_MIN_BUYS", 40))
+MIN_BUYERS = int(_env("LAUNCH_MIN_BUYERS", 30))
+MIN_SOL_IN = _env("LAUNCH_MIN_SOL_IN", 5.0)          # SOL bought by others
+MIN_NET_SOL = _env("LAUNCH_MIN_NET_SOL", 2.5)        # bought minus sold: money is staying in
+MAX_SELL_RATIO = _env("LAUNCH_MAX_SELL_RATIO", 0.5)   # sells <= 50% of buys
 MAX_TOP_BUYER = _env("LAUNCH_MAX_TOP_BUYER", 0.35)    # one wallet <= 35% of the SOL bought
 
 # Exits
@@ -65,7 +69,7 @@ LAUNCH_HOLD_SECONDS = int(_env("LAUNCH_HOLD_SECONDS", 120))
 LAUNCH_MAX_AGE_SECONDS = 10     # static check must start within 10 s of creation
 LAUNCH_MIN_GAP_SECONDS = 20     # at most one buy every 20 s
 CREATOR_MAX_PER_HOUR = 2        # serial launchers are skipped
-TRACK_TTL_SECONDS = 300
+TRACK_TTL_SECONDS = 900
 
 _queue = queue.Queue(maxsize=200)
 _creators = {}                  # creator -> [timestamps]
@@ -203,6 +207,8 @@ def confirm_reasons(t):
         reasons.append("poucos compradores")
     if t["sol_in"] < MIN_SOL_IN:
         reasons.append("pouco SOL entrando")
+    if t["sol_in"] - t["sol_out"] < MIN_NET_SOL:
+        reasons.append("dinheiro saindo (vendas comendo as compras)")
     if t["buys"] and t["sells"] > t["buys"] * MAX_SELL_RATIO:
         reasons.append("muita venda")
     top = max(t["by_user"].values(), default=0.0)
