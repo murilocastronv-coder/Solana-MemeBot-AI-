@@ -96,17 +96,8 @@ def main():
                     LOG.warning("wallet_balance_unavailable=%s", exc)
             else:
                 LOG.info("wallet_public_address_not_configured")
-            assessments = scan()
-            for result in assessments:
+            for result in scan():
                 LOG.info("token_assessment=%s", result)
-            if os.getenv("MEV_AUTOTRADE_ENABLED") == "true":
-                # Dry-run by default; live swaps additionally require the two
-                # independent MEV/LIVE switches and existing live preflight.
-                try:
-                    from jito_arbitrage import scan_cycle
-                    scan_cycle(assessments)
-                except Exception as exc:
-                    LOG.error("MEV cycle stopped: %s", type(exc).__name__)
         except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
             LOG.error("Scanner error: %s", exc)
         time.sleep(INTERVAL)
