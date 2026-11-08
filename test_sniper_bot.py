@@ -32,9 +32,9 @@ class SniperFilterTests(unittest.TestCase):
         self.assertNotIn("fora da faixa de idade", s.reasons(token(minutes=150)))
         self.assertIn("fora da faixa de idade", s.reasons(token(minutes=200)))
 
-    def test_liquidity_floor_is_8k(self):
-        self.assertNotIn("liquidez baixa", s.reasons(token(liquidity=9_000, mcap=100_000)))
-        self.assertIn("liquidez baixa", s.reasons(token(liquidity=7_000, mcap=100_000)))
+    def test_liquidity_floor_is_5k(self):
+        self.assertNotIn("liquidez baixa", s.reasons(token(liquidity=6_000, mcap=100_000)))
+        self.assertIn("liquidez baixa", s.reasons(token(liquidity=4_000, mcap=60_000)))
 
     def test_needs_more_buyers_and_volume(self):
         self.assertIn("não tem mais compradores que vendedores",

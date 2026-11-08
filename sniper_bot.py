@@ -6,7 +6,7 @@ liquidity, holders, audit data and 5m/1h trading stats.
 Buy only if ALL pass:
 - 5 min to 3 h old (SNIPER_MIN_AGE_MIN / SNIPER_MAX_AGE_MIN);
 - more buyers than sellers in the last 5 min (buys >= 1.2x sells) and in 1 h;
-- strong 5-minute volume (>= US$ 10k) and liquidity >= US$ 8k;
+- strong 5-minute volume (>= US$ 10k) and liquidity >= US$ 5k;
 - anti-scam: mint/freeze disabled, top holders < 25%, dev < 5%, >= 100
   holders, not flagged suspicious, organic score not low, has socials;
 - not already parabolic; on-chain re-check and a sell test >= 92%.
@@ -37,7 +37,7 @@ def _env(name, default):
 ORDER_USD = _env("SNIPER_ORDER_USD", 10)
 MAX_POSITIONS = int(_env("SNIPER_MAX_POSITIONS", 3))
 MIN_AGE_MIN, MAX_AGE_MIN = _env("SNIPER_MIN_AGE_MIN", 5), _env("SNIPER_MAX_AGE_MIN", 180)
-MIN_LIQUIDITY = _env("SNIPER_MIN_LIQUIDITY_USD", 8_000)
+MIN_LIQUIDITY = _env("SNIPER_MIN_LIQUIDITY_USD", 5_000)
 MIN_VOLUME_5M = _env("SNIPER_MIN_VOLUME_5M_USD", 10_000)
 BUY_SELL_RATIO = _env("SNIPER_BUY_SELL_RATIO", 1.2)
 MIN_HOLDERS = _env("SNIPER_MIN_HOLDERS", 100)
