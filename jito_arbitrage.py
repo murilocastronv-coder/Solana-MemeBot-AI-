@@ -32,6 +32,9 @@ SOL_MINT = "So11111111111111111111111111111111111111112"
 COMPUTE_BUDGET_PROGRAM = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
 JITO_URL = os.getenv("JITO_BLOCK_ENGINE_URL", "https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles").rstrip("/")
 _LOCK = threading.Lock()
+_BUILD_LOCK = threading.Lock()
+_LAST_BUILD_AT = 0.0
+_BUILD_MIN_INTERVAL_SECONDS = max(1.05, float(os.getenv("JUPITER_BUILD_MIN_INTERVAL_SECONDS", "1.1")))
 
 
 def _int_env(name, default, minimum=0, maximum=None):
@@ -62,6 +65,7 @@ def _headers():
 
 
 def _build(input_mint, output_mint, amount, taker):
+    global _LAST_BUILD_AT
     params = {
         "inputMint": input_mint,
         "outputMint": output_mint,
@@ -73,7 +77,14 @@ def _build(input_mint, output_mint, amount, taker):
         "wrapAndUnwrapSol": "true",
         "transactionVersion": "0",
     }
-    response = requests.get(JUPITER_BUILD, params=params, headers=_headers(), timeout=20)
+    with _BUILD_LOCK:
+        wait = _BUILD_MIN_INTERVAL_SECONDS - (time.monotonic() - _LAST_BUILD_AT)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            response = requests.get(JUPITER_BUILD, params=params, headers=_headers(), timeout=20)
+        finally:
+            _LAST_BUILD_AT = time.monotonic()
     response.raise_for_status()
     result = response.json()
     for field in ("outAmount", "otherAmountThreshold", "swapInstruction", "blockhashWithMetadata"):
@@ -421,9 +432,12 @@ def scan_cycle(assessments, force=False, quote_only=False):
                 if result["status"] == "submitted_pending":
                     break
             except Exception as exc:
+                error_code = ("HTTP_" + str(exc.response.status_code)
+                              if isinstance(exc, requests.HTTPError) and exc.response is not None
+                              else type(exc).__name__)
                 live_trade_state.record_mev_event({"status": "skipped", "mint": str(mint)[:64],
-                                                   "error": type(exc).__name__})
-                LOG.warning("MEV cycle skipped mint=%s error=%s", str(mint)[:8], type(exc).__name__)
+                                                   "error": error_code})
+                LOG.warning("MEV cycle skipped mint=%s error=%s", str(mint)[:8], error_code)
         return results
     finally:
         _LOCK.release()
