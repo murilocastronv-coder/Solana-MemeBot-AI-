@@ -188,19 +188,17 @@ def fetch():
   mint=p.get("baseToken",{}).get("address")
   if p.get("chainId")!="solana" or not mint:continue
   liquidity=float(p.get("liquidity",{}).get("usd") or 0)
-  quote=p.get("quoteToken") or {}
   dex_id=str(p.get("dexId") or "")
-  quote_mint=str(quote.get("address") or "")
-  try:price_native=float(p.get("priceNative") or 0)
-  except (TypeError,ValueError):price_native=0
-  if dex_id and quote_mint and price_native>0:
-   pools_by_mint.setdefault(mint,[]).append({"dex_id":dex_id,"quote_mint":quote_mint,
-    "price_native":price_native,"liquidity_usd":liquidity})
+  try:price_usd=float(p.get("priceUsd") or 0)
+  except (TypeError,ValueError):price_usd=0
+  if dex_id and price_usd>0:
+   pools_by_mint.setdefault(mint,[]).append({"dex_id":dex_id,
+    "price_usd":price_usd,"liquidity_usd":liquidity})
   if mint not in unique or liquidity>float(unique[mint].get("liquidity",{}).get("usd") or 0):unique[mint]=p
  for mint,p in unique.items():
   seen_pools=set();selected=[]
   for pool in sorted(pools_by_mint.get(mint,[]),key=lambda x:x["liquidity_usd"],reverse=True):
-   key=(pool["dex_id"].lower(),pool["quote_mint"])
+   key=pool["dex_id"].lower()
    if key in seen_pools:continue
    seen_pools.add(key);selected.append(pool)
    if len(selected)>=6:break

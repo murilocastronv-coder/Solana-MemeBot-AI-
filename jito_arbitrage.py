@@ -358,7 +358,7 @@ def _preflight(signer, amount, tip_lamports, first, second):
 
 _DEX_LABELS_CACHE = {"expires": 0.0, "labels": []}
 _DEX_LABELS_LOCK = threading.Lock()
-MIN_ARB_POOL_LIQUIDITY_USD = float(os.getenv("MEV_MIN_ARB_POOL_LIQUIDITY_USD", "50000"))
+MIN_ARB_POOL_LIQUIDITY_USD = float(os.getenv("MEV_MIN_ARB_POOL_LIQUIDITY_USD", "10000"))
 
 
 def _dex_label_names():
@@ -402,20 +402,19 @@ def _cross_dex_route(pools):
     for pool in pools or []:
         try:
             dex_id = str(pool.get("dex_id") or "")
-            quote_mint = str(pool.get("quote_mint") or "")
-            price = float(pool.get("price_native") or 0)
+            price = float(pool.get("price_usd") or 0)
             liquidity = float(pool.get("liquidity_usd") or 0)
         except (AttributeError, TypeError, ValueError):
             continue
-        if dex_id and quote_mint and price > 0 and liquidity >= MIN_ARB_POOL_LIQUIDITY_USD:
-            parsed.append((dex_id, quote_mint, price, liquidity))
+        if dex_id and price > 0 and liquidity >= MIN_ARB_POOL_LIQUIDITY_USD:
+            parsed.append((dex_id, price, liquidity))
     best = None
     for i, left in enumerate(parsed):
         for right in parsed[i + 1:]:
-            if left[0].lower() == right[0].lower() or left[1] != right[1]:
+            if left[0].lower() == right[0].lower():
                 continue
-            buy, sell = (left, right) if left[2] < right[2] else (right, left)
-            spread = sell[2] / buy[2] - 1
+            buy, sell = (left, right) if left[1] < right[1] else (right, left)
+            spread = sell[1] / buy[1] - 1
             if spread > 0 and (best is None or spread > best[0]):
                 best = (spread, buy, sell)
     if not best:
