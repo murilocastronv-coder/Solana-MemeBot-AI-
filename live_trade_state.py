@@ -222,7 +222,7 @@ def mev_daily_guard():
     """Cap confirmed live bundles and realized daily loss in UTC."""
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).date().isoformat()
-    max_bundles = 20
+    max_bundles = 30
     max_loss_lamports = 10_000_000  # 0.01 SOL
     with _LOCK:
         daily = _load().get("mev_daily", {})

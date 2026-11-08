@@ -81,7 +81,7 @@ def mev_status_text():
    "Permissão real no Render: "+("ATIVADA" if os.getenv("MEV_LIVE_ENABLED")=="true" else "DESATIVADA")+"\n"+
    "Carteira: "+(wallet or "não configurada")+"\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
-   "Limite: 20 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
+   "Limite: 30 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
    "Proteção diária: "+guard_reason)
  except Exception as exc:return "Status MEV indisponível: "+type(exc).__name__
 def mev_config_text():
@@ -155,8 +155,9 @@ def market_json(url):
 TOKEN_FEEDS=("https://api.dexscreener.com/token-boosts/top/v1",
  "https://api.dexscreener.com/token-boosts/latest/v1",
  "https://api.dexscreener.com/token-profiles/latest/v1")
+ESTABLISHED_PAIR_SEARCHES=("SOL","USDC")
 def fetch():
- # Boosted tokens are usually older/more liquid; latest profiles are mostly brand new.
+ # Latest feeds surface new coins; pair searches add actively traded established pools.
  profiles=[]
  for url in TOKEN_FEEDS:
   try:
@@ -172,6 +173,11 @@ def fetch():
    if isinstance(batch,list):pairs+=batch
   except RuntimeError:logging.warning("Market pair batch unavailable; continuing with remaining batches")
  if addresses and not pairs:raise RuntimeError("No market pair batches available")
+ for query in ESTABLISHED_PAIR_SEARCHES:
+  try:
+   result=market_json("https://api.dexscreener.com/latest/dex/search?q="+query)
+   if isinstance(result,dict) and isinstance(result.get("pairs"),list):pairs.extend(result["pairs"])
+  except RuntimeError:logging.warning("Established pair search unavailable: %s",query)
  unique={}
  for p in pairs:
   if not isinstance(p,dict):continue
@@ -300,7 +306,7 @@ def handle(update):
    from jito_arbitrage import scan_cycle
    outcomes=scan_cycle([assess_pair(p) for p in scan(False)],force=True,quote_only=True)
    lines=["🔎 MEV — apenas cotações; nenhuma assinatura/transação"]
-   lines += [x.get("status","?")+" · "+str(x.get("mint","")[:8])+" · "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL" for x in outcomes[:5]]
+   lines += [x.get("status","?")+" · "+str(x.get("mint","")[:8])+" · "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL" for x in outcomes[:10]]
    send(chat,"\n".join(lines if outcomes else ["Nenhuma oportunidade elegível; nenhuma transação enviada."]),keyboard())
   except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
   return

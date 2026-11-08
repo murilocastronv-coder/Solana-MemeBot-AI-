@@ -411,7 +411,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
             if isinstance(item, dict) and item.get("status") == "WATCH_ONLY" and item.get("token"):
                 candidates.append(item["token"])
         results = []
-        for mint in list(dict.fromkeys(candidates))[:5]:
+        for mint in list(dict.fromkeys(candidates))[:10]:
             try:
                 result = try_arbitrage(mint, quote_only=quote_only)
                 LOG.info("MEV cycle status=%s mint=%s net_min_lamports=%s",
