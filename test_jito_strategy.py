@@ -111,6 +111,40 @@ class CandidateTests(unittest.TestCase):
         self.assertFalse(first & second)
         self.assertEqual(len(second), 10)
 
+class SimulationTests(unittest.TestCase):
+    def setUp(self):
+        self.tx = [b"one", b"two"]
+
+    def test_falls_back_to_buy_leg_when_rpc_lacks_simulate_bundle(self):
+        calls = []
+
+        def rpc(method, params):
+            calls.append(method)
+            if method == "simulateBundle":
+                return {"error": {"code": -32601, "message": "Method not found"}}
+            return {"result": {"value": {"err": None}}}
+        with patch.object(j, "_rpc", side_effect=rpc):
+            self.assertEqual(len(j._simulate_bundle(self.tx)), 2)
+        self.assertEqual(calls, ["simulateBundle", "simulateTransaction"])
+
+    def test_buy_leg_failure_blocks(self):
+        def rpc(method, params):
+            if method == "simulateBundle":
+                raise RuntimeError("RPC simulateBundle HTTP 400")
+            return {"result": {"value": {"err": {"InstructionError": [0, "x"]}}}}
+        with patch.object(j, "_rpc", side_effect=rpc):
+            with self.assertRaises(RuntimeError):
+                j._simulate_bundle(self.tx)
+
+    def test_bundle_simulation_success(self):
+        with patch.object(j, "_rpc", return_value={"result": {"value": {"summary": "succeeded", "transactionResults": []}}}):
+            self.assertEqual(len(j._simulate_bundle(self.tx)), 2)
+
+    def test_jito_error_names_step(self):
+        self.assertEqual(j._error_code(RuntimeError("Jito sendBundle HTTP 400: bundle invalid")),
+                         "Jito sendBundle HTTP 400: bundle invalid")
+
+
 class ErrorLabelTests(unittest.TestCase):
     def test_labels(self):
         self.assertEqual(j._error_code(RuntimeError("Bot wallet SOL balance is below the trade and fee reserve")),

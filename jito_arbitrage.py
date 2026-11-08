@@ -169,11 +169,37 @@ def _priority_fee_lamports(build):
 
 def _jito(method, params):
     response = requests.post(JITO_URL, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=15)
-    response.raise_for_status()
+    if response.status_code >= 400:
+        raise RuntimeError("Jito " + method + " HTTP " + str(response.status_code) + _jito_error_text(response))
     payload = response.json()
     if payload.get("error"):
-        raise RuntimeError("Jito " + method + " request failed")
+        raise RuntimeError("Jito " + method + " recusou" + _jito_error_text(response))
     return payload.get("result")
+
+
+def _jito_error_text(response):
+    try:
+        error = response.json().get("error") or {}
+        message = error.get("message") if isinstance(error, dict) else str(error)
+    except ValueError:
+        message = response.text
+    message = re.sub(r"https?://\S+", "", str(message or "")).strip()
+    return (": " + message[:90]) if message else ""
+
+
+def _rpc(method, params):
+    """Call the configured Solana RPC; errors never include the RPC URL (it may hold an API key)."""
+    rpc_url = os.getenv("SOLANA_RPC_URL", "").strip()
+    try:
+        response = requests.post(rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=15)
+    except requests.RequestException:
+        raise RuntimeError("RPC " + method + " sem conexão") from None
+    if response.status_code >= 400:
+        raise RuntimeError("RPC " + method + " HTTP " + str(response.status_code))
+    try:
+        return response.json()
+    except ValueError:
+        raise RuntimeError("RPC " + method + " resposta inválida") from None
 
 
 def _tip_account():
@@ -324,8 +350,29 @@ def _mint_is_fixed(mint):
 
 
 def _simulate_bundle(transactions):
+    """Pre-check the bundle before sending.
+
+    The public Jito block engine does not offer simulateBundle (it answers
+    HTTP 400), so try it on the configured RPC (Jito-enabled RPCs support it)
+    and otherwise simulate the buy leg with simulateTransaction. The sell leg
+    depends on the buy leg's tokens and cannot be simulated alone; that is
+    safe because a Jito bundle is all-or-nothing: if the sell would fail,
+    nothing lands and nothing is paid.
+    """
     encoded = [base64.b64encode(bytes(tx)).decode("ascii") for tx in transactions]
-    result = _jito("simulateBundle", [encoded, {"encoding": "base64"}])
+    try:
+        payload = _rpc("simulateBundle", [{"encodedTransactions": encoded}])
+    except RuntimeError:
+        payload = {"error": "unsupported"}
+    if not isinstance(payload, dict) or payload.get("error"):
+        sim = _rpc("simulateTransaction", [encoded[0], {"encoding": "base64", "sigVerify": False,
+                                                          "replaceRecentBlockhash": False, "commitment": "processed"}])
+        if not isinstance(sim, dict) or sim.get("error"):
+            raise RuntimeError("RPC simulateTransaction recusou a compra")
+        if ((sim.get("result") or {}).get("value") or {}).get("err"):
+            raise RuntimeError("simulation: a compra falharia na blockchain")
+        return encoded
+    result = payload.get("result") if isinstance(payload, dict) else None
     if not isinstance(result, dict):
         raise RuntimeError("Jito bundle simulation returned no result")
     value = result.get("value") or result
@@ -368,10 +415,8 @@ def _preflight(signer, amount, tip_lamports, first, second):
         raise RuntimeError("Configured signer does not match the bot wallet")
     priority = _priority_fee_lamports(first) + _priority_fee_lamports(second)
     rent_reserve = _int_env("MEV_RENT_RESERVE_LAMPORTS", 10_000_000, 0, 100_000_000)
-    response = requests.post(rpc_url, json={"jsonrpc": "2.0", "id": 1,
-        "method": "getBalance", "params": [str(signer.pubkey()), {"commitment": "confirmed"}]}, timeout=12)
-    response.raise_for_status()
-    balance = int(response.json().get("result", {}).get("value", -1))
+    payload = _rpc("getBalance", [str(signer.pubkey()), {"commitment": "confirmed"}])
+    balance = int(((payload or {}).get("result") or {}).get("value", -1))
     if balance < amount + tip_lamports + priority + rent_reserve:
         raise RuntimeError("Bot wallet SOL balance is below the trade and fee reserve")
 
@@ -597,6 +642,8 @@ def _error_code(exc):
         return "HTTP_" + str(exc.response.status_code) + (" (sem rota nessa DEX)" if exc.response.status_code == 400 else "")
     if isinstance(exc, RuntimeError):
         text = str(exc)
+        if text.startswith(("Jito ", "RPC ")):
+            return text[:120]
         for needle, label in _ERROR_LABELS:
             if needle in text:
                 return label
