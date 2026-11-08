@@ -138,10 +138,22 @@ def record_mev_event(event):
         if bundle_id:
             for index, previous in enumerate(history):
                 if previous.get("bundle_id") == bundle_id:
+                    old_pnl = previous.get("realized_net_lamports") if previous.get("status") == "landed" else None
+                    new_pnl = item.get("realized_net_lamports") if item.get("status") == "landed" else None
+                    if isinstance(new_pnl, int) and not isinstance(new_pnl, bool):
+                        if isinstance(old_pnl, int) and not isinstance(old_pnl, bool):
+                            state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl - old_pnl
+                        else:
+                            state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl
+                            state["mev_confirmed_bundles"] = int(state.get("mev_confirmed_bundles", 0)) + 1
                     history[index] = {**previous, **item}
                     state["mev_history"] = history[:30]
                     _save(state)
                     return
+        new_pnl = item.get("realized_net_lamports") if item.get("status") == "landed" else None
+        if isinstance(new_pnl, int) and not isinstance(new_pnl, bool):
+            state["mev_realized_total_lamports"] = int(state.get("mev_realized_total_lamports", 0)) + new_pnl
+            state["mev_confirmed_bundles"] = int(state.get("mev_confirmed_bundles", 0)) + 1
         state["mev_history"] = ([item] + history)[:30]
         _save(state)
 
@@ -168,9 +180,12 @@ def mark_mev_notification_sent(bundle_id):
                 return
 
 def mev_pnl_summary():
-    """Return (confirmed realized P/L in lamports, confirmed bundles with P/L)."""
+    """Return lifetime confirmed realized P/L in lamports and bundle count."""
     with _LOCK:
-        events = _load().get("mev_history", [])
+        state = _load()
+        if "mev_realized_total_lamports" in state or "mev_confirmed_bundles" in state:
+            return int(state.get("mev_realized_total_lamports", 0)), int(state.get("mev_confirmed_bundles", 0))
+        events = state.get("mev_history", [])
         confirmed = [item for item in events
                      if item.get("status") == "landed"
                      and isinstance(item.get("realized_net_lamports"), int)
