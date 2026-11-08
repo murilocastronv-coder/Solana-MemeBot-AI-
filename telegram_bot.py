@@ -339,6 +339,8 @@ def handle(update):
           "P/L realizado confirmado: "+format(total_lamports/1e9,"+.8f")+" SOL · bundles: "+str(closed)]
    for x in events:
     line=datetime.fromtimestamp(x.get("timestamp",0),timezone.utc).strftime("%d/%m %H:%M UTC")+" · "+str(x.get("status","?"))+" · "+str(x.get("mint","")[:8])
+    if x.get("error"):line+=" · "+str(x["error"])[:60]
+    elif isinstance(x.get("estimated_net_lamports"),int):line+=" · "+format(x["estimated_net_lamports"]/1e9,"+.6f")+" SOL"
     if isinstance(x.get("realized_net_lamports"),int):
      line+=" · P/L "+format(x["realized_net_lamports"]/1e9,"+.8f")+" SOL"
     lines.append(line)

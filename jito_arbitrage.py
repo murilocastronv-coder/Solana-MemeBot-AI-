@@ -560,6 +560,33 @@ def pick_candidates(assessments, limit=None, now=None):
     return [(item, route) for _, item, route in ranked[:limit]]
 
 
+_ERROR_LABELS = (
+    ("Mint or freeze authority", "moeda com autoridade de emissão/congelamento"),
+    ("MEV live switches", "modo real desligado"),
+    ("Private Telegram owner", "TELEGRAM_CHAT_ID não confere com o dono"),
+    ("Unreconciled spot order", "ordem antiga pendente"),
+    ("Jupiter API key", "falta JUPITER_API_KEY"),
+    ("Dedicated Solana RPC", "falta SOLANA_RPC_URL dedicado"),
+    ("passphrase", "falta senha da carteira"),
+    ("balance is below", "saldo SOL insuficiente"),
+    ("unresolved", "bundle anterior pendente"),
+    ("simulation", "simulação do bundle falhou"),
+    ("no tokens", "rota sem tokens"),
+)
+
+
+def _error_code(exc):
+    """Short, secret-free reason shown in the Telegram history."""
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return "HTTP_" + str(exc.response.status_code) + (" (sem rota nessa DEX)" if exc.response.status_code == 400 else "")
+    if isinstance(exc, RuntimeError):
+        text = str(exc)
+        for needle, label in _ERROR_LABELS:
+            if needle in text:
+                return label
+    return type(exc).__name__
+
+
 def scan_cycle(assessments, force=False, quote_only=False):
     """Use the read-only token scanner; live submits require MEV ON in Telegram."""
     import live_trade_state
@@ -595,9 +622,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
                 if result["status"] == "submitted_pending":
                     break
             except Exception as exc:
-                error_code = ("HTTP_" + str(exc.response.status_code)
-                              if isinstance(exc, requests.HTTPError) and exc.response is not None
-                              else type(exc).__name__)
+                error_code = _error_code(exc)
                 live_trade_state.record_mev_event({"status": "skipped", "mint": str(mint)[:64],
                                                    "error": error_code})
                 LOG.warning("MEV cycle skipped mint=%s error=%s", str(mint)[:8], error_code)

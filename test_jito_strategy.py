@@ -101,5 +101,12 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(len(second), 10)
 
 
+class ErrorLabelTests(unittest.TestCase):
+    def test_labels(self):
+        self.assertEqual(j._error_code(RuntimeError("Bot wallet SOL balance is below the trade and fee reserve")),
+                         "saldo SOL insuficiente")
+        self.assertEqual(j._error_code(ValueError("x")), "ValueError")
+
+
 if __name__ == "__main__":
     unittest.main()
