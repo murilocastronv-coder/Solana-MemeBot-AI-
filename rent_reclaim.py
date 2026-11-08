@@ -62,3 +62,30 @@ def reclaim(rpc, signer):
     if not isinstance(result, dict) or result.get("error") or not result.get("result"):
         raise RuntimeError("RPC sendTransaction recusou o fechamento")
     return len(accounts), sum(l for _, _, l in accounts), result["result"]
+
+
+def rpc_full(method, params):
+    """Configured Solana RPC, full JSON payload; errors never include the RPC URL (it may hold a key)."""
+    import os
+    import requests
+    url = os.getenv("SOLANA_RPC_URL", "").strip()
+    try:
+        response = requests.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=15)
+    except requests.RequestException:
+        raise RuntimeError("RPC " + method + " sem conexão") from None
+    if response.status_code >= 400:
+        raise RuntimeError("RPC " + method + " HTTP " + str(response.status_code))
+    return response.json()
+
+
+def bot_signer():
+    """The bot wallet keypair, decrypted in memory only."""
+    import os
+    from solders.keypair import Keypair
+    from bot_wallet_service import create_or_get, export_private_key
+    address, _ = create_or_get()
+    public, secret = export_private_key(os.getenv("BOT_WALLET_ENCRYPTION_PASSPHRASE", ""))
+    signer = Keypair.from_base58_string(secret)
+    if str(signer.pubkey()) != public or public != address:
+        raise RuntimeError("Bot signer does not match stored wallet")
+    return signer

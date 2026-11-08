@@ -21,7 +21,6 @@ PRIVATE_CHAT=None  # First private /start after process startup; resets on resta
 CONNECTED_WALLETS={}  # Public addresses only; temporary, never seed phrases.
 EXPORT_TOKENS={}
 EXPORT_LOCK=threading.Lock()
-MEV_INPUT_PENDING={}
 LIVE_FAIL_NOTICES={}
 INTERVAL=max(30,int(os.getenv("SCAN_INTERVAL_SECONDS","30")))
 TP=float(os.getenv("TP_PERCENT","15"))
@@ -60,31 +59,10 @@ def split_message(text,limit=3800):
  if cur:parts.append(cur)
  return parts
 def keyboard():
- return [[{"text":"⚡ MEV ON","callback_data":"mev_on"},{"text":"⏹️ MEV OFF","callback_data":"mev_off"}],
-  [{"text":"📊 Status MEV","callback_data":"mev_status"},{"text":"⚙️ Configurar MEV","callback_data":"mev_config"}],
-  [{"text":"🧪 Simulação","callback_data":"mev_mode_sim"},{"text":"💰 Modo REAL","callback_data":"mev_mode_real"}],
-  [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
+ return [[{"text":"🆕 Lançamento ON","callback_data":"launch_on"},{"text":"⏹️ Lançamento OFF","callback_data":"launch_off"}],
+  [{"text":"📊 Status Lançamento","callback_data":"launch_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
-def mev_config_keyboard():
- return [[{"text":"💧 Valor SOL","callback_data":"mev_amount"},{"text":"📈 Lucro mínimo","callback_data":"mev_min"}],
-  [{"text":"⚡ Gorjeta Jito","callback_data":"mev_tip"},{"text":"⬅️ Voltar","callback_data":"/menu"}]]
-def mev_status_text():
- try:
-  cfg=trade_state.mev_config();enabled=trade_state.flag("mev_enabled");armed=trade_state.flag("mev_real_armed");wallet=get_address()
-  _,guard_reason,daily_count,daily_pnl=trade_state.mev_daily_guard()
-  return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
-   "Execução: "+("REAL armada" if armed and trade_state.mev_live_allowed() else "SIMULAÇÃO / cotação")+"\n"+
-   "Permissão real no Render: "+("ATIVADA" if trade_state.mev_live_allowed() else "DESATIVADA")+"\n"+
-   "Carteira: "+(wallet or "não configurada")+"\n"+__import__("jito_arbitrage").coverage_text()+"\n"+("Arbitragem triangular 🔺: LIGADA (SOL→USDC→moeda→SOL e o inverso, uma visita sim, outra não)\n" if __import__("jito_arbitrage").TRIANGULAR else "")+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
-   "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
-   "Limite: "+os.getenv("MEV_MAX_BUNDLES_PER_DAY","100")+" bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
-   "Proteção diária: "+guard_reason+"\n"+robot_alive_line()+"\n\n"+__import__("jito_arbitrage").why_text())
- except Exception as exc:return "Status MEV indisponível: "+type(exc).__name__
-def mev_config_text():
- cfg=trade_state.mev_config()
- return ("⚙️ CONFIGURAÇÃO MEV\nEntrada SOL: "+format(cfg["input_lamports"]/1e9,".4f")+"\nLucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
-  "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\nLimites: 0,001–0,1 SOL; 0,01–5%; tip 0,000001–0,00001 SOL.")
 def leverage_keyboard():
  return [[{"text":str(x)+"x","callback_data":"lev_"+str(x)} for x in btc_perps.LEVERAGES],[{"text":"⬅️ Voltar","callback_data":"/menu"}]]
 def btc_status():
@@ -96,8 +74,19 @@ def robot_alive_line():
  ago=int(time.time()-HEARTBEAT["at"])
  if ago>180:return "🚨 Rotina automática PARADA há "+str(ago//60)+" min (em: "+HEARTBEAT["step"]+"). Faça um Manual Deploy no Render."
  return "💓 Rotina automática ativa ("+str(ago)+" s atrás · "+HEARTBEAT["step"]+")"
+def launch_status_text():
+ try:
+  import launch_sniper as ls
+  st=trade_state.status();pnl=trade_state.pnl_summary()
+  return ("🆕 SNIPER DE LANÇAMENTO (pump.fun) — DINHEIRO REAL\n"+ls.status_line()+"\n"+
+   "Robô: "+("🟢 LIGADO" if live_engine.ready() else "🔴 PARADO — "+str(live_engine.why_stopped() or ""))+"\n"+
+   "Posições abertas: "+str(st["positions"])+" · ordens pendentes: "+str(st["pending"])+"\n"+
+   "Perda do dia: US$ "+format(st["daily_loss_usd"],".2f")+" / "+format(trade_state.daily_loss_limit(),".2f")+"\n"+
+   "P/L hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD · total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD · operações: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)\n"+
+   robot_alive_line())
+ except Exception as exc:return "Status indisponível: "+type(exc).__name__
 def menu(chat):
- send(chat,"⚡ Solana MEV Bot — Jupiter + Jito\n"+mev_status_text(),keyboard())
+ send(chat,launch_status_text(),keyboard())
 def market_json(url):
  last_error=None
  for attempt in range(3):
@@ -234,48 +223,20 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
- pending=MEV_INPUT_PENDING.get(str(chat))
- if msg and pending:
+ if action=="launch_on":
   try:
-   factor=1_000_000_000 if pending in ("input_lamports","jito_tip_lamports") else 100
-   trade_state.update_mev_setting(pending,int(round(float((msg.get("text") or "").strip().replace(",","."))*factor)))
-   MEV_INPUT_PENDING.pop(str(chat),None);send(chat,"✅ Configuração salva.\n"+mev_config_text(),mev_config_keyboard())
-  except (ValueError,TypeError):send(chat,"Valor inválido ou fora do limite; configuração não alterada.",mev_config_keyboard())
+   import launch_sniper as ls
+   if not ls.ws_url():
+    send(chat,"⛔ Preciso do websocket do RPC: configure SOLANA_RPC_URL (https://…) ou SOLANA_WS_URL (wss://…) no Render.",keyboard());return
+   live_engine.start();trade_state.set_flag("launch_enabled",True)
+   send(chat,"🆕 SNIPER DE LANÇAMENTO LIGADO — DINHEIRO REAL · RISCO EXTREMO\nOuve o pump.fun ao vivo (criação + cada compra/venda).\n1) Na criação: precisa ter site/X/Telegram e o criador não pode ter lançado várias moedas na última hora.\n2) Confirmação: acompanha os primeiros "+str(ls.CONFIRM_SECONDS)+" s e só compra se tiver ≥ "+str(ls.MIN_BUYERS)+" carteiras diferentes comprando, ≥ "+format(ls.MIN_SOL_IN,".0f")+" SOL entrando, poucas vendas, nenhuma carteira com mais de "+format(ls.MAX_TOP_BUYER*100,".0f")+"% das compras (bundle) e o criador sem vender.\nCompra "+format(ls.LAUNCH_FRACTION*100,".0f")+"% da conta, 1 por vez.\nVende: na hora se o CRIADOR VENDER; stop móvel 6% abaixo do topo depois de +10%; alvo +40%; sai cedo se cair 10% ou não subir +4% em 25 s; stop −15%; máx. 2 min.\nPara de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Mesmo confirmada, moeda nova pode virar golpe.",keyboard())
+  except Exception as exc:send(chat,"⛔ Não consegui ligar o sniper de lançamento: "+str(exc)[:250],keyboard())
   return
- if action in ("mev_on","mev_off"):
-  enabled=action=="mev_on";trade_state.set_flag("mev_enabled",enabled)
-  if not enabled:trade_state.set_flag("mev_real_armed",False)
-  send(chat,"⚡ MEV "+("ligado em cotação/simulação." if enabled else "desligado; modo real desarmado."),keyboard());return
- elif action in ("mev_status","/mev"):send(chat,mev_status_text(),keyboard());return
- elif action=="mev_config":send(chat,mev_config_text(),mev_config_keyboard());return
- elif action in ("mev_amount","mev_min","mev_tip"):
-  name={"mev_amount":"input_lamports","mev_min":"min_profit_bps","mev_tip":"jito_tip_lamports"}[action]
-  label={"input_lamports":"entrada em SOL (0,001 a 0,1)","min_profit_bps":"lucro mínimo % (0,01 a 5)","jito_tip_lamports":"gorjeta SOL (0,000001 a 0,00001)"}[name]
-  MEV_INPUT_PENDING[str(chat)]=name;send(chat,"Envie "+label+".",mev_config_keyboard());return
- elif action=="mev_mode_sim":
-  trade_state.set_flag("mev_real_armed",False);send(chat,"🧪 Simulação selecionada; não envia bundles.",keyboard());return
- elif action=="mev_mode_real":
-  if not trade_state.mev_live_allowed():
-   send(chat,"🔒 Modo real bloqueado pelas permissões do Render. O botão não habilita transações.",keyboard());return
-  trade_state.set_flag("mev_real_armed",True);send(chat,"⚠️ Modo real armado; Jito ainda exige validação de rota, lucro, saldo e segurança.",keyboard());return
- elif action=="mev_scan":
-  send(chat,"🔎 Analisando moedas… o resultado chega em instantes.");run_async(mev_scan_now,chat);return
- elif action=="mev_history":
-  try:
-   events=trade_state.mev_history(8)
-   total_lamports,closed=trade_state.mev_pnl_summary()
-   lines=["📜 HISTÓRICO MEV",
-          "P/L realizado confirmado: "+format(total_lamports/1e9,"+.8f")+" SOL · bundles: "+str(closed)]
-   for x in events:
-    line=datetime.fromtimestamp(x.get("timestamp",0),timezone.utc).strftime("%d/%m %H:%M UTC")+" · "+str(x.get("status","?"))+" · "+str(x.get("mint","")[:8])
-    if x.get("error"):line+=" · "+str(x["error"])[:60]
-    elif isinstance(x.get("estimated_net_lamports"),int):line+=" · "+format(x["estimated_net_lamports"]/1e9,"+.6f")+" SOL"
-    if isinstance(x.get("realized_net_lamports"),int):
-     line+=" · P/L "+format(x["realized_net_lamports"]/1e9,"+.8f")+" SOL"
-    lines.append(line)
-   send(chat,"\n".join(lines if events else ["Ainda sem histórico MEV.","P/L realizado confirmado: "+format(total_lamports/1e9,"+.8f")+" SOL"]),keyboard())
-  except Exception as exc:send(chat,"Histórico indisponível ("+type(exc).__name__+").",keyboard())
-  return
+ if action=="launch_off":
+  trade_state.set_flag("launch_enabled",False);trade_state.stop()
+  send(chat,"⏹️ Sniper de lançamento desligado. Posição aberta continua com as regras de saída.",keyboard());return
+ if action in ("launch_status","/status"):
+  send(chat,launch_status_text(),keyboard());return
  legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","/btc_reset",
   "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real","unstick","/destravar",
   "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
@@ -283,11 +244,12 @@ def handle(update):
   "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
   "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off",
   "tsim_on","tsim_off","tsim_status","/tsim","/tsim_reset","tb_real_on","tb_real_off","sn_sim","sn_real","sn_off","sn_status","/sniper",
-  "mm_on","mm_off","mm_status","/mm"}
+  "mm_on","mm_off","mm_status","/mm",
+  "mev_on","mev_off","mev_status","/mev","mev_config","mev_amount","mev_min","mev_tip","mev_mode_sim","mev_mode_real","mev_scan","mev_history"}
  if action in legacy or action.startswith("lev_"):
   try:btc_perps.set_enabled(False)
   except Exception:pass
-  send(chat,"Esse controle foi removido: o bot agora é só o robô de arbitragem (MEV). Use o menu abaixo.",keyboard());return
+  send(chat,"Esse controle foi removido: o bot agora é o sniper de lançamento. Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("wallet_export","/exportar_chave"):
   if not get_address():
@@ -340,15 +302,11 @@ def handle(update):
  else:menu(chat)
 def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
- try:applied=trade_state.apply_mev_only_once()
- except Exception:logging.exception("mev-only switch failed");applied=False
  chat=active_chat()
  if not chat:return
  try:btc_perps.set_enabled(False)
  except Exception:logging.warning("legacy BTC entry stop unavailable")
- if applied:
-  send(chat,"✅ Modo SÓ MEV aplicado: Trading, Sniper, Pump.fun, Vela 1m e Lançamento foram DESLIGADOS. Posições abertas (se houver) continuam com stop até vender. O MEV segue ligado com entrada de 0,05 SOL e gorjeta máxima.")
- send(chat,"🔄 Bot MEV reiniciado (deploy).\n"+mev_status_text(),keyboard())
+ send(chat,"🔄 Bot reiniciado (deploy).\n"+launch_status_text(),keyboard())
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  st=trade_state.status()
  reason=live_engine.why_stopped()
@@ -361,29 +319,9 @@ def beat(step):
  HEARTBEAT.update(at=time.time(),step=step)
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
- next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_sync=0;last_recovery_notice=time.monotonic()
+ next_positions=0;next_btc=0;next_reclaim=time.monotonic()+60;next_sync=0;last_recovery_notice=time.monotonic()
  while True:
   try:
-   beat("reconciliação MEV")
-   if active_chat() and time.monotonic()>=next_mev_reconcile:
-    next_mev_reconcile=time.monotonic()+5
-    try:
-     from jito_arbitrage import reconcile_pending_bundle
-     reconcile_pending_bundle()
-     for settled in trade_state.mev_notifications_pending(3):
-      try:
-       if settled["status"]=="landed":
-        pnl=settled.get("realized_net_lamports")
-        pnl_text=("P/L realizado: "+format(pnl/1e9,"+.8f")+" SOL" if isinstance(pnl,int) else "P/L ainda indisponível no RPC")
-        message="✅ Arbitragem Jito confirmada na Solana.\nContrato: "+str(settled.get("mint",""))+"\n"+pnl_text
-        if settled.get("signature"):message+="\nAssinatura: "+str(settled["signature"])
-       else:
-        message="⚠️ Bundle Jito não aterrissou; ciclo atômico não executado.\nID: "+str(settled.get("bundle_id",""))
-       send(active_chat(),message,keyboard())
-       trade_state.mark_mev_notification_sent(settled.get("bundle_id"))
-      except Exception as exc:
-       logging.warning("MEV Telegram notification deferred type=%s",type(exc).__name__)
-    except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
    beat("conferência de posições")
    if active_chat() and time.monotonic()>=next_sync:
     next_sync=time.monotonic()+60
@@ -393,9 +331,9 @@ def background_loop():
    if active_chat() and time.monotonic()>=next_reclaim:
     next_reclaim=time.monotonic()+600
     try:
-     import jito_arbitrage as ja, rent_reclaim
-     if ja._live_enabled() and not ja._has_unresolved_bundle():
-      closed,lamports,sig=rent_reclaim.reclaim(ja._rpc,ja._wallet())
+     import rent_reclaim
+     if not trade_state.pending_orders():
+      closed,lamports,sig=rent_reclaim.reclaim(rent_reclaim.rpc_full,rent_reclaim.bot_signer())
       if closed:
        send(active_chat(),"♻️ Fechei "+str(closed)+" conta(s) de token vazia(s) e devolvi "+format(lamports/1e9,".6f")+" SOL de depósito para a carteira.")
     except Exception as exc:logging.warning("rent reclaim failed: %s",str(exc)[:120])
@@ -423,57 +361,6 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
-def mev_result_line(x):
- net=x.get("estimated_net_lamports")
- net_text=(" · "+format(net/1e9,"+.6f")+" SOL") if isinstance(net,int) else ""
- mint=str(x.get("mint",""))[:8]+(" 🔺" if "→" in str(x.get("route","")) else "")
- status=x.get("status","?")
- if status=="submitted_pending":return "⚡ ORDEM ENVIADA · "+mint+net_text
- if status=="live_failed":return "❌ LUCRO ACHADO MAS NÃO ENVIOU · "+mint+net_text+" · "+str(x.get("error",""))
- if status=="dry_run_opportunity":return "✅ oportunidade · "+mint+net_text
- if status=="skipped":return "⏭️ pulada · "+mint+" · "+str(x.get("error",""))
- return status+" · "+mint+net_text
-def mev_scan_now(chat):
- """Quote now; in armed real mode with MEV ON, a profitable cycle is executed right away."""
- try:
-  from bot import assess_pair
-  import jito_arbitrage as ja
-  live=ja._live_enabled() and trade_state.flag("mev_enabled")
-  header="🔎 MEV — "+("modo REAL: oportunidade com lucro é executada" if live else "apenas cotações; nenhuma transação")
-  outcomes=ja.scan_cycle([assess_pair(p) for p in fetch(MEV_PAIR_SEARCHES)],force=True,quote_only=not live)
-  if not outcomes and ja.LAST_RESULTS["results"]:
-   # The automatic scan holds the lock; show its latest results instead of waiting.
-   outcomes=ja.LAST_RESULTS["results"]
-   header+="\n(última análise automática, "+datetime.fromtimestamp(ja.LAST_RESULTS["at"],timezone.utc).strftime("%H:%M:%S UTC")+")"
-  if not outcomes:
-   send(chat,"⏳ Primeira análise ainda rodando. Tente de novo em 1 minuto.",keyboard());return
-  try:header+="\n"+ja.coverage_text()
-  except Exception:pass
-  send(chat,"\n".join([header]+[mev_result_line(x) for x in outcomes[:12]]),keyboard())
- except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
-MEV_SCAN_SECONDS=max(1.0,float(os.getenv("MEV_SCAN_SECONDS","2")))
-MEV_LAST={"at":0.0}
-def mev_loop():
- """MEV scan in its own thread: next round starts MEV_SCAN_SECONDS after the previous one ends."""
- while True:
-  try:
-   if active_chat() and trade_state.mev_autotrade_allowed() and trade_state.flag("mev_enabled"):
-    from bot import assess_pair
-    from jito_arbitrage import scan_cycle
-    assessments=[assess_pair(pair) for pair in fetch_cached(MEV_PAIR_SEARCHES)]
-    outcomes=scan_cycle(assessments)
-    MEV_LAST["at"]=time.time()
-    for outcome in outcomes:
-     if outcome.get("status")=="live_failed":
-      reason=str(outcome.get("error",""))
-      notice_key=str(outcome.get("mint",""))
-      if time.monotonic()-LIVE_FAIL_NOTICES.get(notice_key,-1e9)>7200:
-       LIVE_FAIL_NOTICES[notice_key]=time.monotonic()
-       send(active_chat(),"❌ Achei oportunidade com lucro mas a ordem NÃO foi enviada.\nMotivo: "+reason+"\nContrato: "+str(outcome.get("mint","")))
-     if outcome.get("status")=="submitted_pending":
-      send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
-  except Exception as exc:logging.error("MEV cycle stopped: %s",type(exc).__name__)
-  time.sleep(MEV_SCAN_SECONDS)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
 def loop():
@@ -481,7 +368,10 @@ def loop():
  try:startup_notice()
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
- threading.Thread(target=mev_loop,daemon=True).start()
+ try:
+  import launch_sniper
+  launch_sniper.start(send,active_chat)
+ except Exception:logging.exception("launch sniper start failed")
  while True:
   try:
    if TOKEN:
