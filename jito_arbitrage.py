@@ -397,6 +397,11 @@ def scan_cycle(assessments, force=False, quote_only=False):
     if not force and (os.getenv("MEV_AUTOTRADE_ENABLED") != "true" or
                       not live_trade_state.flag("mev_enabled")):
         return []
+    if _live_enabled() and not quote_only:
+        allowed, reason, _, _ = live_trade_state.mev_daily_guard()
+        if not allowed:
+            LOG.warning("MEV daily risk guard blocked live bundle: %s", reason)
+            return []
     if not _LOCK.acquire(blocking=False):
         return []
     try:
@@ -405,7 +410,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
             if isinstance(item, dict) and item.get("status") == "WATCH_ONLY" and item.get("token"):
                 candidates.append(item["token"])
         results = []
-        for mint in list(dict.fromkeys(candidates))[:2]:
+        for mint in list(dict.fromkeys(candidates))[:5]:
             try:
                 result = try_arbitrage(mint, quote_only=quote_only)
                 LOG.info("MEV cycle status=%s mint=%s net_min_lamports=%s",
