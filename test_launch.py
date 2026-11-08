@@ -117,13 +117,12 @@ class ExitTests(unittest.TestCase):
         d = ls.exit_decision
         self.assertEqual(d(1.05, 1.06, 3, dev_sold=True), "launch_dev_sold")
         self.assertEqual(d(0.84, 0.98, 3), "stop_loss")
-        self.assertEqual(d(1.41, 1.41, 5), "launch_profit")
-        self.assertEqual(d(1.20, 1.30, 10), "launch_peak")      # >6% below a +30% peak
-        self.assertIsNone(d(1.25, 1.30, 10))                    # still near the peak: let it run
+        self.assertEqual(d(1.031, 1.031, 2), "launch_profit")   # small net profit: sell everything now
+        self.assertEqual(d(1.20, 1.30, 10), "launch_profit")
+        self.assertIsNone(d(1.02, 1.02, 5))                     # +2%: not yet
         self.assertEqual(d(0.87, 0.98, 5), "launch_drop")       # falling before profit
         self.assertEqual(d(1.02, 1.03, 26), "launch_flat")
-        self.assertIsNone(d(1.06, 1.07, 26))
-        self.assertEqual(d(1.06, 1.07, 121), "launch_time")
+        self.assertEqual(d(1.0, 1.05, 121), "launch_time")
 
 
 class FlowTests(unittest.TestCase):

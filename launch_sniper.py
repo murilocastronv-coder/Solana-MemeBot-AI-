@@ -58,7 +58,10 @@ MAX_TOP_BUYER = _env("LAUNCH_MAX_TOP_BUYER", 0.35)    # one wallet <= 35% of the
 
 # Exits
 LAUNCH_STOP = _env("LAUNCH_STOP", 0.15)               # -15%
-LAUNCH_TAKE_PROFIT = _env("LAUNCH_TAKE_PROFIT", 0.40)  # hard take profit +40%
+# Sell everything as soon as there is a small profit after fees: these tokens
+# often spike right after the buy and then dump. The ratio uses the executable
+# sell quote (sell fees/impact included) against the cost (buy fees included).
+LAUNCH_TAKE_PROFIT = _env("LAUNCH_TAKE_PROFIT", 0.03)  # +3% net
 LAUNCH_TRAIL_ARM = _env("LAUNCH_TRAIL_ARM", 0.10)      # from +10% ...
 LAUNCH_TRAIL_DROP = _env("LAUNCH_TRAIL_DROP", 0.06)    # ... sell 6% below the peak
 LAUNCH_EARLY_DROP = _env("LAUNCH_EARLY_DROP", 0.10)    # before profit: 10% below the best value -> out

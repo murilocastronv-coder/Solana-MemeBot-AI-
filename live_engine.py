@@ -128,7 +128,7 @@ EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
     "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
     "copy": "👥 Vende quando a carteira copiada vender | 🎯 alvo +50% | 🛑 stop −15%",
-    "launch": "🆕 Lançamento: vende se o criador vender, stop móvel 6% abaixo do topo após +10%, alvo +40%, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
+    "launch": "🆕 Lançamento: vende TUDO assim que der +3% de lucro líquido, na hora se o criador vender, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
     "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
