@@ -273,7 +273,7 @@ BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
-    "launch": "🆕 Lançamento: vende assim que der lucro após as taxas (+1%), se cair 8% do topo, se não subir +5% em 15 s, no stop -20% ou em 1 min",
+    "launch": "🆕 Lançamento: vende se o criador vender, stop móvel 6% abaixo do topo após +10%, alvo +40%, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
     "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
@@ -574,11 +574,12 @@ def sell_message(symbol, signal, settled):
            "time_stop": "⏱️ Tempo esgotado (não andou a tempo)",
            "candle_close": "🕯️ Vela de 1 min fechou",
            "candle_peak": "🎯 Alvo da vela atingido",
-           "launch_profit": "💰 Lucro depois das taxas: vendeu na hora",
-           "launch_peak": "🎯 Vendeu perto do pico (caiu 8% do topo)",
-           "launch_drop": "📉 Começou a cair (8% abaixo do topo)",
-           "launch_flat": "😴 Não subiu rápido (menos de +5% em 15 s)",
-           "launch_time": "⏱️ 1 minuto encerrado"}.get(signal["reason"], "🛑 Stop loss")
+           "launch_profit": "💰 Alvo de lucro atingido",
+           "launch_peak": "🎯 Vendeu perto do pico (stop móvel)",
+           "launch_drop": "📉 Começou a cair antes de dar lucro",
+           "launch_flat": "😴 Não subiu rápido",
+           "launch_dev_sold": "🚨 Criador vendeu (sinal de rug): saiu na hora",
+           "launch_time": "⏱️ Tempo máximo encerrado"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"

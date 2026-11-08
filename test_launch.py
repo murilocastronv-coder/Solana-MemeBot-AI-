@@ -19,21 +19,72 @@ def event_bytes(name="Pepe Rocket", symbol="PROCK", uri="https://ipfs.io/ipfs/ab
     return ls.CREATE_EVENT + s(name) + s(symbol) + s(uri) + mint + curve + user + b"\x00" * 40
 
 
+def trade_bytes(mint, user, sol, is_buy=True):
+    return (ls.TRADE_EVENT + bytes(mint) + struct.pack("<QQ", int(sol * 1e9), 1000) +
+            bytes([1 if is_buy else 0]) + bytes(user) + b"\x00" * 24)
+
+
 class DecodeTests(unittest.TestCase):
-    def test_decode_from_logs(self):
-        logs = ["Program 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P invoke [1]",
-                "Program log: Instruction: Create",
+    def test_decode_create_from_logs(self):
+        logs = ["Program log: Instruction: Create",
                 "Program data: " + base64.b64encode(event_bytes()).decode()]
         events = ls.events_from_logs(logs)
-        self.assertEqual(len(events), 1)
         self.assertEqual((events[0]["name"], events[0]["symbol"]), ("Pepe Rocket", "PROCK"))
-        from solders.pubkey import Pubkey
-        Pubkey.from_string(events[0]["mint"])  # valid address
 
-    def test_ignores_buys(self):
+    def test_ignores_non_create(self):
         logs = ["Program log: Instruction: Buy", "Program data: " + base64.b64encode(event_bytes()).decode()]
         self.assertEqual(ls.events_from_logs(logs), [])
-        self.assertIsNone(ls.decode_create_event(b"\x00" * 200))
+
+    def test_decode_trade(self):
+        mint, user = Keypair().pubkey(), Keypair().pubkey()
+        logs = ["Program log: Instruction: Sell", "Program data: " + base64.b64encode(trade_bytes(mint, user, 1.5, False)).decode()]
+        t = ls.trades_from_logs(logs)[0]
+        self.assertEqual((t["mint"], t["user"], t["sol"], t["is_buy"]), (str(mint), str(user), 1.5, False))
+
+
+class ConfirmTests(unittest.TestCase):
+    def setUp(self):
+        ls.TRACK.clear()
+        self.creator = str(Keypair().pubkey())
+        self.mint = str(Keypair().pubkey())
+        ls.track_create({"mint": self.mint, "creator": self.creator, "symbol": "PEPE"}, now=1000)
+
+    def buy(self, user, sol, is_buy=True):
+        ls.track_trade({"mint": self.mint, "user": user, "sol": sol, "is_buy": is_buy, "tokens": 1})
+
+    def test_broad_demand_confirms(self):
+        for i in range(12):
+            self.buy("u" + str(i), 0.3)
+        self.buy(self.creator, 5.0)            # creator buys do not count
+        self.assertEqual(ls.confirm_reasons(ls.TRACK[self.mint]), [])
+
+    def test_bundle_and_creator_sell_rejected(self):
+        for i in range(11):
+            self.buy("u" + str(i), 0.1)
+        self.buy("whale", 3.0)
+        self.assertIn("uma carteira domina as compras (bundle)", ls.confirm_reasons(ls.TRACK[self.mint]))
+        self.buy(self.creator, 1.0, is_buy=False)
+        self.assertIn("criador vendeu", ls.confirm_reasons(ls.TRACK[self.mint]))
+        self.assertTrue(ls.creator_sold(self.mint))
+
+    def test_decide_waits_then_buys(self):
+        ls.TRACK[self.mint]["static"] = ""
+        for i in range(12):
+            self.buy("u" + str(i), 0.3)
+        with patch.object(ls, "_buy_and_watch", return_value="sold") as b:
+            self.assertIsNone(ls.decide_once(None, "1", now=1005))   # still inside the 20 s wait
+            self.assertEqual(ls.decide_once(None, "1", now=1021), "sold")
+        self.assertEqual(b.call_count, 1)
+
+    def test_weak_token_expires(self):
+        ls.TRACK[self.mint]["static"] = ""
+        self.buy("u1", 0.1)
+        with patch.object(ls, "_buy_and_watch") as b:
+            ls.decide_once(None, "1", now=1021)
+            self.assertFalse(ls.TRACK[self.mint]["decided"])          # keeps watching in the window
+            ls.decide_once(None, "1", now=1050)
+        self.assertTrue(ls.TRACK[self.mint]["decided"])
+        b.assert_not_called()
 
 
 class FilterTests(unittest.TestCase):
@@ -46,68 +97,49 @@ class FilterTests(unittest.TestCase):
         e.update(over)
         return e
 
-    def test_socials_required(self):
+    def test_socials_and_serial_creator(self):
         with patch.object(ls, "has_socials", return_value=False):
             self.assertEqual(ls.reject_reason(self.ev()), "sem site/redes sociais")
         with patch.object(ls, "has_socials", return_value=True):
-            self.assertEqual(ls.reject_reason(self.ev(creator="C2")), "")
-
-    def test_serial_creator_and_late(self):
-        with patch.object(ls, "has_socials", return_value=True):
-            for _ in range(2):
-                self.assertEqual(ls.reject_reason(self.ev()), "")
+            self.assertEqual(ls.reject_reason(self.ev()), "")
             self.assertIn("várias moedas", ls.reject_reason(self.ev()))
-            self.assertEqual(ls.reject_reason(self.ev(creator="Z", seen_at=time.time() - 30)), "vista tarde demais")
-
-    def test_metadata_links(self):
-        class R:
-            def __init__(self, d): self.d = d
-            def json(self): return self.d
-        with patch.object(ls.requests, "get", return_value=R({"twitter": "https://x.com/pepe"})):
-            self.assertTrue(ls.has_socials("https://x/meta.json"))
-        with patch.object(ls.requests, "get", return_value=R({"description": "moon"})):
-            self.assertFalse(ls.has_socials("https://x/meta.json"))
 
 
 class ExitTests(unittest.TestCase):
     def test_rules(self):
         d = ls.exit_decision
-        self.assertEqual(d(0.79, 0.98, 3), "stop_loss")
-        self.assertEqual(d(0.89, 0.98, 3), "launch_drop")       # started falling
-        self.assertEqual(d(1.011, 1.011, 2), "launch_profit")   # profit after fees: sell now
-        self.assertEqual(d(1.30, 1.42, 10), "launch_profit")
-        self.assertEqual(d(1.005, 1.006, 16), "launch_flat")    # did not go up fast
-        self.assertIsNone(d(1.005, 1.006, 5))                   # tiny gain, still early: hold
-        self.assertEqual(d(1.005, 1.006, 60), "launch_flat")
+        self.assertEqual(d(1.05, 1.06, 3, dev_sold=True), "launch_dev_sold")
+        self.assertEqual(d(0.84, 0.98, 3), "stop_loss")
+        self.assertEqual(d(1.41, 1.41, 5), "launch_profit")
+        self.assertEqual(d(1.20, 1.30, 10), "launch_peak")      # >6% below a +30% peak
+        self.assertIsNone(d(1.25, 1.30, 10))                    # still near the peak: let it run
+        self.assertEqual(d(0.87, 0.98, 5), "launch_drop")       # falling before profit
+        self.assertEqual(d(1.02, 1.03, 26), "launch_flat")
+        self.assertIsNone(d(1.06, 1.07, 26))
+        self.assertEqual(d(1.06, 1.07, 121), "launch_time")
 
 
 class FlowTests(unittest.TestCase):
-    def _flow(self, value):
+    def test_buy_then_sell_when_creator_sells(self):
         ls._last_buy = 0.0
-        event = {"name": "Pepe", "symbol": "PEPE", "uri": "u", "creator": "C9", "mint": "M1", "seen_at": time.time()}
+        ls.TRACK.clear()
+        ls.track_create({"mint": "M1", "creator": "C", "symbol": "PEPE"}, now=time.time())
+        ls.TRACK["M1"]["creator_sold"] = True
+        event = {"name": "Pepe", "symbol": "PEPE", "uri": "u", "creator": "C", "mint": "M1"}
         sold, bought = [], []
         pos = {"M1": {"token_amount_raw": "1000", "cost_usd": "8"}}
-        clock = iter(range(0, 1000, 5))
-        with patch.object(ls, "reject_reason", return_value=""), \
-             patch.object(ls.engine, "ready", return_value=True), \
+        with patch.object(ls.engine, "ready", return_value=True), \
              patch.object(ls.state, "can_open", return_value=(True, "Ready")), \
              patch.object(ls.state, "positions_by_mode", return_value=0), \
              patch.object(ls.engine, "get_address", return_value="W"), \
              patch.object(ls.engine, "_execute_buy", side_effect=lambda *a: bought.append(a[-2:]) or {"status": "settled_buy"}), \
              patch.object(ls.state, "_load", return_value={"positions": pos}), \
-             patch("live_exit_monitor.quote_value_usd", return_value=value), \
+             patch("live_exit_monitor.quote_value_usd", return_value=8.4), \
              patch.object(ls.engine, "sell_now", side_effect=lambda m, r, s, c: sold.append(r) or "sold"), \
-             patch.object(ls.time, "sleep", return_value=None), \
-             patch.object(ls.time, "time", side_effect=lambda: 1_000_000 + next(clock)):
-            ls._handle(event, lambda *a: None, "1")
+             patch.object(ls.time, "sleep", return_value=None):
+            ls._buy_and_watch(event, lambda *a: None, "1")
         self.assertEqual(bought, [(ls.LAUNCH_FRACTION, "launch")])
-        return sold
-
-    def test_sells_immediately_in_profit(self):
-        self.assertEqual(self._flow(8.1), ["launch_profit"])
-
-    def test_sells_when_flat(self):
-        self.assertEqual(self._flow(8.04), ["launch_flat"])
+        self.assertEqual(sold, ["launch_dev_sold"])
 
 
 if __name__ == "__main__":

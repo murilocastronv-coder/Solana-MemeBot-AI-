@@ -1,17 +1,18 @@
-"""Launch sniper: buy pump.fun tokens seconds after they are created, sell within 1 minute.
+"""Launch sniper: pump.fun tokens confirmed by real early buying, sold fast.
 
 How it works
 - Listens to the pump.fun program through the RPC websocket (logsSubscribe) and
-  decodes each CreateEvent (name, symbol, metadata URI, mint, creator) the moment
-  a token is created.
-- Fast filters only (there is no history yet): metadata must list a website or
-  socials, and creators who launched several tokens in the last hour are skipped.
-  Pump.fun itself does not let the creator mint more or freeze holders.
-- Buys LAUNCH_FRACTION of the account through the normal live engine (Jupiter),
-  then watches the price every ~2.5 s and sells AS SOON AS it is in profit after
-  fees (+1%), or when: it falls 8% below its best
-  value (near the peak if in profit), it did not rise +5% in the first 15 s,
-  it hits the -20% stop, or LAUNCH_HOLD_SECONDS is over.
+  decodes CreateEvent (new token) and TradeEvent (every buy/sell) live.
+- Static checks at creation: metadata must list a website or socials, and the
+  creator must not be a serial launcher. Pump.fun itself does not let the
+  creator mint more or freeze holders.
+- Confirmation window: instead of buying blind at second zero (where most rugs
+  happen), it follows each token for CONFIRM_SECONDS and only buys if real,
+  broad demand shows up: many different buyers, real SOL coming in, few sells,
+  no single wallet dominating the buys (bundle), and the creator has not sold.
+- Exits (checked every ~2.5 s): creator sells -> sell at once; trailing stop
+  near the peak once in profit; early cut if it falls or does not move; stop
+  loss; hard take profit; time limit.
 
 Very high risk: most brand-new tokens die or are rugged within minutes.
 """
@@ -33,24 +34,43 @@ import live_trade_state as state
 LOG = logging.getLogger("launch_sniper")
 PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 CREATE_EVENT = hashlib.sha256(b"event:CreateEvent").digest()[:8]
+TRADE_EVENT = hashlib.sha256(b"event:TradeEvent").digest()[:8]
 
-LAUNCH_FRACTION = float(os.getenv("LAUNCH_FRACTION", "0.12"))
-LAUNCH_HOLD_SECONDS = int(os.getenv("LAUNCH_HOLD_SECONDS", "60"))
-LAUNCH_STOP = float(os.getenv("LAUNCH_STOP", "0.20"))          # sell at -20%
-LAUNCH_TRAIL_ARM = float(os.getenv("LAUNCH_TRAIL_ARM", "0.15"))  # from +15% ...
-LAUNCH_TRAIL_DROP = float(os.getenv("LAUNCH_TRAIL_DROP", "0.08"))  # sell 8% below the best value (also before profit)
-# Take profit as soon as the executable sell value beats the cost by this much.
-# cost_usd already includes the buy fees and the Jupiter sell quote includes the
-# sell fees/price impact; the margin covers the network fee and a quote moving.
-LAUNCH_TAKE_PROFIT = float(os.getenv("LAUNCH_TAKE_PROFIT", "0.01"))
-LAUNCH_NO_MOVE_SECONDS = int(os.getenv("LAUNCH_NO_MOVE_SECONDS", "15"))  # if it did not go up fast...
-LAUNCH_MIN_MOVE = float(os.getenv("LAUNCH_MIN_MOVE", "0.05"))           # ...(at least +5%), sell
-LAUNCH_MAX_AGE_SECONDS = 8      # skip a launch we saw too late
+
+def _env(name, default):
+    return float(os.getenv(name, str(default)))
+
+
+LAUNCH_FRACTION = _env("LAUNCH_FRACTION", 0.12)
+
+# Confirmation (all measured inside the first CONFIRM_SECONDS, creator excluded)
+CONFIRM_SECONDS = int(_env("LAUNCH_CONFIRM_SECONDS", 20))
+CONFIRM_WINDOW = 25            # a token can still be bought until CONFIRM_SECONDS + 25 s
+MIN_BUYS = int(_env("LAUNCH_MIN_BUYS", 12))
+MIN_BUYERS = int(_env("LAUNCH_MIN_BUYERS", 10))
+MIN_SOL_IN = _env("LAUNCH_MIN_SOL_IN", 2.0)          # SOL bought by others
+MAX_SELL_RATIO = _env("LAUNCH_MAX_SELL_RATIO", 0.4)   # sells <= 40% of buys
+MAX_TOP_BUYER = _env("LAUNCH_MAX_TOP_BUYER", 0.35)    # one wallet <= 35% of the SOL bought
+
+# Exits
+LAUNCH_STOP = _env("LAUNCH_STOP", 0.15)               # -15%
+LAUNCH_TAKE_PROFIT = _env("LAUNCH_TAKE_PROFIT", 0.40)  # hard take profit +40%
+LAUNCH_TRAIL_ARM = _env("LAUNCH_TRAIL_ARM", 0.10)      # from +10% ...
+LAUNCH_TRAIL_DROP = _env("LAUNCH_TRAIL_DROP", 0.06)    # ... sell 6% below the peak
+LAUNCH_EARLY_DROP = _env("LAUNCH_EARLY_DROP", 0.10)    # before profit: 10% below the best value -> out
+LAUNCH_NO_MOVE_SECONDS = int(_env("LAUNCH_NO_MOVE_SECONDS", 25))
+LAUNCH_MIN_MOVE = _env("LAUNCH_MIN_MOVE", 0.04)        # must reach +4% within 25 s
+LAUNCH_HOLD_SECONDS = int(_env("LAUNCH_HOLD_SECONDS", 120))
+
+LAUNCH_MAX_AGE_SECONDS = 10     # static check must start within 10 s of creation
 LAUNCH_MIN_GAP_SECONDS = 20     # at most one buy every 20 s
 CREATOR_MAX_PER_HOUR = 2        # serial launchers are skipped
+TRACK_TTL_SECONDS = 300
 
-_queue = queue.Queue(maxsize=50)
+_queue = queue.Queue(maxsize=200)
 _creators = {}                  # creator -> [timestamps]
+TRACK = {}                      # mint -> live stats of a recently created token
+_track_lock = threading.Lock()
 STATS = {"seen": 0, "bought": 0, "last": "", "reasons": {}, "connected": False, "error": ""}
 _started = False
 _last_buy = 0.0
@@ -95,22 +115,116 @@ def decode_create_event(raw):
             "bonding_curve": bonding_curve, "creator": user}
 
 
-def events_from_logs(logs):
-    out = []
-    if not any("Instruction: Create" in line for line in logs or []):
-        return out
-    for line in logs:
+def decode_trade_event(raw):
+    """Decode pump.fun TradeEvent: mint, sol_amount, token_amount, is_buy, user."""
+    from solders.pubkey import Pubkey
+    if len(raw) < 8 + 32 + 8 + 8 + 1 + 32 or raw[:8] != TRADE_EVENT:
+        return None
+    mint = str(Pubkey.from_bytes(raw[8:40]))
+    sol_amount, token_amount = struct.unpack_from("<QQ", raw, 40)
+    is_buy = raw[56]
+    if is_buy not in (0, 1):
+        return None
+    user = str(Pubkey.from_bytes(raw[57:89]))
+    return {"mint": mint, "sol": sol_amount / 1e9, "tokens": token_amount, "is_buy": bool(is_buy), "user": user}
+
+
+def _program_data(logs):
+    for line in logs or []:
         if line.startswith("Program data: "):
             try:
-                event = decode_create_event(base64.b64decode(line[len("Program data: "):]))
+                yield base64.b64decode(line[len("Program data: "):])
             except Exception:
-                event = None
-            if event:
-                out.append(event)
+                continue
+
+
+def events_from_logs(logs):
+    """CreateEvents in a transaction's logs."""
+    if not any("Instruction: Create" in line for line in logs or []):
+        return []
+    out = []
+    for raw in _program_data(logs):
+        try:
+            event = decode_create_event(raw)
+        except Exception:
+            event = None
+        if event:
+            out.append(event)
     return out
 
 
-# ---------------------------------------------------------------- filters
+def trades_from_logs(logs):
+    out = []
+    for raw in _program_data(logs):
+        try:
+            trade = decode_trade_event(raw)
+        except Exception:
+            trade = None
+        if trade:
+            out.append(trade)
+    return out
+
+
+# ---------------------------------------------------------------- tracking
+def track_create(event, now=None):
+    now = time.time() if now is None else now
+    with _track_lock:
+        TRACK[event["mint"]] = {"event": event, "created": now, "static": None, "decided": False,
+                                "buys": 0, "sells": 0, "buyers": set(), "sol_in": 0.0, "sol_out": 0.0,
+                                "by_user": {}, "creator_sold": False}
+
+
+def track_trade(trade):
+    with _track_lock:
+        t = TRACK.get(trade["mint"])
+        if not t:
+            return
+        creator = t["event"]["creator"]
+        if trade["user"] == creator:
+            if not trade["is_buy"]:
+                t["creator_sold"] = True
+            return  # creator's own buys do not count as demand
+        if trade["is_buy"]:
+            t["buys"] += 1
+            t["buyers"].add(trade["user"])
+            t["sol_in"] += trade["sol"]
+            t["by_user"][trade["user"]] = t["by_user"].get(trade["user"], 0.0) + trade["sol"]
+        else:
+            t["sells"] += 1
+            t["sol_out"] += trade["sol"]
+
+
+def confirm_reasons(t):
+    """Why a tracked token is NOT confirmed (empty list = buy)."""
+    reasons = []
+    if t["creator_sold"]:
+        reasons.append("criador vendeu")
+    if t["buys"] < MIN_BUYS or len(t["buyers"]) < MIN_BUYERS:
+        reasons.append("poucos compradores")
+    if t["sol_in"] < MIN_SOL_IN:
+        reasons.append("pouco SOL entrando")
+    if t["buys"] and t["sells"] > t["buys"] * MAX_SELL_RATIO:
+        reasons.append("muita venda")
+    top = max(t["by_user"].values(), default=0.0)
+    if t["sol_in"] > 0 and top / t["sol_in"] > MAX_TOP_BUYER:
+        reasons.append("uma carteira domina as compras (bundle)")
+    return reasons
+
+
+def creator_sold(mint):
+    with _track_lock:
+        t = TRACK.get(mint)
+        return bool(t and t["creator_sold"])
+
+
+def _cleanup(now):
+    held = set(state._load()["positions"])
+    with _track_lock:
+        for mint in [m for m, t in TRACK.items() if now - t["created"] > TRACK_TTL_SECONDS and m not in held]:
+            TRACK.pop(mint, None)
+
+
+# ---------------------------------------------------------------- static filters
 def has_socials(uri, timeout=2.5):
     """Metadata JSON must list a website, X/Twitter or Telegram."""
     if not uri.startswith(("https://", "http://", "ipfs://")):
@@ -136,7 +250,7 @@ def creator_ok(creator, now=None):
 
 
 def reject_reason(event, now=None):
-    """Fast checks at creation time; empty string = buy."""
+    """Static checks at creation time; empty string = keep watching."""
     now = time.time() if now is None else now
     if now - event.get("seen_at", now) > LAUNCH_MAX_AGE_SECONDS:
         return "vista tarde demais"
@@ -154,15 +268,19 @@ def _count(reason):
 
 
 # ---------------------------------------------------------------- exits
-def exit_decision(ratio, peak, held_seconds):
+def exit_decision(ratio, peak, held_seconds, dev_sold=False):
     """Return a sell reason or None. ratio/peak are value/cost."""
+    if dev_sold:
+        return "launch_dev_sold"
     if ratio <= 1 - LAUNCH_STOP:
         return "stop_loss"
     if ratio >= 1 + LAUNCH_TAKE_PROFIT:
         return "launch_profit"
-    if ratio <= peak * (1 - LAUNCH_TRAIL_DROP):
-        # started falling: near the peak if it was in profit, otherwise cut early
-        return "launch_peak" if peak >= 1 + LAUNCH_TRAIL_ARM else "launch_drop"
+    if peak >= 1 + LAUNCH_TRAIL_ARM:
+        if ratio <= peak * (1 - LAUNCH_TRAIL_DROP):
+            return "launch_peak"
+    elif ratio <= peak * (1 - LAUNCH_EARLY_DROP):
+        return "launch_drop"
     if held_seconds >= LAUNCH_NO_MOVE_SECONDS and peak < 1 + LAUNCH_MIN_MOVE:
         return "launch_flat"
     if held_seconds >= LAUNCH_HOLD_SECONDS:
@@ -171,7 +289,7 @@ def exit_decision(ratio, peak, held_seconds):
 
 
 def watch_and_sell(mint, send, chat, opened_at, check_every=2.5):
-    """Follow the position for up to LAUNCH_HOLD_SECONDS and sell near the peak."""
+    """Follow the position and sell by the exit rules."""
     from live_exit_monitor import quote_value_usd
     peak = 0.0
     while True:
@@ -183,10 +301,10 @@ def watch_and_sell(mint, send, chat, opened_at, check_every=2.5):
         try:
             ratio = quote_value_usd(mint, int(position["token_amount_raw"])) / float(position["cost_usd"])
             peak = max(peak, ratio)
-            reason = exit_decision(ratio, peak, held)
+            reason = exit_decision(ratio, peak, held, creator_sold(mint))
         except Exception:
-            if held >= LAUNCH_HOLD_SECONDS:
-                reason = "launch_time"
+            if creator_sold(mint) or held >= LAUNCH_HOLD_SECONDS:
+                reason = "launch_dev_sold" if creator_sold(mint) else "launch_time"
         if reason:
             for attempt in range(4):
                 try:
@@ -199,20 +317,16 @@ def watch_and_sell(mint, send, chat, opened_at, check_every=2.5):
         time.sleep(check_every)
 
 
-# ---------------------------------------------------------------- loops
-def _handle(event, send, chat):
+# ---------------------------------------------------------------- buying
+def _buy_and_watch(event, send, chat):
     global _last_buy
-    reason = reject_reason(event)
-    if reason:
-        _count(reason)
-        return None
     if time.time() - _last_buy < LAUNCH_MIN_GAP_SECONDS:
         _count("intervalo mínimo entre compras")
         return None
     if not engine.ready():
         _count("robô desligado/bloqueado")
         return None
-    allowed, why = state.can_open()
+    allowed, _why = state.can_open()
     if not allowed or state.positions_by_mode("launch") >= 1:
         _count("limite de posições/perda do dia" if not allowed else "já tem lançamento aberto")
         return None
@@ -228,15 +342,51 @@ def _handle(event, send, chat):
     return watch_and_sell(event["mint"], send, chat, time.time())
 
 
-def worker(send_fn, chat_fn):
+def decide_once(send, chat, now=None):
+    """Buy the first tracked token whose confirmation window shows real demand."""
+    now = time.time() if now is None else now
+    with _track_lock:
+        ready = [(m, t) for m, t in TRACK.items()
+                 if t["static"] == "" and not t["decided"] and now - t["created"] >= CONFIRM_SECONDS]
+    for mint, t in sorted(ready, key=lambda mt: -mt[1]["sol_in"]):
+        reasons = confirm_reasons(t)
+        expired = now - t["created"] > CONFIRM_SECONDS + CONFIRM_WINDOW
+        if reasons and not expired:
+            continue  # keep watching inside the window
+        t["decided"] = True
+        if reasons:
+            _count(reasons[0])
+            continue
+        return _buy_and_watch(t["event"], send, chat)
+    return None
+
+
+def static_worker():
     while True:
         event = _queue.get()
         try:
+            reason = reject_reason(event)
+            with _track_lock:
+                t = TRACK.get(event["mint"])
+                if t:
+                    t["static"] = reason
+                    t["decided"] = bool(reason)
+            if reason:
+                _count(reason)
+        except Exception:
+            LOG.exception("launch static check failed")
+
+
+def decision_loop(send_fn, chat_fn):
+    while True:
+        time.sleep(1)
+        try:
             chat = chat_fn()
             if chat and enabled():
-                _handle(event, send_fn, chat)
+                decide_once(send_fn, chat)
+            _cleanup(time.time())
         except Exception:
-            LOG.exception("launch handling failed")
+            LOG.exception("launch decision failed")
 
 
 def listener():
@@ -257,13 +407,17 @@ def listener():
                 value = (((msg.get("params") or {}).get("result") or {}).get("value") or {})
                 if value.get("err"):
                     continue
-                for event in events_from_logs(value.get("logs")):
+                logs = value.get("logs")
+                for event in events_from_logs(logs):
                     STATS["seen"] += 1
                     event["seen_at"] = time.time()
+                    track_create(event)
                     try:
                         _queue.put_nowait(event)
                     except queue.Full:
                         pass
+                for trade in trades_from_logs(logs):
+                    track_trade(trade)
             ws.close()
         except Exception as exc:
             STATS.update(connected=False, error=type(exc).__name__)
@@ -277,11 +431,12 @@ def start(send_fn, chat_fn):
         return
     _started = True
     threading.Thread(target=listener, daemon=True).start()
-    threading.Thread(target=worker, args=(send_fn, chat_fn), daemon=True).start()
+    threading.Thread(target=static_worker, daemon=True).start()
+    threading.Thread(target=decision_loop, args=(send_fn, chat_fn), daemon=True).start()
 
 
 def status_line():
-    top = sorted(STATS["reasons"].items(), key=lambda kv: -kv[1])[:3]
+    top = sorted(STATS["reasons"].items(), key=lambda kv: -kv[1])[:4]
     conn = "conectado" if STATS["connected"] else ("sem conexão" + (" (" + STATS["error"] + ")" if STATS["error"] else ""))
     return ("🆕 Lançamento (" + format(LAUNCH_FRACTION * 100, ".0f") + "% da conta): " +
             ("LIGADO" if enabled() else "DESLIGADO") + " · " + conn +
