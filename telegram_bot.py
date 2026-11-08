@@ -519,7 +519,9 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
- send(chat,"🔄 Bot reiniciado (deploy).\n"+btc_status(),keyboard())
+ try:btc_perps.set_enabled(False)
+ except Exception:logging.warning("legacy BTC entry stop unavailable")
+ send(chat,"🔄 Bot MEV reiniciado (deploy).\n"+mev_status_text(),keyboard())
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  st=trade_state.status()
  reason=live_engine.why_stopped()
