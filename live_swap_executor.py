@@ -17,7 +17,7 @@ TIMEOUT=18
 class SwapError(RuntimeError): pass
 
 def configured():
-    return bool(os.getenv("LIVE_TRADING_ENABLED")=="true")
+    return os.getenv("LIVE_TRADING_ENABLED","true").strip().lower()!="false"
 
 def _headers():
     key=os.getenv("JUPITER_API_KEY","")

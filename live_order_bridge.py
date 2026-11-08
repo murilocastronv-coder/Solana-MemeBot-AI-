@@ -47,8 +47,12 @@ def sol_for_ten_usd(wallet_address):
         raise TradingNotReady("Insufficient SOL for USD 10 buy plus 0.01 SOL fee reserve")
     return lamports
 
+def live_trading_allowed():
+    """Spot trading permission is on by default; LIVE_TRADING_ENABLED=false blocks it."""
+    return os.getenv("LIVE_TRADING_ENABLED","true").strip().lower()!="false"
+
 def preflight():
-    if os.getenv("LIVE_TRADING_ENABLED") != "true":
+    if not live_trading_allowed():
         raise TradingNotReady("Live trading switch disabled")
     owner = telegram_owner.get_owner()
     configured = os.getenv("TELEGRAM_CHAT_ID", "").strip()

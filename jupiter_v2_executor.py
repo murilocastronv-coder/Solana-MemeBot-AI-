@@ -74,7 +74,7 @@ def sign_order(order_data, wallet_passphrase):
     return base64.b64encode(bytes(signed)).decode("ascii")
 
 def execute_signed(signed_transaction, request_id):
-    if os.getenv("LIVE_TRADING_ENABLED") != "true":
+    if os.getenv("LIVE_TRADING_ENABLED", "true").strip().lower() == "false":
         raise OrderError("Real swaps are disabled")
     if not request_id or not signed_transaction:
         raise OrderError("Missing signed order")
