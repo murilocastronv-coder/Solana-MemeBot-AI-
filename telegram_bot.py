@@ -535,7 +535,7 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  while True:
   try:
-   if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and time.monotonic()>=next_scan:
+   if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
     next_scan=time.monotonic()+max(60,INTERVAL)
     try:
      from bot import assess_pair
