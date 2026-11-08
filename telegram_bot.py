@@ -156,7 +156,9 @@ TOKEN_FEEDS=("https://api.dexscreener.com/token-boosts/top/v1",
  "https://api.dexscreener.com/token-boosts/latest/v1",
  "https://api.dexscreener.com/token-profiles/latest/v1")
 ESTABLISHED_PAIR_SEARCHES=("SOL","USDC")
-def fetch():
+# Extra established Solana tokens searched only for the MEV scan.
+MEV_PAIR_SEARCHES=tuple(x.strip() for x in os.getenv("MEV_PAIR_SEARCHES","USDT,JUP,BONK,WIF,POPCAT,RAY,JTO,PYTH,TRUMP,PENGU,FARTCOIN,MEW,PNUT,GIGA,MOODENG,AI16Z,GOAT,ORCA,RENDER,W").split(",") if x.strip())
+def fetch(extra_searches=()):
  # Latest/boost feeds cover surfaced launches; Pump.fun adds recent/trending launchpad tokens.
  profiles=[]
  for url in TOKEN_FEEDS:
@@ -176,7 +178,7 @@ def fetch():
    if isinstance(batch,list):pairs+=batch
   except RuntimeError:logging.warning("Market pair batch unavailable; continuing with remaining batches")
  if addresses and not pairs:raise RuntimeError("No market pair batches available")
- for query in ESTABLISHED_PAIR_SEARCHES:
+ for query in ESTABLISHED_PAIR_SEARCHES+tuple(extra_searches):
   try:
    result=market_json("https://api.dexscreener.com/latest/dex/search?q="+query)
    if isinstance(result,dict) and isinstance(result.get("pairs"),list):pairs.extend(result["pairs"])
@@ -323,7 +325,7 @@ def handle(update):
   try:
    from bot import assess_pair
    from jito_arbitrage import scan_cycle
-   outcomes=scan_cycle([assess_pair(p) for p in scan(False)],force=True,quote_only=True)
+   outcomes=scan_cycle([assess_pair(p) for p in fetch(MEV_PAIR_SEARCHES)],force=True,quote_only=True)
    lines=["🔎 MEV — apenas cotações; nenhuma assinatura/transação"]
    lines += [x.get("status","?")+" · "+str(x.get("mint","")[:8])+" · "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL" for x in outcomes[:10]]
    send(chat,"\n".join(lines if outcomes else ["Nenhuma oportunidade elegível; nenhuma transação enviada."]),keyboard())
@@ -594,7 +596,7 @@ def loop():
     try:
      from bot import assess_pair
      from jito_arbitrage import scan_cycle
-     assessments=[assess_pair(pair) for pair in scan(False)]
+     assessments=[assess_pair(pair) for pair in fetch(MEV_PAIR_SEARCHES)]
      outcomes=scan_cycle(assessments)
      for outcome in outcomes:
       if outcome.get("status")=="submitted_pending":

@@ -522,6 +522,44 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
             "estimated_net_lamports": net_minimum}
 
 
+_LAST_CHECKED = {}
+_ARB_SKIP_REASONS = {"not_solana", "missing_token_address"}
+
+
+def pick_candidates(assessments, limit=None, now=None):
+    """Choose which tokens to quote this cycle, from ALL scanned tokens.
+
+    The cycle is atomic (buy and sell land together or not at all), so the
+    holding-risk filters of the spot scanner (age, volume, FDV) do not apply;
+    only a minimum pool liquidity is required. Tokens whose pools disagree the
+    most across DEXs go first, and recently quoted tokens wait their turn so
+    every token gets checked over successive cycles.
+    """
+    limit = limit or _int_env("MEV_TOKENS_PER_CYCLE", 10, 1, 30)
+    recheck = _int_env("MEV_RECHECK_SECONDS", 120, 0, 3600)
+    now = time.monotonic() if now is None else now
+    unique = {}
+    for item in assessments or []:
+        if not isinstance(item, dict) or not item.get("token"):
+            continue
+        if _ARB_SKIP_REASONS.intersection(item.get("reasons") or []):
+            continue
+        if float(item.get("liquidity_usd") or 0) < MIN_ARB_POOL_LIQUIDITY_USD:
+            continue
+        unique.setdefault(item["token"], item)
+    ranked = []
+    for item in unique.values():
+        route = _cross_dex_route(item.get("dex_pools"))
+        spread = route["spread_pct"] if route else 0.0
+        fresh = now - _LAST_CHECKED.get(item["token"], -1e9) >= recheck
+        if fresh or spread >= 1.0:
+            ranked.append((spread, item, route))
+    ranked.sort(key=lambda x: (-x[0], _LAST_CHECKED.get(x[1]["token"], -1e9)))
+    if len(_LAST_CHECKED) > 5000:
+        _LAST_CHECKED.clear()
+    return [(item, route) for _, item, route in ranked[:limit]]
+
+
 def scan_cycle(assessments, force=False, quote_only=False):
     """Use the read-only token scanner; live submits require MEV ON in Telegram."""
     import live_trade_state
@@ -536,18 +574,11 @@ def scan_cycle(assessments, force=False, quote_only=False):
     if not _LOCK.acquire(blocking=False):
         return []
     try:
-        candidates = []
-        for item in assessments or []:
-            if isinstance(item, dict) and item.get("status") == "WATCH_ONLY" and item.get("token"):
-                candidates.append(item)
-        unique = {}
-        for item in candidates:
-            unique.setdefault(item["token"], item)
         results = []
-        for item in list(unique.values())[:10]:
+        for item, route in pick_candidates(assessments):
             mint = item["token"]
+            _LAST_CHECKED[mint] = time.monotonic()
             try:
-                route = _cross_dex_route(item.get("dex_pools"))
                 if route:
                     result = try_arbitrage(mint, quote_only=quote_only,
                                            buy_dexes=route["buy_dexes"],

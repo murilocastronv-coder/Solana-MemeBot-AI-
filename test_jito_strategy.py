@@ -74,5 +74,32 @@ class StrategyTests(unittest.TestCase):
             self.assertEqual(j._priority_fee_lamports(b), 100_000)
 
 
+class CandidateTests(unittest.TestCase):
+    def setUp(self):
+        j._LAST_CHECKED.clear()
+        patch.object(j, "_labels_for_dex_id", side_effect=lambda d: [d]).start()
+        self.addCleanup(patch.stopall)
+
+    def item(self, token, liq=50_000, prices=(1.0, 1.0), status="REJECT", reasons=("onchain_security_not_verified",)):
+        pools = [{"dex_id": "dex" + str(i), "price_usd": p, "liquidity_usd": liq} for i, p in enumerate(prices)]
+        return {"token": token, "liquidity_usd": liq, "dex_pools": pools, "status": status, "reasons": list(reasons)}
+
+    def test_all_tokens_considered_and_spread_first(self):
+        rows = [self.item("A", prices=(1.0, 1.001)), self.item("B", prices=(1.0, 1.02)),
+                self.item("young", prices=(1.0, 1.005), reasons=("pair_younger_than_24h", "x")),
+                self.item("thin", liq=500), self.item("bad", reasons=("not_solana",))]
+        picked = [i["token"] for i, _ in j.pick_candidates(rows, limit=10, now=0)]
+        self.assertEqual(picked, ["B", "young", "A"])
+
+    def test_rotation_skips_recently_checked(self):
+        rows = [self.item(str(n)) for n in range(25)]
+        first = {i["token"] for i, _ in j.pick_candidates(rows, limit=10, now=1000)}
+        for t in first:
+            j._LAST_CHECKED[t] = 1000
+        second = {i["token"] for i, _ in j.pick_candidates(rows, limit=10, now=1010)}
+        self.assertFalse(first & second)
+        self.assertEqual(len(second), 10)
+
+
 if __name__ == "__main__":
     unittest.main()
