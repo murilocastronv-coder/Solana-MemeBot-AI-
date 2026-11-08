@@ -100,10 +100,15 @@ def flag(name):
 
 def mev_config():
     """Persisted settings for the Telegram MEV controls."""
-    defaults = {"input_lamports": 10_000_000, "min_profit_bps": 75, "jito_tip_lamports": 1_000}
+    defaults = {"input_lamports": 10_000_000, "min_profit_bps": 10, "jito_tip_lamports": 1_000}
     with _LOCK:
         state = _load()
         saved = state.get("mev_settings", {})
+        # The previous 0.75% value was the shipped default; migrate it to this requested test threshold.
+        if saved.get("min_profit_bps") == 75:
+            saved["min_profit_bps"] = 10
+            state["mev_settings"] = saved
+            _save(state)
         return {key: int(saved.get(key, value)) for key, value in defaults.items()}
 
 def update_mev_setting(name, value):
@@ -120,7 +125,7 @@ def update_mev_setting(name, value):
         settings[name] = value
         _save(state)
         return {key: int(settings.get(key, default)) for key, default in
-                {"input_lamports": 10_000_000, "min_profit_bps": 75, "jito_tip_lamports": 1_000}.items()}
+                {"input_lamports": 10_000_000, "min_profit_bps": 10, "jito_tip_lamports": 1_000}.items()}
 
 def _update_mev_daily(state, previous, item):
     from datetime import datetime, timezone
