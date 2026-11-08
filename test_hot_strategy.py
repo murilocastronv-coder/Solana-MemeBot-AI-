@@ -40,5 +40,32 @@ class HotTests(unittest.TestCase):
         self.assertEqual(m.position_signal(old, 10, 10.1)["reason"], "time_stop")
 
 
+class SyncTests(unittest.TestCase):
+    def test_drops_positions_sold_by_hand(self):
+        positions = {"A": {"symbol": "AAA", "token_amount_raw": "1000"},
+                     "B": {"symbol": "BBB", "token_amount_raw": "1000"},
+                     "C": {"symbol": "CCC", "token_amount_raw": "1000"}}
+        held = {"A": 0, "B": 5, "C": 990}
+        dropped, sent = [], []
+        with patch.object(e, "get_address", return_value="W"), \
+             patch.object(e.state, "pending_orders", return_value=[]), \
+             patch.object(e.state, "_load", return_value={"positions": positions}), \
+             patch.object(e.state, "drop_position", side_effect=dropped.append), \
+             patch.object(e.bridge, "get_token_balance", side_effect=lambda w, m: held[m]):
+            e.sync_positions(lambda c, t: sent.append(t), "1")
+        self.assertEqual(dropped, ["A", "B"])
+        self.assertEqual(len(sent), 2)
+
+    def test_rpc_error_never_drops(self):
+        dropped = []
+        with patch.object(e, "get_address", return_value="W"), \
+             patch.object(e.state, "pending_orders", return_value=[]), \
+             patch.object(e.state, "_load", return_value={"positions": {"A": {"token_amount_raw": "1"}}}), \
+             patch.object(e.state, "drop_position", side_effect=dropped.append), \
+             patch.object(e.bridge, "get_token_balance", side_effect=RuntimeError("rpc")):
+            e.sync_positions(lambda c, t: None, "1")
+        self.assertEqual(dropped, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -389,6 +389,32 @@ def buy_cycle(rows, send, chat):
     return None
 
 
+def sync_positions(send, chat):
+    """Drop positions the wallet no longer holds (sold by hand, e.g. in Phantom).
+
+    Only runs with no pending order; a balance below 1% of the recorded amount
+    counts as gone (dust left after a manual sale).
+    """
+    wallet = get_address()
+    if not wallet or state.pending_orders():
+        return []
+    dropped = []
+    for mint, position in list(state._load()["positions"].items()):
+        try:
+            held = bridge.get_token_balance(wallet, mint)
+        except Exception:
+            continue  # RPC trouble: never drop on uncertainty
+        recorded = int(position.get("token_amount_raw") or 0)
+        if held == 0 or (recorded > 0 and held * 100 < recorded):
+            state.drop_position(mint)
+            symbol = position.get("symbol") or mint[:6]
+            dropped.append(symbol)
+            if chat:
+                send(chat, "🧹 " + symbol + " não está mais na carteira (vendida fora do bot). "
+                     "Tirei da lista de posições; o robô volta a comprar.\n" + mint)
+    return dropped
+
+
 def sell_message(symbol, signal, settled):
     pnl = settled["pnl_usd"]
     pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0

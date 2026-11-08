@@ -620,7 +620,7 @@ def startup_notice():
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
- next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;last_recovery_notice=time.monotonic()
+ next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;last_recovery_notice=time.monotonic()
  while True:
   try:
    if active_chat() and time.monotonic()>=next_mev_reconcile:
@@ -659,6 +659,10 @@ def background_loop():
        send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
     except Exception as exc:
      logging.error("MEV cycle stopped: %s",type(exc).__name__)
+   if active_chat() and time.monotonic()>=next_sync:
+    next_sync=time.monotonic()+60
+    try:live_engine.sync_positions(send,active_chat())
+    except Exception:logging.exception("position sync failed")
    if active_chat() and time.monotonic()>=next_trade and trade_state.status()["enabled"]:
     next_trade=time.monotonic()+60
     try:live_engine.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES),send,active_chat())
