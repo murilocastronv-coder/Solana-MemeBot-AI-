@@ -75,11 +75,14 @@ def mev_config_keyboard():
 def mev_status_text():
  try:
   cfg=trade_state.mev_config();enabled=trade_state.flag("mev_enabled");armed=trade_state.flag("mev_real_armed");wallet=get_address()
+  _,guard_reason,daily_count,daily_pnl=trade_state.mev_daily_guard()
   return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
    "Execução: "+("REAL armada" if armed and os.getenv("MEV_LIVE_ENABLED")=="true" else "SIMULAÇÃO / cotação")+"\n"+
    "Permissão real no Render: "+("ATIVADA" if os.getenv("MEV_LIVE_ENABLED")=="true" else "DESATIVADA")+"\n"+
    "Carteira: "+(wallet or "não configurada")+"\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
-   "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL")
+   "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
+   "Limite: 20 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
+   "Proteção diária: "+guard_reason)
  except Exception as exc:return "Status MEV indisponível: "+type(exc).__name__
 def mev_config_text():
  cfg=trade_state.mev_config()
