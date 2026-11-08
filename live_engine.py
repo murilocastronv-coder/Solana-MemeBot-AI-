@@ -127,6 +127,7 @@ def _write_off(send, chat, mint, symbol, no_route):
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
     "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
+    "copy": "👥 Vende quando a carteira copiada vender | 🎯 alvo +50% | 🛑 stop −15%",
     "launch": "🆕 Lançamento: vende se o criador vender, stop móvel 6% abaixo do topo após +10%, alvo +40%, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
     "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
@@ -152,7 +153,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY "}.get(mode, "")
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:
@@ -244,7 +245,8 @@ def sell_message(symbol, signal, settled):
            "launch_drop": "📉 Começou a cair antes de dar lucro",
            "launch_flat": "😴 Não subiu rápido",
            "launch_dev_sold": "🚨 Criador vendeu (sinal de rug): saiu na hora",
-           "launch_time": "⏱️ Tempo máximo encerrado"}.get(signal["reason"], "🛑 Stop loss")
+           "launch_time": "⏱️ Tempo máximo encerrado",
+           "copy_follow": "👥 A carteira copiada vendeu"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"

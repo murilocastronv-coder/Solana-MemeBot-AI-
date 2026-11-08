@@ -36,6 +36,11 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
+    if position.get("mode") == "copy":
+        # Copy trade: target +50% / stop -15% (selling with the copied wallet is done by copy_trader)
+        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0),
+                                    stop_loss=os.getenv("COPY_STOP_LOSS", "0.15"),
+                                    arm=str(1 + float(os.getenv("COPY_TAKE_PROFIT", "0.50"))), drop="0")
     if position.get("mode") == "tradeB":
         # Strategy B: fixed take profit +15% / stop loss -8% (drop=0 -> sell as soon as +15% is reached)
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0),

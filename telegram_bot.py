@@ -61,6 +61,8 @@ def split_message(text,limit=3800):
 def keyboard():
  return [[{"text":"🆕 Lançamento ON","callback_data":"launch_on"},{"text":"⏹️ Lançamento OFF","callback_data":"launch_off"}],
   [{"text":"📊 Status Lançamento","callback_data":"launch_status"}],
+  [{"text":"👥 Copy SIM","callback_data":"copy_sim"},{"text":"👥 Copy REAL","callback_data":"copy_real"}],
+  [{"text":"⏹️ Copy OFF","callback_data":"copy_off"},{"text":"📊 Status Copy","callback_data":"copy_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def leverage_keyboard():
@@ -223,6 +225,25 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
+ if action in ("copy_sim","copy_real","copy_off","copy_status","/copy","/seguir","/deixar"):
+  import copy_trader as ct
+  try:
+   parts=(msg or {}).get("text","").split()
+   if action=="/seguir":
+    if len(parts)!=2:send(chat,"Uso: /seguir ENDERECO_DA_CARTEIRA (pegue no ranking do GMGN, Birdeye ou Cielo).",keyboard());return
+    ct.follow(parts[1]);pre="✅ Seguindo "+parts[1]+". Compras antigas não são copiadas, só as próximas.\n\n"
+   elif action=="/deixar":
+    if len(parts)!=2:send(chat,"Uso: /deixar ENDERECO_DA_CARTEIRA",keyboard());return
+    ct.unfollow(parts[1]);pre="🗑️ Parei de seguir "+parts[1]+".\n\n"
+   elif action=="copy_sim":ct.set_mode(True,False);pre="🧪 Copy trade em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
+   elif action=="copy_real":
+    live_engine.start();ct.set_mode(True,True)
+    pre="💵 COPY TRADE COM DINHEIRO REAL LIGADO — US$ "+format(ct.ORDER_USD,".0f")+" por cópia, anti-golpe e teste de venda antes de cada compra, ordem confirmada na blockchain. Vende quando a carteira vender, ou no stop −"+format(ct.STOP_LOSS*100,".0f")+"% / alvo +"+format(ct.TAKE_PROFIT*100,".0f")+"%. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Copiar não garante lucro: você entra depois da carteira copiada.\n\n"
+   elif action=="copy_off":ct.set_mode(False);pre="⏹️ Copy trade desligado. Posições abertas continuam com stop/alvo até vender.\n\n"
+   else:pre=""
+   send(chat,pre+ct.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
+  return
  if action=="launch_on":
   try:
    import launch_sniper as ls
@@ -361,6 +382,17 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
+def copy_loop():
+ """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
+ poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
+ while True:
+  time.sleep(poll)
+  try:
+   import copy_trader
+   chat=active_chat()
+   if not chat or not copy_trader.enabled():continue
+   for m in copy_trader.cycle(send,chat):send(chat,m)
+  except Exception as exc:logging.warning("copy cycle failed: %s",type(exc).__name__)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
 def loop():
@@ -368,6 +400,7 @@ def loop():
  try:startup_notice()
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
+ threading.Thread(target=copy_loop,daemon=True).start()
  try:
   import launch_sniper
   launch_sniper.start(send,active_chat)
