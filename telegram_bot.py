@@ -26,7 +26,7 @@ CONNECTED_WALLETS={}  # Public addresses only; temporary, never seed phrases.
 EXPORT_TOKENS={}
 EXPORT_LOCK=threading.Lock()
 MEV_INPUT_PENDING={}
-INTERVAL=max(60,int(os.getenv("SCAN_INTERVAL_SECONDS","300")))
+INTERVAL=max(30,int(os.getenv("SCAN_INTERVAL_SECONDS","30")))
 TP=float(os.getenv("TP_PERCENT","15"))
 SL=float(os.getenv("SL_PERCENT","8"))
 MIN_LIQ=float(os.getenv("MIN_LIQUIDITY_USD","50000"))
@@ -79,7 +79,7 @@ def mev_status_text():
   return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
    "Execução: "+("REAL armada" if armed and os.getenv("MEV_LIVE_ENABLED")=="true" else "SIMULAÇÃO / cotação")+"\n"+
    "Permissão real no Render: "+("ATIVADA" if os.getenv("MEV_LIVE_ENABLED")=="true" else "DESATIVADA")+"\n"+
-   "Carteira: "+(wallet or "não configurada")+"\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
+   "Carteira: "+(wallet or "não configurada")+"\n"+"Busca: 30s | até 10 moedas por ciclo\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
    "Limite: 30 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
    "Proteção diária: "+guard_reason)
@@ -157,15 +157,18 @@ TOKEN_FEEDS=("https://api.dexscreener.com/token-boosts/top/v1",
  "https://api.dexscreener.com/token-profiles/latest/v1")
 ESTABLISHED_PAIR_SEARCHES=("SOL","USDC")
 def fetch():
- # Latest feeds surface new coins; pair searches add actively traded established pools.
+ # Latest/boost feeds cover surfaced launches; Pump.fun adds recent/trending launchpad tokens.
  profiles=[]
  for url in TOKEN_FEEDS:
   try:
    data=market_json(url)
    if isinstance(data,list):profiles+=data
   except RuntimeError:logging.warning("Token feed unavailable: %s",url.rsplit("/",2)[-2])
+ try:
+  profiles.extend({"chainId":"solana","tokenAddress":t.get("id") or t.get("address")} for t in pumpfun.fetch() if isinstance(t,dict) and (t.get("id") or t.get("address")))
+ except Exception as exc:logging.warning("Pump.fun discovery unavailable: %s",type(exc).__name__)
  if not profiles:raise RuntimeError("No token feeds available")
- addresses=list(dict.fromkeys(x.get("tokenAddress") for x in profiles if isinstance(x,dict) and x.get("chainId")=="solana" and x.get("tokenAddress")))[:150]
+ addresses=list(dict.fromkeys(x.get("tokenAddress") for x in profiles if isinstance(x,dict) and x.get("chainId")=="solana" and x.get("tokenAddress")))[:300]
  pairs=[]
  for i in range(0,len(addresses),30):
   try:
@@ -571,7 +574,7 @@ def loop():
        logging.warning("MEV Telegram notification deferred type=%s",type(exc).__name__)
     except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
    if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
-    next_scan=time.monotonic()+max(60,INTERVAL)
+    next_scan=time.monotonic()+max(30,INTERVAL)
     try:
      from bot import assess_pair
      from jito_arbitrage import scan_cycle
