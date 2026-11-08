@@ -239,7 +239,7 @@ def reconcile_pending_bundle():
                  "estimated_net_lamports": record.get("estimated_net_lamports"),
                  "realized_net_lamports": realized,
                  "signature": signatures[0] if signatures else None,
-                 "slot": (detail or {}).get("slot")}
+                 "slot": (detail or {}).get("slot") or (detail or {}).get("landed_slot")}
         import live_trade_state
         live_trade_state.record_mev_event(event)
         path.unlink(missing_ok=True)
