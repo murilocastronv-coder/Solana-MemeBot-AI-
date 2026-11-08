@@ -69,6 +69,7 @@ def keyboard():
   [{"text":"🧪 Simulação","callback_data":"mev_mode_sim"},{"text":"💰 Modo REAL","callback_data":"mev_mode_real"}],
   [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
   [{"text":"🚀 Trading ON","callback_data":"trade_on"},{"text":"⏹️ Trading OFF","callback_data":"trade_off"}],
+  [{"text":"🎯 Sniper ON","callback_data":"snipe_on"},{"text":"⏹️ Sniper OFF","callback_data":"snipe_off"}],
   [{"text":"📈 Status Trading","callback_data":"trade_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
@@ -136,8 +137,8 @@ def trading_status_text():
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
         "Compras automáticas (volume alto, 10% da conta): "+("SIM" if running else "NÃO"),
         "Vendas automáticas (stop −6% / stop móvel após +8% / 45 min): "+("SIM" if running else "NÃO"),
-        "🎯 Sniper (moedas novas, 5% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
-        "🟣 Pump.fun (5% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
+        "🎯 Sniper (moedas novas, 15% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
+        "🟣 Pump.fun (15% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
         "Posições registradas: "+str(st["positions"])+" / 3",
         "Ordens pendentes: "+str(st["pending"]),
         "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ "+format(trade_state.daily_loss_limit(),".2f"),
@@ -389,13 +390,25 @@ def handle(update):
  legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","sniper_on","sniper_off","pumpfun_on","pumpfun_off"}
  if action=="trade_on":
   try:
-   live_engine.start()
+   live_engine.start();trade_state.set_flag("hot_disabled",False)
    send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 500 mil, ≥ US$ 50 mil na última hora (girando ≥ 15% da liquidez), liquidez ≥ US$ 50 mil, ≥ 60 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar o trading: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.",keyboard())
   return
  if action=="trade_off":
-  trade_state.stop()
-  send(chat,"⏹️ Trading desligado: não compra mais. Posições abertas continuam protegidas pelo stop até vender.",keyboard());return
+  trade_state.set_flag("hot_disabled",True)
+  if not (trade_state.sniper_enabled() or trade_state.flag("pumpfun_enabled")):trade_state.stop()
+  send(chat,"⏹️ Trading de volume desligado: não compra mais. Posições abertas continuam protegidas pelo stop até vender.",keyboard());return
+ if action=="snipe_on":
+  try:
+   live_engine.start()
+   trade_state.set_sniper(True);trade_state.set_flag("pumpfun_enabled",True)
+   send(chat,"🎯 SNIPER LIGADO — DINHEIRO REAL · moedas recém-criadas (risco muito alto)\nA cada ~20 s olha moedas novas (DexScreener) e do pump.fun.\nSó compra se passar em TUDO:\n• 5–60 min de vida (pump.fun até 90 min), liquidez ≥ US$ 15 mil, valor ≤ 20× a liquidez\n• criador NÃO pode criar mais moedas nem congelar carteiras\n• 10 maiores donos (fora a pool) com menos de 25%; no pump.fun dev < 5% e ≥ 150 donos\n• tem site ou redes sociais; pump.fun: não marcada como suspeita e sem volume falso (organic score baixo)\n• compra forte e espalhada: ≥ 25 compras em 5 min (30% mais que vendas), ≥ 100 em 1 h, subindo até +40% em 5 min (sem já ter disparado)\n• teste de venda: comprar e vender na hora devolve ≥ 92% (pega taxa escondida e golpe que não deixa vender)\nCompra 15% da conta, máx. 2 sniper + 2 pump.fun (dentro do limite total de 3).\nSaída: stop −12%; a partir de +25% vende 12% abaixo do topo; sai em 30 min se não decolar.\n⚠️ Moeda nova pode virar golpe mesmo passando nos filtros. Use pouco.",keyboard())
+  except Exception as exc:send(chat,"⛔ Não consegui ligar o sniper: "+str(exc)[:250],keyboard())
+  return
+ if action=="snipe_off":
+  trade_state.set_sniper(False);trade_state.set_flag("pumpfun_enabled",False)
+  if trade_state.flag("hot_disabled"):trade_state.stop()
+  send(chat,"⏹️ Sniper desligado. Posições sniper abertas continuam com stop até vender.",keyboard());return
  if action=="trade_status":
   send(chat,trading_status_text(),keyboard());return
  if action in legacy or action.startswith("lev_"):
@@ -620,7 +633,7 @@ def startup_notice():
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
- next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;last_recovery_notice=time.monotonic()
+ next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;next_snipe=0;last_recovery_notice=time.monotonic()
  while True:
   try:
    if active_chat() and time.monotonic()>=next_mev_reconcile:
@@ -663,7 +676,13 @@ def background_loop():
     next_sync=time.monotonic()+60
     try:live_engine.sync_positions(send,active_chat())
     except Exception:logging.exception("position sync failed")
-   if active_chat() and time.monotonic()>=next_trade and trade_state.status()["enabled"]:
+   if active_chat() and time.monotonic()>=next_snipe and trade_state.status()["enabled"]:
+    next_snipe=time.monotonic()+20
+    try:live_engine.sniper_cycle(send,active_chat())
+    except Exception:logging.exception("sniper cycle failed")
+    try:pumpfun.cycle(send,active_chat())
+    except Exception:logging.exception("pump.fun cycle failed")
+   if active_chat() and time.monotonic()>=next_trade and trade_state.status()["enabled"] and not trade_state.flag("hot_disabled"):
     next_trade=time.monotonic()+60
     try:live_engine.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES),send,active_chat())
     except Exception:logging.exception("trading buy cycle failed")

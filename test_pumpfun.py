@@ -8,7 +8,7 @@ MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
 
 
 def token(**over):
-    t = {"id": MINT, "symbol": "PEPE2", "launchpad": "pump.fun", "holderCount": 400,
+    t = {"id": MINT, "symbol": "PEPE2", "launchpad": "pump.fun", "holderCount": 400, "twitter": "https://x.com/pepe2",
          "liquidity": 30000, "mcap": 250000,
          "firstPool": {"createdAt": (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()},
          "audit": {"mintAuthorityDisabled": True, "freezeAuthorityDisabled": True,
@@ -66,12 +66,12 @@ class PumpfunTradingTests(LiveEngineTests):
         live_engine.start()
         self.assertIsNone(pumpfun.cycle(self.send, "1"))
 
-    def test_real_buy_5pct_marked_pumpfun(self):
+    def test_real_buy_15pct_marked_pumpfun(self):
         live_engine.start(); state.set_flag("pumpfun_enabled", True); self.side = "buy"
         result = pumpfun.cycle(self.send, "1")
         self.assertEqual(result["status"], "settled_buy")
         pos = state._load()["positions"][MINT]
-        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 10.0))
+        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 30.0))
         self.assertIn("PUMP.FUN COMPROU PEPE2", self.sent[-1])
         self.assertIn("Stop -12%", self.sent[-1])
 
@@ -79,7 +79,7 @@ class PumpfunTradingTests(LiveEngineTests):
         sim_engine.set_enabled(True)
         self.assertEqual(sim_engine.pumpfun_cycle(self.send, "1"), 1)
         pos = list(sim_engine._load()["positions"].values())[0]
-        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 5.0))
+        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 15.0))
         self.assertEqual(state.status()["positions"], 0)
 
 

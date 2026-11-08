@@ -305,7 +305,8 @@ def new_pair(minutes=20):
     return {"baseToken": {"address": MINT, "symbol": "NEW"}, "priceUsd": "0.0001",
             "liquidity": {"usd": 25000}, "fdv": 300000, "pairCreatedAt": (time.time() - minutes * 60) * 1000,
             "priceChange": {"m5": 12, "h1": 60}, "volume": {"m5": 15000},
-            "txns": {"m5": {"buys": 90, "sells": 40}, "h1": {"buys": 400, "sells": 250}}}
+            "txns": {"m5": {"buys": 90, "sells": 40}, "h1": {"buys": 400, "sells": 250}},
+            "info": {"socials": [{"type": "twitter", "url": "https://x.com/new"}]}}
 
 
 class SniperTests(LiveEngineTests):
@@ -334,13 +335,13 @@ class SniperTests(LiveEngineTests):
         with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
             self.assertIsNone(live_engine.sniper_cycle(self.send, "1"))
 
-    def test_sniper_buys_5pct_and_marks_position(self):
+    def test_sniper_buys_15pct_and_marks_position(self):
         live_engine.start(); state.set_sniper(True); self.side = "buy"
         with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
             result = live_engine.sniper_cycle(self.send, "1")
         self.assertEqual(result["status"], "settled_buy")
         pos = state._load()["positions"][MINT]
-        self.assertEqual((pos["mode"], pos["cost_usd"]), ("sniper", 10.0))  # 5% of US$ 200
+        self.assertEqual((pos["mode"], pos["cost_usd"]), ("sniper", 30.0))  # 15% of US$ 200
         self.assertIn("SNIPER COMPROU NEW", self.sent[-1])
 
     def test_sniper_skips_concentrated_holders(self):
@@ -357,10 +358,10 @@ class SniperTests(LiveEngineTests):
         def evaluate(value_usd):
             with patch("live_exit_monitor.order", side_effect=[{"outAmount": "1"}, {"outAmount": str(int(value_usd * 1e6))}]):
                 return [s for _, _, s in m._evaluate()][0]
-        self.assertEqual(evaluate(9.0)["action"], "hold")          # -10%: inside sniper -15% stop
-        self.assertEqual(evaluate(8.4)["reason"], "stop_loss")     # -16%
+        self.assertEqual(evaluate(27.0)["action"], "hold")         # -10%: inside sniper stop
+        self.assertEqual(evaluate(25.2)["reason"], "stop_loss")    # -16%
         data = state._load(); data["positions"][MINT]["opened_at"] -= 3600; state._save(data)
-        self.assertEqual(evaluate(10.5)["reason"], "time_stop")    # 1h, never took off
+        self.assertEqual(evaluate(31.5)["reason"], "time_stop")    # 1h, never took off
 
 
 if __name__ == "__main__":

@@ -40,6 +40,19 @@ class HotTests(unittest.TestCase):
         self.assertEqual(m.position_signal(old, 10, 10.1)["reason"], "time_stop")
 
 
+class SniperFilterTests(unittest.TestCase):
+    def test_no_socials_rejected(self):
+        from test_live_engine import new_pair
+        import pumpfun
+        from test_pumpfun import token
+        p = new_pair(); self.assertTrue(e.sniper_candidate(p))
+        p["info"] = {}; self.assertFalse(e.sniper_candidate(p))
+        self.assertTrue(pumpfun.candidate(token()))
+        self.assertFalse(pumpfun.candidate(token(twitter=None)))
+        self.assertFalse(pumpfun.candidate(token(isSus=True)))
+        self.assertFalse(pumpfun.candidate(token(organicScoreLabel="low")))
+
+
 class SyncTests(unittest.TestCase):
     def test_drops_positions_sold_by_hand(self):
         positions = {"A": {"symbol": "AAA", "token_amount_raw": "1000"},

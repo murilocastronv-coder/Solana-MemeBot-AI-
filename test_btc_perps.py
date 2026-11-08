@@ -100,7 +100,7 @@ class TelegramBTCTests(unittest.TestCase):
                     cb(action)
                     self.assertIn("desativados", out[-1][0])
                 labels = [b["text"] for row in t.keyboard() for b in row]
-                self.assertFalse(any("Sniper" in l or "Pump" in l for l in labels))
+                self.assertIn("🎯 Sniper ON", labels)
 
 
 if __name__ == "__main__":

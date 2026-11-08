@@ -80,7 +80,7 @@ class SimTests(LiveEngineTests):
         sim_engine.set_enabled(True)
         self.assertEqual(sim_engine.sniper_cycle(self.send, "1"), 1)
         pos = list(sim_engine._load()["positions"].values())[0]
-        self.assertEqual((pos["mode"], pos["cost_usd"]), ("sniper", 5.0))
+        self.assertEqual((pos["mode"], pos["cost_usd"]), ("sniper", 15.0))
 
 
 if __name__ == "__main__":

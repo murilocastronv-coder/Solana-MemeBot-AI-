@@ -91,6 +91,14 @@ def candidate(t):
     audit = t.get("audit") or {}
     top = _num(audit, "topHoldersPercentage", default=100.0)
     dev = _num(audit, "devBalancePercentage", default=0.0)
+    # Anti-scam extras: Jupiter's suspicious flag, low organic score (bot/wash
+    # volume) and no website/socials at all are rejected.
+    if t.get("isSus") or audit.get("isSus"):
+        return False
+    if str(t.get("organicScoreLabel") or "").lower() == "low":
+        return False
+    if not (t.get("twitter") or t.get("website") or t.get("telegram")):
+        return False
     return (MIN_AGE_MIN <= age_min <= MAX_AGE_MIN and liq >= MIN_LIQUIDITY and
             0 < mcap / liq <= 20 and _num(t, "holderCount") >= MIN_HOLDERS and
             audit.get("mintAuthorityDisabled") is True and audit.get("freezeAuthorityDisabled") is True and

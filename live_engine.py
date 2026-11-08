@@ -491,7 +491,7 @@ def exit_cycle(send, chat):
 # ---------------------------------------------------------------- sniper mode
 # Brand-new tokens (< 60 min) with strong buying right now. Very high risk:
 # most new tokens go to zero; smaller size, wider stop, time stop.
-SNIPER_FRACTION = float(os.getenv("SNIPER_FRACTION", "0.05"))
+SNIPER_FRACTION = float(os.getenv("SNIPER_FRACTION", "0.15"))
 SNIPER_MAX_POSITIONS = 2
 SNIPER_MAX_AGE_MINUTES = 60
 SNIPER_MIN_LIQUIDITY = 15000
@@ -547,6 +547,12 @@ def _sniper_fetch():
     return list(best.values())
 
 
+def has_socials(p):
+    """Anti-scam: real launches publish a site or socials; anonymous ones are skipped."""
+    info = p.get("info") or {}
+    return bool(info.get("websites") or info.get("socials"))
+
+
 def sniper_candidate(p):
     """New token (5-60 min) with real, broad buying that is not already parabolic."""
     try:
@@ -563,7 +569,7 @@ def sniper_candidate(p):
                 0 < fdv / liq <= 20 and float(p.get("priceUsd") or 0) > 0 and
                 0 < m5_change <= 40 and h1_change <= 300 and
                 buys >= 25 and buys > sells * 1.3 and int(h1.get("buys") or 0) >= 100 and
-                5000 <= vol5 <= liq * 3)
+                5000 <= vol5 <= liq * 3 and has_socials(p))
     except (TypeError, ValueError, ZeroDivisionError):
         return False
 
