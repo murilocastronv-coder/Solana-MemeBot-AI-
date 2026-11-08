@@ -690,13 +690,19 @@ def scan_cycle(assessments, force=False, quote_only=False):
             mint = item["token"]
             _LAST_CHECKED[mint] = time.monotonic()
             try:
+                result = None
                 if route:
-                    result = try_arbitrage(mint, quote_only=quote_only,
-                                           buy_dexes=route["buy_dexes"],
-                                           sell_dexes=route["sell_dexes"])
-                    result["route"] = route["buy_dex_id"] + " -> " + route["sell_dex_id"]
-                    result["observed_spread_pct"] = route["spread_pct"]
-                else:
+                    try:
+                        result = try_arbitrage(mint, quote_only=quote_only,
+                                               buy_dexes=route["buy_dexes"],
+                                               sell_dexes=route["sell_dexes"])
+                        result["route"] = route["buy_dex_id"] + " -> " + route["sell_dex_id"]
+                        result["observed_spread_pct"] = route["spread_pct"]
+                    except requests.HTTPError as exc:
+                        # No route on the chosen DEXs: fall back to Jupiter's normal route.
+                        if exc.response is None or exc.response.status_code != 400:
+                            raise
+                if result is None:
                     result = try_arbitrage(mint, quote_only=quote_only)
                 LOG.info("MEV cycle status=%s mint=%s net_min_lamports=%s route=%s",
                          result["status"], mint[:8], result.get("estimated_net_lamports", "n/a"),
@@ -716,6 +722,14 @@ def scan_cycle(assessments, force=False, quote_only=False):
                 LOG.warning("MEV live send failed mint=%s error=%s", str(mint)[:8], exc.reason)
             except Exception as exc:
                 error_code = _error_code(exc)
+                # Tokens that cannot be traded must not keep taking the few slots per round.
+                if "autoridade" in error_code:
+                    pause = 6 * 3600
+                elif error_code.startswith("HTTP_400"):
+                    pause = 600
+                else:
+                    pause = 300
+                _COOLDOWN[mint] = time.monotonic() + pause
                 event = {"status": "skipped", "mint": str(mint)[:64], "error": error_code}
                 live_trade_state.record_mev_event(event)
                 results.append(event)

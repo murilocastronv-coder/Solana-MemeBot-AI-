@@ -1,4 +1,5 @@
 import base64
+import time
 import os
 import tempfile
 import unittest
@@ -153,6 +154,39 @@ class SimulationTests(unittest.TestCase):
     def test_jito_error_names_step(self):
         self.assertEqual(j._error_code(RuntimeError("Jito sendBundle HTTP 400: bundle invalid")),
                          "Jito sendBundle HTTP 400: bundle invalid")
+
+
+class SkipCooldownTests(unittest.TestCase):
+    def setUp(self):
+        j._COOLDOWN.clear(); j._LAST_CHECKED.clear()
+        self.addCleanup(j._COOLDOWN.clear)
+
+    def _cycle(self, side_effect):
+        item = {"token": MINT, "liquidity_usd": 50_000, "dex_pools": [], "reasons": []}
+        with patch.object(j, "try_arbitrage", side_effect=side_effect), \
+             patch.object(j, "_live_enabled", return_value=False), \
+             patch("live_trade_state.record_mev_event"):
+            return j.scan_cycle([item], force=True, quote_only=True)
+
+    def test_authority_token_paused_long(self):
+        self._cycle(RuntimeError("Mint or freeze authority remains active"))
+        self.assertGreater(j._COOLDOWN[MINT] - time.monotonic(), 3600)
+
+    def test_no_route_falls_back_to_normal_route(self):
+        import requests
+        resp = requests.Response(); resp.status_code = 400
+        calls = []
+
+        def fake(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
+            calls.append(buy_dexes)
+            if buy_dexes:
+                raise requests.HTTPError(response=resp)
+            return {"status": "no_edge", "mint": mint, "estimated_net_lamports": -1}
+        route = {"buy_dexes": ["A"], "sell_dexes": ["B"], "spread_pct": 2.0, "buy_dex_id": "a", "sell_dex_id": "b"}
+        with patch.object(j, "pick_candidates", return_value=[({"token": MINT}, route)]):
+            out = self._cycle(fake)
+        self.assertEqual(calls, [["A"], None])
+        self.assertEqual(out[0]["status"], "no_edge")
 
 
 class ErrorLabelTests(unittest.TestCase):
