@@ -57,6 +57,7 @@ def assess_pair(pair, now_ms=None):
         "liquidity_usd": liquidity,
         "volume_24h_usd": volume,
         "age_hours": round(age, 1) if age is not None else None,
+        "dex_pools": pair.get("_mev_pools") or [],
         "status": "WATCH_ONLY" if len(reasons) == 1 else "REJECT",
         "reasons": reasons,
     }
