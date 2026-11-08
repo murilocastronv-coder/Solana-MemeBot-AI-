@@ -322,15 +322,7 @@ def handle(update):
    send(chat,"🔒 Modo real bloqueado pelas permissões do Render. O botão não habilita transações.",keyboard());return
   trade_state.set_flag("mev_real_armed",True);send(chat,"⚠️ Modo real armado; Jito ainda exige validação de rota, lucro, saldo e segurança.",keyboard());return
  elif action=="mev_scan":
-  try:
-   from bot import assess_pair
-   from jito_arbitrage import scan_cycle
-   outcomes=scan_cycle([assess_pair(p) for p in fetch(MEV_PAIR_SEARCHES)],force=True,quote_only=True)
-   lines=["🔎 MEV — apenas cotações; nenhuma assinatura/transação"]
-   lines += [x.get("status","?")+" · "+str(x.get("mint","")[:8])+" · "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL" for x in outcomes[:10]]
-   send(chat,"\n".join(lines if outcomes else ["Nenhuma oportunidade elegível; nenhuma transação enviada."]),keyboard())
-  except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
-  return
+  send(chat,"🔎 Analisando moedas… o resultado chega em instantes.");run_async(mev_scan_now,chat);return
  elif action=="mev_history":
   try:
    events=trade_state.mev_history(8)
@@ -568,10 +560,9 @@ def startup_notice():
   ("🟢 Robô LIGADO e operando" if reason is None else "🔴 Robô parado: "+reason)+
   "\n📦 Posições abertas: "+str(st["positions"])+"/3 (stop e venda automática continuam)"+
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
-def loop():
- offset=None;next_scan=0;next_positions=0;next_sniper=0;next_btc=0;next_mev_reconcile=0;last_recovery_notice=time.monotonic()
- try:startup_notice()
- except Exception:logging.exception("startup notice failed")
+def background_loop():
+ """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
+ next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;last_recovery_notice=time.monotonic()
  while True:
   try:
    if active_chat() and time.monotonic()>=next_mev_reconcile:
@@ -625,6 +616,33 @@ def loop():
      if os.getenv("LIVE_TRADING_ENABLED")=="true":live_engine.exit_cycle(send,active_chat())
      else:live_exit_monitor.monitor(send,active_chat())
     except Exception:logging.exception("live exit cycle failed")
+  except Exception:logging.exception("background worker error")
+  time.sleep(1)
+def mev_scan_now(chat):
+ """Quote now; in armed real mode with MEV ON, a profitable cycle is executed right away."""
+ try:
+  from bot import assess_pair
+  from jito_arbitrage import scan_cycle,_live_enabled
+  live=_live_enabled() and trade_state.flag("mev_enabled")
+  outcomes=scan_cycle([assess_pair(p) for p in fetch(MEV_PAIR_SEARCHES)],force=True,quote_only=not live)
+  lines=["🔎 MEV — "+("modo REAL: oportunidade com lucro é executada" if live else "apenas cotações; nenhuma transação")]
+  for x in outcomes[:10]:
+   if x.get("status")=="submitted_pending":
+    lines.append("⚡ ORDEM ENVIADA · "+str(x.get("mint",""))[:8]+" · lucro mín. "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL")
+   else:
+    lines.append(x.get("status","?")+" · "+str(x.get("mint",""))[:8]+" · "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL")
+  if not outcomes:lines=["⏳ A análise automática está rodando agora (ou nenhuma moeda elegível). Tente de novo em alguns segundos."]
+  send(chat,"\n".join(lines),keyboard())
+ except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
+def run_async(fn,*args):
+ threading.Thread(target=fn,args=args,daemon=True).start()
+def loop():
+ offset=None
+ try:startup_notice()
+ except Exception:logging.exception("startup notice failed")
+ threading.Thread(target=background_loop,daemon=True).start()
+ while True:
+  try:
    if TOKEN:
     data=request_api("getUpdates",offset=offset,timeout=8,allowed_updates=["message","callback_query"])
     for u in data.get("result",[]):
