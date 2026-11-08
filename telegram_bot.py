@@ -67,6 +67,8 @@ def keyboard():
   [{"text":"🧪 Trading SIM ON","callback_data":"tsim_on"},{"text":"⏹️ Trading SIM OFF","callback_data":"tsim_off"}],
   [{"text":"📈 Status Estratégia B","callback_data":"tsim_status"}],
   [{"text":"💵 Estratégia B REAL ON","callback_data":"tb_real_on"},{"text":"⏹️ Estratégia B REAL OFF","callback_data":"tb_real_off"}],
+  [{"text":"🎯 Sniper SIM","callback_data":"sn_sim"},{"text":"🎯 Sniper REAL","callback_data":"sn_real"}],
+  [{"text":"⏹️ Sniper OFF","callback_data":"sn_off"},{"text":"📊 Status Sniper","callback_data":"sn_status"}],
   [{"text":"💹 Market Making SIM ON","callback_data":"mm_on"},{"text":"⏹️ Market Making OFF","callback_data":"mm_off"}],
   [{"text":"📊 Status Market Making","callback_data":"mm_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -287,6 +289,20 @@ def handle(update):
   "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
   "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
   "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off"}
+ if action in ("sn_sim","sn_real","sn_off","sn_status","/sniper"):
+  import sniper_bot
+  try:
+   if action=="sn_sim":
+    sniper_bot.set_mode(True,False);msg="🧪 Sniper 10–60 min LIGADO em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
+   elif action=="sn_real":
+    live_engine.start();sniper_bot.set_mode(True,True)
+    msg="🎯 SNIPER 10–60 MIN COM DINHEIRO REAL LIGADO — risco muito alto\nSó moedas do pump.fun já formadas (liquidez queimada), ≥ 200 donos, dev < 5%, maiores donos < 25%, não suspeitas, volume real, com redes, compra forte, anti-golpe na blockchain e teste de venda. US$ "+format(sniper_bot.ORDER_USD,".0f")+" por compra, máx. "+str(sniper_bot.MAX_POSITIONS)+". Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Golpes ainda podem passar.\n\n"
+   elif action=="sn_off":
+    sniper_bot.set_mode(False);msg="⏹️ Sniper desligado. Posições abertas continuam com stop até vender.\n\n"
+   else:msg=""
+   send(chat,msg+sniper_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200]+"\nNenhuma ordem foi enviada.",keyboard())
+  return
  if action in ("tb_real_on","tb_real_off"):
   import trading_sim
   try:
@@ -392,7 +408,7 @@ def beat(step):
  HEARTBEAT.update(at=time.time(),step=step)
 def background_loop():
  """MEV scan/execution and position upkeep, kept off the Telegram thread so buttons answer at once."""
- next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;next_snipe=0;next_tsim=0;next_tsim_buy=0;last_recovery_notice=time.monotonic()
+ next_scan=0;next_positions=0;next_btc=0;next_mev_reconcile=0;next_reclaim=time.monotonic()+60;next_trade=0;next_sync=0;next_snipe=0;next_tsim=0;next_sniper2=0;next_tsim_buy=0;last_recovery_notice=time.monotonic()
  while True:
   try:
    beat("reconciliação MEV")
@@ -420,6 +436,17 @@ def background_loop():
     next_sync=time.monotonic()+60
     try:live_engine.sync_positions(send,active_chat())
     except Exception:logging.exception("position sync failed")
+   beat("sniper 10-60 min")
+   if active_chat() and time.monotonic()>=next_sniper2:
+    next_sniper2=time.monotonic()+20
+    try:
+     import sniper_bot
+     for c in sniper_bot.exit_cycle():
+      send(active_chat(),"🧪 SNIPER SIM "+("💰 LUCRO" if c["pnl_usd"]>0 else "🔻 PREJUÍZO")+" — "+str(c["symbol"])+": "+format(c["pnl_usd"],"+.2f")+" USD ("+c["reason"]+")")
+     if sniper_bot.enabled():
+      for o in sniper_bot.buy_cycle(None,send,active_chat()):
+       if not o.get("real"):send(active_chat(),"🧪 SNIPER SIM 🟢 comprou "+o["symbol"]+" · US$ "+format(o["cost_usd"],".2f")+"\n"+o["mint"])
+    except Exception:logging.exception("sniper cycle failed")
    beat("simulação estratégia B")
    if active_chat() and time.monotonic()>=next_tsim:
     next_tsim=time.monotonic()+20
