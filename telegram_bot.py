@@ -85,7 +85,7 @@ def mev_status_text():
   return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
    "Execução: "+("REAL armada" if armed and trade_state.mev_live_allowed() else "SIMULAÇÃO / cotação")+"\n"+
    "Permissão real no Render: "+("ATIVADA" if trade_state.mev_live_allowed() else "DESATIVADA")+"\n"+
-   "Carteira: "+(wallet or "não configurada")+"\n"+"Busca: 30s | até 10 moedas por ciclo\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
+   "Carteira: "+(wallet or "não configurada")+"\n"+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
    "Limite: 30 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
    "Proteção diária: "+guard_reason)
@@ -719,24 +719,6 @@ def background_loop():
       except Exception as exc:
        logging.warning("MEV Telegram notification deferred type=%s",type(exc).__name__)
     except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
-   beat("varredura MEV")
-   if active_chat() and trade_state.mev_autotrade_allowed() and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
-    next_scan=time.monotonic()+max(30,INTERVAL)
-    try:
-     from bot import assess_pair
-     from jito_arbitrage import scan_cycle
-     assessments=[assess_pair(pair) for pair in fetch_cached(MEV_PAIR_SEARCHES)]
-     outcomes=scan_cycle(assessments)
-     for outcome in outcomes:
-      if outcome.get("status")=="live_failed":
-       reason=str(outcome.get("error",""))
-       if time.monotonic()-LIVE_FAIL_NOTICES.get(reason,-1e9)>600:
-        LIVE_FAIL_NOTICES[reason]=time.monotonic()
-        send(active_chat(),"❌ Achei oportunidade com lucro mas a ordem NÃO foi enviada.\nMotivo: "+reason+"\nContrato: "+str(outcome.get("mint","")))
-      if outcome.get("status")=="submitted_pending":
-       send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
-    except Exception as exc:
-     logging.error("MEV cycle stopped: %s",type(exc).__name__)
    beat("conferência de posições")
    if active_chat() and time.monotonic()>=next_sync:
     next_sync=time.monotonic()+60
@@ -814,6 +796,28 @@ def mev_scan_now(chat):
    send(chat,"⏳ Primeira análise ainda rodando. Tente de novo em 1 minuto.",keyboard());return
   send(chat,"\n".join([header]+[mev_result_line(x) for x in outcomes[:12]]),keyboard())
  except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
+MEV_SCAN_SECONDS=max(1.0,float(os.getenv("MEV_SCAN_SECONDS","2")))
+MEV_LAST={"at":0.0}
+def mev_loop():
+ """MEV scan in its own thread: next round starts MEV_SCAN_SECONDS after the previous one ends."""
+ while True:
+  try:
+   if active_chat() and trade_state.mev_autotrade_allowed() and trade_state.flag("mev_enabled"):
+    from bot import assess_pair
+    from jito_arbitrage import scan_cycle
+    assessments=[assess_pair(pair) for pair in fetch_cached(MEV_PAIR_SEARCHES)]
+    outcomes=scan_cycle(assessments)
+    MEV_LAST["at"]=time.time()
+    for outcome in outcomes:
+     if outcome.get("status")=="live_failed":
+      reason=str(outcome.get("error",""))
+      if time.monotonic()-LIVE_FAIL_NOTICES.get(reason,-1e9)>600:
+       LIVE_FAIL_NOTICES[reason]=time.monotonic()
+       send(active_chat(),"❌ Achei oportunidade com lucro mas a ordem NÃO foi enviada.\nMotivo: "+reason+"\nContrato: "+str(outcome.get("mint","")))
+     if outcome.get("status")=="submitted_pending":
+      send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
+  except Exception as exc:logging.error("MEV cycle stopped: %s",type(exc).__name__)
+  time.sleep(MEV_SCAN_SECONDS)
 def candle_loop():
  """1-minute candle strategy: at each minute boundary close the old candle trade, then open a new one."""
  while True:
@@ -836,6 +840,7 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=candle_loop,daemon=True).start()
+ threading.Thread(target=mev_loop,daemon=True).start()
  try:
   import launch_sniper
   launch_sniper.start(send,active_chat)

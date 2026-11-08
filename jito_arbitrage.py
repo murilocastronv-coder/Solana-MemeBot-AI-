@@ -614,8 +614,8 @@ def pick_candidates(assessments, limit=None, now=None):
     most across DEXs go first, and recently quoted tokens wait their turn so
     every token gets checked over successive cycles.
     """
-    limit = limit or _int_env("MEV_TOKENS_PER_CYCLE", 10, 1, 30)
-    recheck = _int_env("MEV_RECHECK_SECONDS", 120, 0, 3600)
+    limit = limit or _int_env("MEV_TOKENS_PER_CYCLE", 3, 1, 30)
+    recheck = _int_env("MEV_RECHECK_SECONDS", 60, 0, 3600)
     now = time.monotonic() if now is None else now
     unique = {}
     for item in assessments or []:
