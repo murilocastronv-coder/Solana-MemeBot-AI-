@@ -26,6 +26,7 @@ CONNECTED_WALLETS={}  # Public addresses only; temporary, never seed phrases.
 EXPORT_TOKENS={}
 EXPORT_LOCK=threading.Lock()
 MEV_INPUT_PENDING={}
+LIVE_FAIL_NOTICES={}
 INTERVAL=max(30,int(os.getenv("SCAN_INTERVAL_SECONDS","30")))
 TP=float(os.getenv("TP_PERCENT","15"))
 SL=float(os.getenv("SL_PERCENT","8"))
@@ -592,6 +593,11 @@ def background_loop():
      assessments=[assess_pair(pair) for pair in fetch(MEV_PAIR_SEARCHES)]
      outcomes=scan_cycle(assessments)
      for outcome in outcomes:
+      if outcome.get("status")=="live_failed":
+       reason=str(outcome.get("error",""))
+       if time.monotonic()-LIVE_FAIL_NOTICES.get(reason,-1e9)>600:
+        LIVE_FAIL_NOTICES[reason]=time.monotonic()
+        send(active_chat(),"❌ Achei oportunidade com lucro mas a ordem NÃO foi enviada.\nMotivo: "+reason+"\nContrato: "+str(outcome.get("mint","")))
       if outcome.get("status")=="submitted_pending":
        send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
     except Exception as exc:
@@ -618,21 +624,31 @@ def background_loop():
     except Exception:logging.exception("live exit cycle failed")
   except Exception:logging.exception("background worker error")
   time.sleep(1)
+def mev_result_line(x):
+ net=x.get("estimated_net_lamports")
+ net_text=(" · "+format(net/1e9,"+.6f")+" SOL") if isinstance(net,int) else ""
+ mint=str(x.get("mint",""))[:8]
+ status=x.get("status","?")
+ if status=="submitted_pending":return "⚡ ORDEM ENVIADA · "+mint+net_text
+ if status=="live_failed":return "❌ LUCRO ACHADO MAS NÃO ENVIOU · "+mint+net_text+" · "+str(x.get("error",""))
+ if status=="dry_run_opportunity":return "✅ oportunidade · "+mint+net_text
+ if status=="skipped":return "⏭️ pulada · "+mint+" · "+str(x.get("error",""))
+ return status+" · "+mint+net_text
 def mev_scan_now(chat):
  """Quote now; in armed real mode with MEV ON, a profitable cycle is executed right away."""
  try:
   from bot import assess_pair
-  from jito_arbitrage import scan_cycle,_live_enabled
-  live=_live_enabled() and trade_state.flag("mev_enabled")
-  outcomes=scan_cycle([assess_pair(p) for p in fetch(MEV_PAIR_SEARCHES)],force=True,quote_only=not live)
-  lines=["🔎 MEV — "+("modo REAL: oportunidade com lucro é executada" if live else "apenas cotações; nenhuma transação")]
-  for x in outcomes[:10]:
-   if x.get("status")=="submitted_pending":
-    lines.append("⚡ ORDEM ENVIADA · "+str(x.get("mint",""))[:8]+" · lucro mín. "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL")
-   else:
-    lines.append(x.get("status","?")+" · "+str(x.get("mint",""))[:8]+" · "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL")
-  if not outcomes:lines=["⏳ A análise automática está rodando agora (ou nenhuma moeda elegível). Tente de novo em alguns segundos."]
-  send(chat,"\n".join(lines),keyboard())
+  import jito_arbitrage as ja
+  live=ja._live_enabled() and trade_state.flag("mev_enabled")
+  header="🔎 MEV — "+("modo REAL: oportunidade com lucro é executada" if live else "apenas cotações; nenhuma transação")
+  outcomes=ja.scan_cycle([assess_pair(p) for p in fetch(MEV_PAIR_SEARCHES)],force=True,quote_only=not live)
+  if not outcomes and ja.LAST_RESULTS["results"]:
+   # The automatic scan holds the lock; show its latest results instead of waiting.
+   outcomes=ja.LAST_RESULTS["results"]
+   header+="\n(última análise automática, "+datetime.fromtimestamp(ja.LAST_RESULTS["at"],timezone.utc).strftime("%H:%M:%S UTC")+")"
+  if not outcomes:
+   send(chat,"⏳ Primeira análise ainda rodando. Tente de novo em 1 minuto.",keyboard());return
+  send(chat,"\n".join([header]+[mev_result_line(x) for x in outcomes[:12]]),keyboard())
  except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()

@@ -73,6 +73,17 @@ class StrategyTests(unittest.TestCase):
         with patch.dict(os.environ, {"MEV_PRIORITY_FEE_ENABLED": "true"}):
             self.assertEqual(j._priority_fee_lamports(b), 100_000)
 
+    def test_live_failure_is_reported(self):
+        expected = AMOUNT + 60_000
+        builds = [build(1000, 995), build(expected, expected - 50_000), build(expected, AMOUNT + 25_000)]
+        with patch.object(j, "_build", side_effect=lambda *a, **k: builds.pop(0)), \
+             patch.object(j, "_live_enabled", return_value=True), \
+             patch.object(j, "_preflight", side_effect=RuntimeError("Bot wallet SOL balance is below the trade")):
+            with self.assertRaises(j.LiveSendError) as ctx:
+                j.try_arbitrage(MINT)
+        self.assertEqual(ctx.exception.reason, "saldo SOL insuficiente")
+        self.assertGreater(ctx.exception.net, 0)
+
 
 class CandidateTests(unittest.TestCase):
     def setUp(self):
@@ -99,7 +110,6 @@ class CandidateTests(unittest.TestCase):
         second = {i["token"] for i, _ in j.pick_candidates(rows, limit=10, now=1010)}
         self.assertFalse(first & second)
         self.assertEqual(len(second), 10)
-
 
 class ErrorLabelTests(unittest.TestCase):
     def test_labels(self):

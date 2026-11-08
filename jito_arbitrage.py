@@ -502,6 +502,21 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
         return {"status": "dry_run_opportunity", "mint": mint, "input_lamports": amount,
                 "minimum_back_lamports": minimum_back, "estimated_net_lamports": net_minimum}
 
+    try:
+        return _send_live(mint, signer, amount, tip_lamports, first, second, net_minimum)
+    except Exception as exc:
+        raise LiveSendError(_error_code(exc), net_minimum) from exc
+
+
+class LiveSendError(RuntimeError):
+    """A profitable cycle was found but could not be sent."""
+    def __init__(self, reason, net):
+        super().__init__(reason)
+        self.reason = reason
+        self.net = net
+
+
+def _send_live(mint, signer, amount, tip_lamports, first, second, net_minimum):
     # Check MEV readiness without turning on the separate spot-trading engine.
     _preflight(signer, amount, tip_lamports, first, second)
     if _has_unresolved_bundle():
@@ -523,6 +538,7 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
 
 
 _LAST_CHECKED = {}
+LAST_RESULTS = {"at": 0.0, "results": []}
 _ARB_SKIP_REASONS = {"not_solana", "missing_token_address"}
 
 
@@ -621,11 +637,20 @@ def scan_cycle(assessments, force=False, quote_only=False):
                 live_trade_state.record_mev_event(result)
                 if result["status"] == "submitted_pending":
                     break
+            except LiveSendError as exc:
+                event = {"status": "live_failed", "mint": str(mint)[:64], "error": exc.reason,
+                         "estimated_net_lamports": exc.net}
+                live_trade_state.record_mev_event(event)
+                results.append(event)
+                LOG.warning("MEV live send failed mint=%s error=%s", str(mint)[:8], exc.reason)
             except Exception as exc:
                 error_code = _error_code(exc)
-                live_trade_state.record_mev_event({"status": "skipped", "mint": str(mint)[:64],
-                                                   "error": error_code})
+                event = {"status": "skipped", "mint": str(mint)[:64], "error": error_code}
+                live_trade_state.record_mev_event(event)
+                results.append(event)
                 LOG.warning("MEV cycle skipped mint=%s error=%s", str(mint)[:8], error_code)
+        LAST_RESULTS["at"] = time.time()
+        LAST_RESULTS["results"] = list(results)
         return results
     finally:
         _LOCK.release()
