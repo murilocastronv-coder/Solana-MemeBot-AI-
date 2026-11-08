@@ -25,6 +25,7 @@ PRIVATE_CHAT=None  # First private /start after process startup; resets on resta
 CONNECTED_WALLETS={}  # Public addresses only; temporary, never seed phrases.
 EXPORT_TOKENS={}
 EXPORT_LOCK=threading.Lock()
+MEV_INPUT_PENDING={}
 INTERVAL=max(60,int(os.getenv("SCAN_INTERVAL_SECONDS","300")))
 TP=float(os.getenv("TP_PERCENT","15"))
 SL=float(os.getenv("SL_PERCENT","8"))
@@ -62,15 +63,28 @@ def split_message(text,limit=3800):
  if cur:parts.append(cur)
  return parts
 def keyboard():
- return [[{"text":"₿ BTC ON","callback_data":"btc_on"},{"text":"₿ BTC OFF","callback_data":"btc_off"}],
-  [{"text":"⚙️ Alavancagem","callback_data":"lev"},{"text":"📊 Status BTC","callback_data":"btc_status"}],
-  [{"text":"📈 Estratégia tendência","callback_data":"strat_trend"},{"text":"📉 Long DCA M5","callback_data":"strat_dip"}],
-  [{"text":"⏱️ Gráfico 1h","callback_data":"tf_1h"},{"text":"⚡ Gráfico 5m","callback_data":"tf_5m"}],
-  [{"text":"💵 Modo REAL","callback_data":"mode_real"},{"text":"🧪 Modo simulação","callback_data":"mode_sim"}],
-  [{"text":"🧪 Teste real $5","callback_data":"btc_test"}],
-  [{"text":"📜 Histórico","callback_data":"history"},{"text":"📊 Backtest","callback_data":"backtest"}],
-  [{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
-  [{"text":"💸 Sacar","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar chave","callback_data":"wallet_export"}]]
+ return [[{"text":"⚡ MEV ON","callback_data":"mev_on"},{"text":"⏹️ MEV OFF","callback_data":"mev_off"}],
+  [{"text":"📊 Status MEV","callback_data":"mev_status"},{"text":"⚙️ Configurar MEV","callback_data":"mev_config"}],
+  [{"text":"🧪 Simulação","callback_data":"mev_mode_sim"},{"text":"💰 Modo REAL","callback_data":"mev_mode_real"}],
+  [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
+  [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
+  [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
+def mev_config_keyboard():
+ return [[{"text":"💧 Valor SOL","callback_data":"mev_amount"},{"text":"📈 Lucro mínimo","callback_data":"mev_min"}],
+  [{"text":"⚡ Gorjeta Jito","callback_data":"mev_tip"},{"text":"⬅️ Voltar","callback_data":"/menu"}]]
+def mev_status_text():
+ try:
+  cfg=trade_state.mev_config();enabled=trade_state.flag("mev_enabled");armed=trade_state.flag("mev_real_armed");wallet=get_address()
+  return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
+   "Execução: "+("REAL armada" if armed and os.getenv("MEV_LIVE_ENABLED")=="true" else "SIMULAÇÃO / cotação")+"\n"+
+   "Permissão real no Render: "+("ATIVADA" if os.getenv("MEV_LIVE_ENABLED")=="true" else "DESATIVADA")+"\n"+
+   "Carteira: "+(wallet or "não configurada")+"\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
+   "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL")
+ except Exception as exc:return "Status MEV indisponível: "+type(exc).__name__
+def mev_config_text():
+ cfg=trade_state.mev_config()
+ return ("⚙️ CONFIGURAÇÃO MEV\nEntrada SOL: "+format(cfg["input_lamports"]/1e9,".4f")+"\nLucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
+  "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\nLimites: 0,001–0,1 SOL; 0,01–5%; tip 0,000001–0,00001 SOL.")
 def leverage_keyboard():
  return [[{"text":str(x)+"x","callback_data":"lev_"+str(x)} for x in btc_perps.LEVERAGES],[{"text":"⬅️ Voltar","callback_data":"/menu"}]]
 def btc_status():
@@ -119,7 +133,7 @@ def trading_status_text():
  return "\n".join(lines)
 
 def menu(chat):
- send(chat,"🤖 BTC Perps Bot\n"+btc_status(),keyboard())
+ send(chat,"⚡ Solana MEV Bot — Jupiter + Jito\n"+mev_status_text(),keyboard())
 def market_json(url):
  last_error=None
  for attempt in range(3):
@@ -253,6 +267,52 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
+ pending=MEV_INPUT_PENDING.get(str(chat))
+ if msg and pending:
+  try:
+   factor=1_000_000_000 if pending in ("input_lamports","jito_tip_lamports") else 100
+   trade_state.update_mev_setting(pending,int(round(float((msg.get("text") or "").strip().replace(",","."))*factor)))
+   MEV_INPUT_PENDING.pop(str(chat),None);send(chat,"✅ Configuração salva.\n"+mev_config_text(),mev_config_keyboard())
+  except (ValueError,TypeError):send(chat,"Valor inválido ou fora do limite; configuração não alterada.",mev_config_keyboard())
+  return
+ if action in ("mev_on","mev_off"):
+  enabled=action=="mev_on";trade_state.set_flag("mev_enabled",enabled)
+  if not enabled:trade_state.set_flag("mev_real_armed",False)
+  send(chat,"⚡ MEV "+("ligado em cotação/simulação." if enabled else "desligado; modo real desarmado."),keyboard());return
+ elif action in ("mev_status","/mev"):send(chat,mev_status_text(),keyboard());return
+ elif action=="mev_config":send(chat,mev_config_text(),mev_config_keyboard());return
+ elif action in ("mev_amount","mev_min","mev_tip"):
+  name={"mev_amount":"input_lamports","mev_min":"min_profit_bps","mev_tip":"jito_tip_lamports"}[action]
+  label={"input_lamports":"entrada em SOL (0,001 a 0,1)","min_profit_bps":"lucro mínimo % (0,01 a 5)","jito_tip_lamports":"gorjeta SOL (0,000001 a 0,00001)"}[name]
+  MEV_INPUT_PENDING[str(chat)]=name;send(chat,"Envie "+label+".",mev_config_keyboard());return
+ elif action=="mev_mode_sim":
+  trade_state.set_flag("mev_real_armed",False);send(chat,"🧪 Simulação selecionada; não envia bundles.",keyboard());return
+ elif action=="mev_mode_real":
+  if os.getenv("MEV_AUTOTRADE_ENABLED")!="true" or os.getenv("MEV_LIVE_ENABLED")!="true":
+   send(chat,"🔒 Modo real bloqueado pelas permissões do Render. O botão não habilita transações.",keyboard());return
+  trade_state.set_flag("mev_real_armed",True);send(chat,"⚠️ Modo real armado; Jito ainda exige validação de rota, lucro, saldo e segurança.",keyboard());return
+ elif action=="mev_scan":
+  try:
+   from bot import assess_pair
+   from jito_arbitrage import scan_cycle
+   outcomes=scan_cycle([assess_pair(p) for p in scan(False)],force=True,quote_only=True)
+   lines=["🔎 MEV — apenas cotações; nenhuma assinatura/transação"]
+   lines += [x.get("status","?")+" · "+str(x.get("mint","")[:8])+" · "+format(x.get("estimated_net_lamports",0)/1e9,"+.6f")+" SOL" for x in outcomes[:5]]
+   send(chat,"\n".join(lines if outcomes else ["Nenhuma oportunidade elegível; nenhuma transação enviada."]),keyboard())
+  except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
+  return
+ elif action=="mev_history":
+  try:
+   events=trade_state.mev_history(5);lines=["📜 HISTÓRICO MEV"]
+   for x in events:lines.append(datetime.fromtimestamp(x.get("timestamp",0),timezone.utc).strftime("%d/%m %H:%M UTC")+" · "+str(x.get("status","?"))+" · "+str(x.get("mint","")[:8]))
+   send(chat,"\n".join(lines if events else ["Ainda sem histórico MEV."]),keyboard())
+  except Exception as exc:send(chat,"Histórico indisponível ("+type(exc).__name__+").",keyboard())
+  return
+ legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","sniper_on","sniper_off","pumpfun_on","pumpfun_off"}
+ if action in legacy or action.startswith("lev_"):
+  try:btc_perps.set_enabled(False)
+  except Exception:pass
+  send(chat,"Controles antigos de BTC/Perps desativados. Use o menu MEV.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("scan","/scan"):
   try:
@@ -459,7 +519,9 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
- send(chat,"🔄 Bot reiniciado (deploy).\n"+btc_status(),keyboard())
+ try:btc_perps.set_enabled(False)
+ except Exception:logging.warning("legacy BTC entry stop unavailable")
+ send(chat,"🔄 Bot MEV reiniciado (deploy).\n"+mev_status_text(),keyboard())
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  st=trade_state.status()
  reason=live_engine.why_stopped()
@@ -473,7 +535,7 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  while True:
   try:
-   if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and time.monotonic()>=next_scan:
+   if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
     next_scan=time.monotonic()+max(60,INTERVAL)
     try:
      from bot import assess_pair

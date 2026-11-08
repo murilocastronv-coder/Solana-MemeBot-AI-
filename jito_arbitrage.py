@@ -231,8 +231,13 @@ def _simulate_bundle(transactions):
 
 
 def _live_enabled():
+    try:
+        import live_trade_state
+        armed = live_trade_state.flag("mev_real_armed")
+    except Exception:
+        armed = False
     return (os.getenv("MEV_AUTOTRADE_ENABLED") == "true" and
-            os.getenv("MEV_LIVE_ENABLED") == "true")
+            os.getenv("MEV_LIVE_ENABLED") == "true" and armed)
 
 
 def _preflight(signer, amount, tip_lamports, first, second):
@@ -266,16 +271,18 @@ def _preflight(signer, amount, tip_lamports, first, second):
         raise RuntimeError("Bot wallet SOL balance is below the trade and fee reserve")
 
 
-def try_arbitrage(mint):
+def try_arbitrage(mint, quote_only=False):
     """Quote a SOL -> token -> SOL cycle; send only if Jito simulation is profitable."""
     Pubkey.from_string(mint)
     signer = _wallet()
     if not _mint_is_fixed(mint):
         raise RuntimeError("Mint or freeze authority remains active, or the RPC safety check failed")
 
-    amount = _int_env("MEV_INPUT_LAMPORTS", 10_000_000, 1_000_000, 100_000_000)
-    min_bps = _int_env("MEV_MIN_PROFIT_BPS", 75, 1, 500)
-    tip_lamports = _int_env("MEV_JITO_TIP_LAMPORTS", 1_000, 1_000, 10_000)
+    import live_trade_state
+    settings = live_trade_state.mev_config()
+    amount = settings["input_lamports"]
+    min_bps = settings["min_profit_bps"]
+    tip_lamports = settings["jito_tip_lamports"]
     first = _build(SOL_MINT, mint, amount, str(signer.pubkey()))
     token_amount = int(first["outAmount"])
     if token_amount <= 0:
@@ -290,7 +297,7 @@ def try_arbitrage(mint):
         return {"status": "no_edge", "mint": mint, "input_lamports": amount,
                 "minimum_back_lamports": minimum_back, "estimated_net_lamports": net_minimum}
 
-    if not _live_enabled():
+    if quote_only or not _live_enabled():
         return {"status": "dry_run_opportunity", "mint": mint, "input_lamports": amount,
                 "minimum_back_lamports": minimum_back, "estimated_net_lamports": net_minimum}
 
@@ -313,8 +320,12 @@ def try_arbitrage(mint):
             "estimated_net_lamports": net_minimum}
 
 
-def scan_cycle(assessments):
-    """Use the existing read-only token scanner; evaluate at most two qualified mints."""
+def scan_cycle(assessments, force=False, quote_only=False):
+    """Use the read-only token scanner; live submits require MEV ON in Telegram."""
+    import live_trade_state
+    if not force and (os.getenv("MEV_AUTOTRADE_ENABLED") != "true" or
+                      not live_trade_state.flag("mev_enabled")):
+        return []
     if not _LOCK.acquire(blocking=False):
         return []
     try:
@@ -325,13 +336,16 @@ def scan_cycle(assessments):
         results = []
         for mint in list(dict.fromkeys(candidates))[:2]:
             try:
-                result = try_arbitrage(mint)
+                result = try_arbitrage(mint, quote_only=quote_only)
                 LOG.info("MEV cycle status=%s mint=%s net_min_lamports=%s",
                          result["status"], mint[:8], result.get("estimated_net_lamports", "n/a"))
                 results.append(result)
+                live_trade_state.record_mev_event(result)
                 if result["status"] == "submitted_pending":
-                    break  # one unresolved bundle at a time
+                    break
             except Exception as exc:
+                live_trade_state.record_mev_event({"status": "skipped", "mint": str(mint)[:64],
+                                                   "error": type(exc).__name__})
                 LOG.warning("MEV cycle skipped mint=%s error=%s", str(mint)[:8], type(exc).__name__)
         return results
     finally:
