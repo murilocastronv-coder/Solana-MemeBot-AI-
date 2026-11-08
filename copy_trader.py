@@ -43,6 +43,7 @@ MIN_ROUNDTRIP = 0.92
 NETWORK_FEE_USD = 0.003
 START_USD = 100.0
 MAX_WALLETS = 20
+MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 5))
 # Only copy wallets that HOLD: we first watch each wallet's own buy->sell
 # round trips and copy it only if the median hold is at least this long.
 MIN_HOLD_SECONDS = _env("COPY_MIN_HOLD_MINUTES", 5) * 60
@@ -120,6 +121,35 @@ def follow(address):
                                           "open_buys": {}, "holds": []})
         d["wallets"][address]["paused"] = False
         _save(d)
+
+
+def auto_follow(candidate):
+    """Add a discovered wallet only after its observed history passes filters."""
+    from solders.pubkey import Pubkey
+    address = str(candidate.get("wallet") or "")
+    Pubkey.from_string(address)
+    holds = [max(0, int(x)) for x in candidate.get("hold_samples", [])]
+    if len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS:
+        return False
+    if int(candidate.get("closed_trades", 0)) < MIN_ROUND_TRIPS:
+        return False
+    if int(candidate.get("realized_lamports", 0)) <= 0:
+        return False
+    with _LOCK:
+        d = _load()
+        if address in d["wallets"]:
+            return False
+        auto_count = sum(bool(w.get("auto_discovered")) for w in d["wallets"].values())
+        if auto_count >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS:
+            return False
+        d["wallets"][address] = {
+            "last_sig": None, "copies": 0, "wins": 0, "pnl_usd": 0.0,
+            "paused": False, "open_buys": {}, "holds": holds[-30:],
+            "auto_discovered": True,
+        }
+        _save(d)
+    _event("descoberta automática: " + address[:6] + "… passou os filtros de retenção e histórico")
+    return True
 
 
 def unfollow(address):
@@ -479,7 +509,8 @@ def status_text():
                 "fast": "segura só " + format(med / 60, ".1f") + " min → não copia",
                 "ok": "segura " + format(med / 60, ".0f") + " min"}[status]
         icon = "⏸️ " if w["paused"] else ("✅ " if status == "ok" else ("👀 " if status == "watching" else "⚡ "))
-        lines.append(icon + addr[:4] + "…" + addr[-4:] + " · " + hold + " · cópias " + str(w["copies"]) +
+        origin = " auto" if w.get("auto_discovered") else " manual"
+        lines.append(icon + addr[:4] + "…" + addr[-4:] + origin + " · " + hold + " · cópias " + str(w["copies"]) +
                      " (" + str(w["wins"]) + " no lucro) · P/L " + format(w["pnl_usd"], "+.2f") + " USD")
     for t, text in list(EVENTS)[-3:]:
         lines.append("• " + text)

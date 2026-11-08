@@ -393,6 +393,27 @@ def copy_loop():
    if not chat or not copy_trader.enabled():continue
    for m in copy_trader.cycle(send,chat):send(chat,m)
   except Exception as exc:logging.warning("copy cycle failed: %s",type(exc).__name__)
+
+def wallet_discovery_loop():
+ """Analyze confirmed blocks and enroll qualifying wallets for future signals."""
+ interval=max(20,int(os.getenv("COPY_DISCOVERY_INTERVAL_SECONDS","30")))
+ if os.getenv("COPY_AUTO_DISCOVERY_ENABLED","false").strip().lower()=="false":return
+ while True:
+  try:
+   import wallet_copy
+   import copy_trader
+   if not os.getenv("SOLANA_RPC_URL"):
+    time.sleep(interval);continue
+   wallet_copy.scan_confirmed(max_blocks=100)
+   added=[]
+   for candidate in wallet_copy.best_wallets(limit=50):
+    if copy_trader.auto_follow(candidate):added.append(candidate["wallet"])
+   chat=active_chat()
+   if chat and added:
+    send(chat,"🔎 Descobri " + str(len(added)) + " carteira(s) Solana com histórico lucrativo e retenção mediana ≥ 5 min. Vou observar apenas as próximas compras; nenhuma posição antiga foi copiada.\n" + "\n".join(x[:6]+"…"+x[-4:] for x in added))
+  except Exception as exc:
+   logging.warning("wallet discovery failed: %s",type(exc).__name__)
+  time.sleep(interval)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
 def loop():
@@ -401,6 +422,7 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
+ threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  try:
   import launch_sniper
   launch_sniper.start(send,active_chat)

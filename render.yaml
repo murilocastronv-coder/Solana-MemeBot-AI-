@@ -5,9 +5,33 @@ services:
     plan: starter
     region: frankfurt
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python telegram_bot.py
     autoDeployTrigger: off
+    disk:
+      name: solana-memebot-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
+      - key: BOT_WALLET_FILE
+        value: /var/data/wallet.json
+      - key: DAILY_LOSS_LIMIT_USD
+        value: "50"
+      - key: MAX_ORDER_USD
+        value: "5"
+      - key: COPY_ORDER_USD
+        value: "5"
+      - key: COPY_MAX_POSITIONS
+        value: "3"
+      - key: COPY_MIN_HOLD_MINUTES
+        value: "5"
+      - key: COPY_MIN_ROUND_TRIPS
+        value: "3"
+      - key: COPY_AUTO_DISCOVERY_ENABLED
+        value: "true"
+      - key: COPY_AUTO_MAX_WALLETS
+        value: "5"
+      - key: COPY_DISCOVERY_INTERVAL_SECONDS
+        value: "30"
       - key: SCAN_INTERVAL_SECONDS
         value: "180"
       - key: MIN_LIQUIDITY_USD
