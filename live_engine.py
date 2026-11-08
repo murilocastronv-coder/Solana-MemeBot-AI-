@@ -273,6 +273,7 @@ BUYS_PER_SCAN = 2  # up to 2 buys per scan; never more than 3 open positions
 
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
+    "candle": "🕯️ Vende quando a vela de 1 min fechar | 🛑 stop -6% antes disso",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
@@ -389,6 +390,131 @@ def buy_cycle(rows, send, chat):
     return None
 
 
+# ------------------------------------------------------------ 1-minute candle
+# Buy the hottest token when a 1-minute candle opens, sell when it closes.
+CANDLE_FRACTION = float(os.getenv("CANDLE_FRACTION", "0.05"))
+CANDLE_MAX_ROUNDTRIP_COST = float(os.getenv("CANDLE_MAX_ROUNDTRIP_COST", "0.01"))  # skip if buy+sell costs > 1%
+CANDLE_SCAN = {"at": 0.0, "picked": "", "why": ""}
+
+
+def candle_reasons(p):
+    """Hype filter for the candle strategy: deep, very busy, established tokens."""
+    reasons = []
+    liq, vol1h, vol5 = _f(p, "liquidity", "usd"), _f(p, "volume", "h1"), _f(p, "volume", "m5")
+    tx5 = _f(p, "txns", "m5", "buys") + _f(p, "txns", "m5", "sells")
+    fdv = _f(p, "fdv")
+    created = _f(p, "pairCreatedAt")
+    age_h = (time.time() * 1000 - created) / 3_600_000 if created else 0
+    if not (p.get("baseToken") or {}).get("address") or _f(p, "priceUsd") <= 0:
+        reasons.append("dados inválidos")
+    if liq < 100_000:
+        reasons.append("liquidez < US$ 100 mil")
+    if vol1h < 100_000 or vol5 < 10_000:
+        reasons.append("pouco volume agora")
+    if tx5 < 150:
+        reasons.append("poucos negócios em 5 min")
+    if age_h < 6:
+        reasons.append("idade < 6h")
+    if not (fdv > 0 and liq > 0 and fdv / liq <= 50):
+        reasons.append("FDV/liquidez > 50")
+    return reasons
+
+
+def candle_pick(rows):
+    """Hottest tokens right now: most 5-minute volume among those passing the filter."""
+    ok = [p for p in rows if isinstance(p, dict) and not candle_reasons(p)]
+    return sorted(ok, key=lambda p: -_f(p, "volume", "m5"))
+
+
+def candle_roundtrip_cost(mint, usd):
+    """Real cost of buying and selling right away (fees + spread + impact), from Jupiter quotes."""
+    lamports = int(usd / float(bridge.sol_usd_price()) * 1e9)
+    tokens = int(bridge.order(SOL_MINT, mint, lamports)["outAmount"])
+    back = int(bridge.order(mint, SOL_MINT, tokens)["outAmount"])
+    return 1 - back / lamports
+
+
+def candle_open(rows, send, chat):
+    """At the candle open: buy the hottest safe token whose round-trip cost is small."""
+    if not chat or not ready() or state.positions_by_mode("candle"):
+        return None
+    allowed, reason = state.can_open()
+    if not allowed:
+        CANDLE_SCAN.update(at=time.time(), picked="", why="bloqueado: " + reason)
+        return None
+    wallet = get_address()
+    try:
+        usd, _value = order_size_usd(wallet, CANDLE_FRACTION)
+    except Exception as exc:
+        CANDLE_SCAN.update(at=time.time(), picked="", why="saldo indisponível")
+        return None
+    open_mints = set(state._load()["positions"])
+    for p in candle_pick(rows)[:5]:
+        mint = p["baseToken"]["address"]
+        symbol = str(p["baseToken"].get("symbol", "?"))[:20]
+        if mint in open_mints:
+            continue
+        safe, why = token_safety(mint)
+        if not safe:
+            continue
+        try:
+            cost = candle_roundtrip_cost(mint, max(usd, MIN_ORDER_USD))
+        except Exception:
+            continue
+        if cost > CANDLE_MAX_ROUNDTRIP_COST:
+            CANDLE_SCAN.update(why=symbol + ": custo de ida e volta " + format(cost * 100, ".1f") + "% (> " +
+                               format(CANDLE_MAX_ROUNDTRIP_COST * 100, ".1f") + "%)")
+            continue
+        CANDLE_SCAN.update(at=time.time(), picked=symbol, why="custo ida e volta " + format(cost * 100, ".2f") + "%")
+        return _execute_buy(p, mint, symbol, send, chat, wallet, CANDLE_FRACTION, "candle")
+    CANDLE_SCAN.update(at=time.time(), picked="")
+    return None
+
+
+def sell_now(mint, reason, send, chat):
+    """Sell one whole position right away (used when the candle closes)."""
+    position = state._load()["positions"].get(mint)
+    wallet = get_address()
+    if not position or not wallet:
+        return "gone"
+    try:
+        held = bridge.get_token_balance(wallet, mint)
+    except Exception:
+        held = None
+    if held == 0:
+        state.drop_position(mint)
+        return "gone"
+    amount = int(position["token_amount_raw"])
+    if held is not None and held < amount:
+        state.set_position_amount(mint, held)
+        amount = held
+    symbol = position.get("symbol") or mint[:6]
+    state.mark_exit_reason(mint, reason)
+    result = bridge.submit_swap(mint, "sell", amount, wallet)
+    settled = _settle(result["order_id"], wallet)
+    if settled.get("status") == "settled_sell":
+        send(chat, sell_message(symbol, {"reason": reason}, settled))
+        return "sold"
+    send(chat, "⏳ Venda enviada, conferindo saldo. Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" +
+         str(result["signature"]))
+    return "pending"
+
+
+def candle_close(send, chat):
+    """At the candle close: sell every candle position (retries a few times)."""
+    for mint, position in list(state._load()["positions"].items()):
+        if position.get("mode") != "candle":
+            continue
+        for attempt in range(4):
+            try:
+                sell_now(mint, "candle_close", send, chat)
+                break
+            except Exception as exc:
+                if attempt == 3:
+                    _failure(send, chat, "venda", mint, exc)
+                time.sleep(3)
+
+
 def sync_positions(send, chat):
     """Drop positions the wallet no longer holds (sold by hand, e.g. in Phantom).
 
@@ -419,7 +545,8 @@ def sell_message(symbol, signal, settled):
     pnl = settled["pnl_usd"]
     pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0
     why = {"take_profit": "🚀 Stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)",
-           "time_stop": "⏱️ Tempo esgotado (não andou a tempo)"}.get(signal["reason"], "🛑 Stop loss")
+           "time_stop": "⏱️ Tempo esgotado (não andou a tempo)",
+           "candle_close": "🕯️ Vela de 1 min fechou"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"

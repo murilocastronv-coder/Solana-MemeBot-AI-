@@ -36,6 +36,9 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
+    if position.get("mode") == "candle":
+        # Closed by the candle loop; this is only the safety stop in between.
+        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **HOT_EXIT)
     if position.get("mode") == "hot":
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **HOT_EXIT)
         held = time.time() - float(position.get("opened_at") or time.time())

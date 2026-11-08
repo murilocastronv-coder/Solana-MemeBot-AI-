@@ -70,6 +70,7 @@ def keyboard():
   [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
   [{"text":"🚀 Trading ON","callback_data":"trade_on"},{"text":"⏹️ Trading OFF","callback_data":"trade_off"}],
   [{"text":"🎯 Sniper ON","callback_data":"snipe_on"},{"text":"⏹️ Sniper OFF","callback_data":"snipe_off"}],
+  [{"text":"🕯️ Vela 1m ON","callback_data":"candle_on"},{"text":"⏹️ Vela 1m OFF","callback_data":"candle_off"}],
   [{"text":"📈 Status Trading","callback_data":"trade_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
@@ -113,6 +114,10 @@ def trading_readiness():
  running=live_engine.ready()
  return st,checks,running
 
+def candle_last_text():
+ s=live_engine.CANDLE_SCAN
+ if not s["at"]:return ""
+ return " | última vela: "+(("comprou "+s["picked"]) if s["picked"] else "não entrou")+(" ("+s["why"]+")" if s.get("why") else "")
 def robot_alive_line():
  if not HEARTBEAT["at"]:return "⏳ Rotina automática ainda não começou"
  ago=int(time.time()-HEARTBEAT["at"])
@@ -158,6 +163,7 @@ def trading_status_text():
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
         robot_alive_line(),
         "🚀 Trading de volume (10% da conta): "+("LIGADO" if running and not trade_state.flag("hot_disabled") else "DESLIGADO"),
+        "🕯️ Vela 1 min ("+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta): "+("LIGADA" if running and trade_state.flag("candle_enabled") else "DESLIGADA")+candle_last_text(),
         "Vendas automáticas (stop −6% / stop móvel após +8% / 45 min): "+("SIM" if running else "NÃO"),
         "🎯 Sniper (moedas novas, 12% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
         "🟣 Pump.fun (12% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
@@ -427,6 +433,15 @@ def handle(update):
    send(chat,"🎯 SNIPER LIGADO — DINHEIRO REAL · moedas recém-criadas (risco muito alto)\nA cada ~20 s olha moedas novas (DexScreener) e do pump.fun.\nSó compra se passar em TUDO:\n• 5–60 min de vida (pump.fun até 90 min), liquidez ≥ US$ 15 mil, valor ≤ 20× a liquidez\n• criador NÃO pode criar mais moedas nem congelar carteiras\n• 10 maiores donos (fora a pool) com menos de 25%; no pump.fun dev < 5% e ≥ 150 donos\n• tem site ou redes sociais; pump.fun: não marcada como suspeita e sem volume falso (organic score baixo)\n• compra forte e espalhada: ≥ 25 compras em 5 min (30% mais que vendas), ≥ 100 em 1 h, subindo até +40% em 5 min (sem já ter disparado)\n• teste de venda: comprar e vender na hora devolve ≥ 92% (pega taxa escondida e golpe que não deixa vender)\nCompra 12% da conta, máx. 2 sniper + 2 pump.fun (dentro do limite total de 3).\nSaída: stop −12%; a partir de +25% vende 12% abaixo do topo; sai em 30 min se não decolar.\nPara de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Moeda nova pode virar golpe mesmo passando nos filtros. Use pouco.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar o sniper: "+str(exc)[:250],keyboard())
   return
+ if action=="candle_on":
+  try:
+   live_engine.start();trade_state.set_flag("candle_enabled",True)
+   send(chat,"🕯️ VELA 1 MIN LIGADA — DINHEIRO REAL\nA cada vela nova de 1 minuto, compra a moeda com mais hype agora (mais volume em 5 min, liquidez ≥ US$ 100 mil, ≥ 150 negócios em 5 min, 6h+ de vida, anti-golpe OK) e vende quando a vela fecha. Só entra se comprar e vender na hora custar ≤ "+format(live_engine.CANDLE_MAX_ROUNDTRIP_COST*100,".1f")+"%.\nTamanho: "+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta por vela. Stop −6% no meio da vela. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Vela de 1 min é quase cara ou coroa e cada operação paga taxas: o mais provável é perder aos poucos. Acompanhe pelo 📈 Status Trading.",keyboard())
+  except Exception as exc:send(chat,"⛔ Não consegui ligar a vela 1 min: "+str(exc)[:250],keyboard())
+  return
+ if action=="candle_off":
+  trade_state.set_flag("candle_enabled",False)
+  send(chat,"⏹️ Vela 1 min desligada. Se tiver posição aberta da vela, ela é vendida no fechamento ou pelo stop.",keyboard());return
  if action=="snipe_off":
   trade_state.set_sniper(False);trade_state.set_flag("pumpfun_enabled",False)
   if trade_state.flag("hot_disabled"):trade_state.stop()
@@ -776,6 +791,18 @@ def mev_scan_now(chat):
    send(chat,"⏳ Primeira análise ainda rodando. Tente de novo em 1 minuto.",keyboard());return
   send(chat,"\n".join([header]+[mev_result_line(x) for x in outcomes[:12]]),keyboard())
  except Exception as exc:send(chat,"Análise indisponível ("+type(exc).__name__+"); nenhuma transação enviada.",keyboard())
+def candle_loop():
+ """1-minute candle strategy: at each minute boundary close the old candle trade, then open a new one."""
+ while True:
+  try:
+   now=time.time();time.sleep(max(0.5,(int(now//60)+1)*60-now+1))
+   chat=active_chat()
+   if not chat:continue
+   has_open=trade_state.positions_by_mode("candle")>0
+   if has_open:live_engine.candle_close(send,chat)
+   if trade_state.flag("candle_enabled") and trade_state.status()["enabled"]:
+    live_engine.candle_open(fetch_cached(MEV_PAIR_SEARCHES,max_age=50),send,chat)
+  except Exception:logging.exception("candle loop failed");time.sleep(5)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
 def loop():
@@ -783,6 +810,7 @@ def loop():
  try:startup_notice()
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
+ threading.Thread(target=candle_loop,daemon=True).start()
  while True:
   try:
    if TOKEN:
