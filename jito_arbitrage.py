@@ -266,57 +266,57 @@ def _realized_net_lamports(bundle):
     return total
 
 
-def reconcile_pending_bundle():
-    """Resolve one Jito bundle and record chain-confirmed P/L for Telegram."""
-    if not _LOCK.acquire(blocking=False):
-        return None
+def _resolve_one(record):
+    """Return a terminal event for one bundle, or None while it is still in flight."""
+    bundle_id = record.get("bundle_id")
+    inflight = "unknown"
     try:
-        path = _pending_path()
-        if not path.exists():
-            return None
+        inflight = _bundle_status(bundle_id)
+    except Exception as exc:
+        LOG.warning("Jito inflight status lookup failed type=%s", type(exc).__name__)
+    detail = None
+    try:
+        detail = _bundle_detail(bundle_id)
+    except Exception as exc:
+        LOG.warning("Jito bundle detail lookup failed type=%s", type(exc).__name__)
+    status = str((detail or {}).get("confirmation_status") or
+                 (detail or {}).get("status") or inflight).lower()
+    if status not in ("landed", "confirmed", "finalized", "failed", "invalid"):
+        return None
+    landed = status in ("landed", "confirmed", "finalized")
+    signatures = (detail or {}).get("transactions") or []
+    realized = None
+    if landed:
         try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        bundle_id = record.get("bundle_id")
-        if not bundle_id:
-            return None  # uncertain send: fail closed and never retry
-        inflight = "unknown"
-        try:
-            inflight = _bundle_status(bundle_id)
+            realized = _realized_net_lamports(detail or {})
         except Exception as exc:
-            LOG.warning("Jito inflight status lookup failed type=%s", type(exc).__name__)
-        detail = None
-        try:
-            detail = _bundle_detail(bundle_id)
-        except Exception as exc:
-            LOG.warning("Jito bundle detail lookup failed type=%s", type(exc).__name__)
-        status = str((detail or {}).get("confirmation_status") or
-                     (detail or {}).get("status") or inflight).lower()
-        if status not in ("landed", "confirmed", "finalized", "failed", "invalid"):
-            return None
-        landed = status in ("landed", "confirmed", "finalized")
-        signatures = (detail or {}).get("transactions") or []
-        realized = None
-        if landed:
-            try:
-                realized = _realized_net_lamports(detail or {})
-            except Exception as exc:
-                LOG.warning("MEV realized P/L lookup failed type=%s", type(exc).__name__)
-        event = {"status": "landed" if landed else "not_landed",
-                 "mint": record.get("mint", ""), "bundle_id": bundle_id,
-                 "estimated_net_lamports": record.get("estimated_net_lamports"),
-                 "submitted_at": record.get("created_at"),
-                 "realized_net_lamports": realized,
-                 "signature": signatures[0] if signatures else None,
-                 "slot": (detail or {}).get("slot") or (detail or {}).get("landed_slot")}
-        import live_trade_state
+            LOG.warning("MEV realized P/L lookup failed type=%s", type(exc).__name__)
+    return {"status": "landed" if landed else "not_landed",
+            "mint": record.get("mint", ""), "bundle_id": bundle_id,
+            "estimated_net_lamports": record.get("estimated_net_lamports"),
+            "submitted_at": record.get("created_at"),
+            "realized_net_lamports": realized,
+            "signature": signatures[0] if signatures else None,
+            "slot": (detail or {}).get("slot") or (detail or {}).get("landed_slot")}
+
+
+def reconcile_pending_bundle():
+    """Resolve every in-flight Jito bundle and record chain-confirmed P/L for Telegram."""
+    import live_trade_state
+    resolved = []
+    with _PENDING_LOCK:
+        pending = _load_pending()
+    for key, record in list(pending.items()):
+        if not record.get("bundle_id"):
+            continue  # uncertain send: fail closed and never retry
+        event = _resolve_one(record)
+        if not event:
+            continue
         live_trade_state.record_mev_event(event)
-        path.unlink(missing_ok=True)
-        LOG.info("Resolved Jito bundle status=%s id=%s", event["status"], bundle_id[:10])
-        return event
-    finally:
-        _LOCK.release()
+        _remove_pending(key)
+        LOG.info("Resolved Jito bundle status=%s id=%s", event["status"], record["bundle_id"][:10])
+        resolved.append(event)
+    return resolved[-1] if resolved else None
 
 
 def _pending_path():
@@ -330,17 +330,73 @@ def _pending_path():
     return wallet_path().with_name("mev_pending_bundle.json")
 
 
-def _save_pending(record):
+_PENDING_LOCK = threading.Lock()
+MAX_PENDING = int(os.getenv("MEV_MAX_PENDING", "5"))
+
+
+def _load_pending():
+    """{key: record}. Old single-record files are read as one entry."""
     path = _pending_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"unreadable": {"status": "submitting"}}  # fail closed
+    if isinstance(data, dict) and isinstance(data.get("bundles"), dict):
+        return data["bundles"]
+    return {"legacy": data} if isinstance(data, dict) and data else {}
+
+
+def _write_pending(bundles):
+    path = _pending_path()
+    if not bundles:
+        path.unlink(missing_ok=True)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(record), encoding="utf-8")
+    temporary.write_text(json.dumps({"bundles": bundles}), encoding="utf-8")
     os.replace(temporary, path)
 
 
+def _save_pending(record, key="legacy"):
+    with _PENDING_LOCK:
+        bundles = _load_pending()
+        bundles[key] = record
+        _write_pending(bundles)
+
+
+def _remove_pending(key):
+    with _PENDING_LOCK:
+        bundles = _load_pending()
+        bundles.pop(key, None)
+        _write_pending(bundles)
+
+
+def pending_summary():
+    with _PENDING_LOCK:
+        bundles = _load_pending()
+    uncertain = sum(1 for r in bundles.values() if not r.get("bundle_id"))
+    return {"in_flight": len(bundles) - uncertain, "uncertain": uncertain,
+            "mints": {r.get("mint") for r in bundles.values()}}
+
+
 def _has_unresolved_bundle():
-    # Reconciliation owns terminal bundle cleanup so Telegram can notify and record P/L first.
-    return _pending_path().exists()
+    """Any bundle still pending (used to keep housekeeping out of the way)."""
+    with _PENDING_LOCK:
+        return bool(_load_pending())
+
+
+def _can_submit(mint):
+    """Up to MAX_PENDING bundles in flight; an uncertain send blocks everything."""
+    summary = pending_summary()
+    if summary["uncertain"]:
+        return False, "envio anterior incerto: confira no Solscan"
+    if summary["in_flight"] >= MAX_PENDING:
+        return False, "já há " + str(MAX_PENDING) + " ordens aguardando confirmação"
+    if mint in summary["mints"]:
+        return False, "já há ordem dessa moeda aguardando confirmação"
+    return True, ""
 
 
 def _mint_is_fixed(mint):
@@ -598,22 +654,57 @@ class LiveSendError(RuntimeError):
 def _send_live(mint, signer, amount, tip_lamports, first, second, net_minimum):
     # Check MEV readiness without turning on the separate spot-trading engine.
     _preflight(signer, amount, tip_lamports, first, second)
-    if _has_unresolved_bundle():
-        raise RuntimeError("A prior Jito bundle is unresolved; new submissions are paused")
+    allowed, why = _can_submit(mint)
+    if not allowed:
+        raise RuntimeError("Pending limit: " + why)
     tip_ix = transfer(TransferParams(
         from_pubkey=signer.pubkey(), to_pubkey=_tip_account(), lamports=tip_lamports))
     tx1 = _compile_and_sign(first, signer)
     tx2 = _compile_and_sign(second, signer, [tip_ix])
     encoded = _simulate_bundle([tx1, tx2])
-    _save_pending({"status": "submitting", "created_at": int(time.time()), "mint": mint})
+    key = mint + ":" + str(time.time_ns())
+    _save_pending({"status": "submitting", "created_at": int(time.time()), "mint": mint}, key)
     bundle_id = _jito("sendBundle", [encoded, {"encoding": "base64"}])
     if not isinstance(bundle_id, str) or not bundle_id:
         raise RuntimeError("Jito did not return a bundle ID")
     _save_pending({"status": "pending", "bundle_id": bundle_id, "created_at": int(time.time()), "mint": mint,
-                  "estimated_net_lamports": net_minimum, "input_lamports": amount})
+                  "estimated_net_lamports": net_minimum, "input_lamports": amount}, key)
     # Do not automatically retry an uncertain bundle; the caller must reconcile it.
     return {"status": "submitted_pending", "bundle_id": bundle_id, "mint": mint,
             "estimated_net_lamports": net_minimum}
+
+
+import collections
+_RECENT = collections.deque(maxlen=20000)   # (time, status, reason) of every quote, for the panel
+
+
+def _note(result):
+    _RECENT.append((time.time(), result.get("status", "?"), str(result.get("error") or "")))
+
+
+def why_text(now=None):
+    """Last hour, in plain words: why orders were (not) opened."""
+    now = time.time() if now is None else now
+    rows = [(s, r) for t, s, r in _RECENT if now - t < 3600]
+    if not rows:
+        return "Última hora: ainda sem análises."
+    count = collections.Counter(s for s, _ in rows)
+    lines = ["Última hora: " + str(len(rows)) + " análises · com lucro: " +
+             str(count["dry_run_opportunity"] + count["submitted_pending"] + count["live_failed"]) +
+             " · ordens enviadas: " + str(count["submitted_pending"]) +
+             " · sem lucro: " + str(count["no_edge"]) + " · puladas: " + str(count["skipped"])]
+    failed = collections.Counter(r for s, r in rows if s == "live_failed")
+    if failed:
+        lines.append("Achou lucro mas não enviou: " + "; ".join(str(n) + "× " + r[:60] for r, n in failed.most_common(3)))
+    skipped = collections.Counter(r for s, r in rows if s == "skipped")
+    if skipped:
+        lines.append("Puladas: " + "; ".join(str(n) + "× " + r[:40] for r, n in skipped.most_common(3)))
+    if not failed and not count["submitted_pending"]:
+        lines.append("Motivo de não abrir: nenhuma diferença de preço deu lucro depois das taxas.")
+    summary = pending_summary()
+    lines.append("Ordens aguardando confirmação: " + str(summary["in_flight"]) + "/" + str(MAX_PENDING) +
+                 (" · ⚠️ envio incerto bloqueando (confira no Solscan)" if summary["uncertain"] else ""))
+    return "\n".join(lines)
 
 
 _LAST_CHECKED = {}
@@ -679,6 +770,7 @@ _ERROR_LABELS = (
     ("Dedicated Solana RPC", "falta SOLANA_RPC_URL dedicado"),
     ("passphrase", "falta senha da carteira"),
     ("balance is below", "saldo SOL insuficiente"),
+    ("Pending limit: ", None),
     ("unresolved", "bundle anterior pendente"),
     ("simulation failed: ", None),
     ("simulation", "simulação do bundle falhou"),
@@ -696,7 +788,10 @@ def _error_code(exc):
             return text[:120]
         for needle, label in _ERROR_LABELS:
             if needle in text:
-                return label or ("simulação: " + text.split(needle, 1)[1])[:160]
+                if label:
+                    return label
+                rest = text.split(needle, 1)[1]
+                return (("simulação: " if needle.startswith("simulation") else "") + rest)[:160]
     return type(exc).__name__
 
 
@@ -737,6 +832,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
                          result["status"], mint[:8], result.get("estimated_net_lamports", "n/a"),
                          result.get("route", "aggregated"))
                 results.append(result)
+                _note(result)
                 live_trade_state.record_mev_event(result)
                 if result["status"] == "submitted_pending":
                     break
@@ -748,6 +844,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
                          "estimated_net_lamports": exc.net}
                 live_trade_state.record_mev_event(event)
                 results.append(event)
+                _note(event)
                 LOG.warning("MEV live send failed mint=%s error=%s", str(mint)[:8], exc.reason)
             except Exception as exc:
                 error_code = _error_code(exc)
@@ -762,6 +859,7 @@ def scan_cycle(assessments, force=False, quote_only=False):
                 event = {"status": "skipped", "mint": str(mint)[:64], "error": error_code}
                 live_trade_state.record_mev_event(event)
                 results.append(event)
+                _note(event)
                 LOG.warning("MEV cycle skipped mint=%s error=%s", str(mint)[:8], error_code)
         LAST_RESULTS["at"] = time.time()
         LAST_RESULTS["results"] = list(results)

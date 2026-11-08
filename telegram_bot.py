@@ -78,8 +78,8 @@ def mev_status_text():
    "Permissão real no Render: "+("ATIVADA" if trade_state.mev_live_allowed() else "DESATIVADA")+"\n"+
    "Carteira: "+(wallet or "não configurada")+"\n"+__import__("jito_arbitrage").coverage_text()+"\n"+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
-   "Limite: 30 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
-   "Proteção diária: "+guard_reason+"\n"+robot_alive_line())
+   "Limite: "+os.getenv("MEV_MAX_BUNDLES_PER_DAY","100")+" bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
+   "Proteção diária: "+guard_reason+"\n"+robot_alive_line()+"\n\n"+__import__("jito_arbitrage").why_text())
  except Exception as exc:return "Status MEV indisponível: "+type(exc).__name__
 def mev_config_text():
  cfg=trade_state.mev_config()

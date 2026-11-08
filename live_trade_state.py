@@ -247,7 +247,7 @@ def mev_daily_guard():
     """Cap confirmed live bundles and realized daily loss in UTC."""
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).date().isoformat()
-    max_bundles = 30
+    max_bundles = int(os.getenv("MEV_MAX_BUNDLES_PER_DAY", "100"))  # failed bundles cost nothing
     max_loss_lamports = 10_000_000  # 0.01 SOL
     with _LOCK:
         daily = _load().get("mev_daily", {})
@@ -257,7 +257,7 @@ def mev_daily_guard():
             count = int(daily.get("bundle_count", 0))
             daily_pnl = int(daily.get("realized_net_lamports", 0))
         if count >= max_bundles:
-            return False, "Limite diário de 20 bundles atingido", count, daily_pnl
+            return False, "Limite diário de " + str(max_bundles) + " bundles atingido", count, daily_pnl
         if daily_pnl <= -max_loss_lamports:
             return False, "Limite diário de perda de 0,01 SOL atingido", count, daily_pnl
         return True, "Ready", count, daily_pnl
