@@ -98,9 +98,9 @@ class TelegramBTCTests(unittest.TestCase):
                 # Old BTC/Perps controls were retired in favour of the MEV menu.
                 for action in ("lev", "lev_10", "btc_on", "btc_status"):
                     cb(action)
-                    self.assertIn("desativados", out[-1][0])
+                    self.assertIn("removido", out[-1][0])
                 labels = [b["text"] for row in t.keyboard() for b in row]
-                self.assertIn("🎯 Sniper ON", labels)
+                self.assertFalse(any(w in l for l in labels for w in ("Sniper", "Trading", "Vela", "Lançamento")))
 
 
 if __name__ == "__main__":

@@ -207,7 +207,7 @@ class LiveDcaTests(unittest.TestCase):
              patch.object(t, "request_api", return_value={}), patch("btc_perps.real_equity", return_value=150.0):
             t.handle({"callback_query": {"id": "1", "data": "strat_dip", "message": {"chat": {"id": 5, "type": "private"}}}})
         # BTC strategies are retired: the button only explains that.
-        self.assertIn("desativados", out[-1])
+        self.assertIn("removido", out[-1])
 
 
 if __name__ == "__main__":

@@ -13,6 +13,12 @@ def pair():
 
 SAFE_MINT = {"value": {"data": {"parsed": {"type": "mint", "info": {"mintAuthority": None, "freezeAuthority": None}}}}}
 
+def open_position(test):
+    """Open a position through the generic order executor (strategies were removed)."""
+    return live_engine._execute_buy(pair(), MINT, "BONK", test.send, "1", WALLET,
+                                    live_engine.ORDER_FRACTION, "normal")
+
+
 class LiveEngineTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -21,9 +27,6 @@ class LiveEngineTests(unittest.TestCase):
         self.env.start()
         live_engine._tried.clear()
         live_engine._safety.clear()
-        live_engine._sniper_seen.clear()
-        live_engine._fetch_cache[:] = [0.0, []]
-        live_engine._roundtrip_cache.clear()
         live_engine._last_notice.clear()
         self.mint_info = SAFE_MINT
         self.sent = []
@@ -36,7 +39,6 @@ class LiveEngineTests(unittest.TestCase):
             patch("live_order_bridge.sol_for_usd", return_value=50_000_000),
             patch("live_order_bridge.sol_usd_price", return_value=200),
             patch("live_engine.rpc", side_effect=lambda m, p: self.mint_info),
-            patch("live_engine.roundtrip_ok", return_value=(True, "")),
             patch("live_order_bridge.order", side_effect=lambda *a, **k: {"requestId": "r", "outAmount": "1", "transaction": "x"}),
             patch("live_order_bridge.sign_order", return_value="signed"),
             patch("live_order_bridge.execute_signed", side_effect=self.execute),
@@ -65,14 +67,10 @@ class LiveEngineTests(unittest.TestCase):
     def send(self, chat, text, *a):
         self.sent.append(text)
 
-    def test_off_until_started(self):
-        self.assertIsNone(live_engine.buy_cycle([pair()], self.send, "1"))
-        self.assertEqual(self.sent, [])
-
     def test_buy_then_take_profit_sell(self):
         live_engine.start()
         self.side = "buy"
-        result = live_engine.buy_cycle([pair()], self.send, "1")
+        result = open_position(self)
         self.assertEqual(result["status"], "settled_buy")
         self.assertEqual(state.status()["positions"], 1)
         self.side = "sell"
@@ -92,47 +90,11 @@ class LiveEngineTests(unittest.TestCase):
         self.assertIn("US$ 20.00 de BONK (10% da conta de US$ 200.00)", self.sent[0])
         self.assertEqual(state.daily_loss_limit(), state.DAILY_LOSS_LIMIT_USD)
 
-    def test_reports_why_nothing_was_bought(self):
-        live_engine.start()
-        live_engine._last_notice.clear()
-        young = pair(); young["pairCreatedAt"] = time.time() * 1000
-        self.assertIsNone(live_engine.buy_cycle([young], self.send, "1"))
-        self.assertIn("0 passaram nos filtros", self.sent[-1])
-        self.assertIn("1 com idade < 6h", self.sent[-1])
-        live_engine.buy_cycle([young], self.send, "1")
-        self.assertEqual(len(self.sent), 1)  # throttled to once per hour
-
-    def test_two_buys_per_scan_max_three_open(self):
-        live_engine.start(); self.side = "buy"
-        mints = ["DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
-                 "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr", "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3"]
-        rows = []
-        for m in mints:
-            p = pair(); p["baseToken"] = {"address": m, "symbol": m[:4]}; rows.append(p)
-        live_engine.buy_cycle(rows, self.send, "1")
-        self.assertEqual(state.status()["positions"], 2)   # 2 per scan
-        live_engine.buy_cycle(rows, self.send, "1")
-        self.assertEqual(state.status()["positions"], 3)   # capped at 3 open
-        self.assertEqual(sum("COMPROU" in m for m in self.sent), 3)
-
-    def test_skips_token_without_uptrend(self):
-        live_engine.start()
-        falling = pair(); falling["priceChange"]["h1"] = -3
-        self.assertIsNone(live_engine.buy_cycle([falling], self.send, "1"))
-        self.assertIn("sem subida saudável", self.sent[-1])
-
-    def test_anti_rug_blocks_mint_authority(self):
-        live_engine.start()
-        self.mint_info = {"value": {"data": {"parsed": {"type": "mint", "info": {"mintAuthority": "X", "freezeAuthority": None}}}}}
-        self.assertIsNone(live_engine.buy_cycle([pair()], self.send, "1"))
-        self.assertEqual(state.status()["pending"], 0)
-        self.assertIn("criar mais moedas", self.sent[-1])
-
     def test_uncertain_buy_blocks_robot(self):
         live_engine.start()
         self.side = "buy"
         with patch("live_order_bridge.execute_signed", side_effect=RuntimeError("timeout")):
-            live_engine.buy_cycle([pair()], self.send, "1")
+            open_position(self)
         self.assertEqual(state.status()["pending"], 1)
         self.assertIn("Vou conferir sozinho", self.sent[-1])
         self.assertFalse(state.can_open()[0])
@@ -151,7 +113,7 @@ class RecoveryTests(LiveEngineTests):
     def test_buy_never_executed_is_released(self):
         live_engine.start(); self.side = "buy"
         with patch("live_order_bridge.execute_signed", side_effect=RuntimeError("timeout")):
-            live_engine.buy_cycle([pair()], self.send, "1")
+            open_position(self)
         self.assertEqual(live_engine.recover(self.send, "1")[0]["status"], "waiting")  # tx could still land
         self.assertEqual(state.status()["pending"], 1)
         age_pending()
@@ -164,7 +126,7 @@ class RecoveryTests(LiveEngineTests):
     def test_unstick_button_resolves_and_reports(self):
         live_engine.start(); self.side = "buy"
         with patch("live_order_bridge.execute_signed", side_effect=RuntimeError("timeout")):
-            live_engine.buy_cycle([pair()], self.send, "1")
+            open_position(self)
         self.assertIn("ordem pendente", live_engine.why_stopped())
         age_pending(90)
         live_engine.unstick(self.send, "1")
@@ -175,7 +137,7 @@ class RecoveryTests(LiveEngineTests):
     def test_buy_landed_but_unconfirmed_becomes_position(self):
         live_engine.start(); self.side = "buy"
         with patch("live_swap_executor.rpc", return_value=None), patch("live_engine.time.sleep"):
-            live_engine.buy_cycle([pair()], self.send, "1")
+            open_position(self)
         self.assertEqual(state.status()["pending"], 1)
         age_pending()
         with patch("live_swap_executor.rpc", return_value=None):
@@ -187,7 +149,7 @@ class RecoveryTests(LiveEngineTests):
 
     def test_sell_landed_but_unconfirmed_settles_pnl(self):
         live_engine.start(); self.side = "buy"
-        live_engine.buy_cycle([pair()], self.send, "1")
+        open_position(self)
         self.side = "sell"
         position = state._load()["positions"][MINT]
         signal = {"action": "sell", "reason": "stop_loss", "change_pct": -9.0}
@@ -208,7 +170,7 @@ class RecoveryTests(LiveEngineTests):
 class SellFailureTests(LiveEngineTests):
     def open_position(self):
         live_engine.start(); self.side = "buy"
-        live_engine.buy_cycle([pair()], self.send, "1")
+        open_position(self)
         live_engine._sell_failed.clear()
         live_engine._sell_fail_count.clear()
         self.side = "sell"
@@ -299,69 +261,6 @@ class DeadTokenTests(SellFailureTests):
                 live_engine.exit_cycle(self.send, "1")
         self.assertEqual(state.status()["positions"], 0)
         self.assertIn("5 tentativas", self.sent[-1])
-
-
-def new_pair(minutes=20):
-    return {"baseToken": {"address": MINT, "symbol": "NEW"}, "priceUsd": "0.0001",
-            "liquidity": {"usd": 25000}, "fdv": 300000, "pairCreatedAt": (time.time() - minutes * 60) * 1000,
-            "priceChange": {"m5": 12, "h1": 60}, "volume": {"m5": 15000},
-            "txns": {"m5": {"buys": 90, "sells": 40}, "h1": {"buys": 400, "sells": 250}},
-            "info": {"socials": [{"type": "twitter", "url": "https://x.com/new"}]}}
-
-
-class SniperTests(LiveEngineTests):
-    def rpc(self, method, params):
-        if method == "getAccountInfo":
-            return self.mint_info
-        if method == "getTokenSupply":
-            return {"value": {"amount": "1000"}}
-        if method == "getTokenLargestAccounts":
-            return {"value": [{"amount": "700"}] + [{"amount": str(self.holder)}] * 10}
-
-    def setUp(self):
-        super().setUp()
-        self.holder = 1
-        p = patch("live_engine.rpc", side_effect=self.rpc)
-        p.start(); self.addCleanup(p.stop)
-
-    def test_candidate_rules(self):
-        self.assertTrue(live_engine.sniper_candidate(new_pair()))
-        self.assertFalse(live_engine.sniper_candidate(new_pair(minutes=90)))
-        weak = new_pair(); weak["txns"]["m5"] = {"buys": 30, "sells": 40}
-        self.assertFalse(live_engine.sniper_candidate(weak))
-
-    def test_sniper_off_by_default(self):
-        live_engine.start()
-        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
-            self.assertIsNone(live_engine.sniper_cycle(self.send, "1"))
-
-    def test_sniper_buys_12pct_and_marks_position(self):
-        live_engine.start(); state.set_sniper(True); self.side = "buy"
-        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
-            result = live_engine.sniper_cycle(self.send, "1")
-        self.assertEqual(result["status"], "settled_buy")
-        pos = state._load()["positions"][MINT]
-        self.assertEqual((pos["mode"], pos["cost_usd"]), ("sniper", 24.0))  # 12% of US$ 200
-        self.assertIn("SNIPER COMPROU NEW", self.sent[-1])
-
-    def test_sniper_skips_concentrated_holders(self):
-        live_engine.start(); state.set_sniper(True); self.holder = 40  # 10 x 4% = 40%
-        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
-            self.assertIsNone(live_engine.sniper_cycle(self.send, "1"))
-        self.assertEqual(state.status()["positions"], 0)
-
-    def test_time_stop_and_wide_stop(self):
-        import live_exit_monitor as m
-        live_engine.start(); state.set_sniper(True); self.side = "buy"
-        with patch("live_engine.sniper_fetch", return_value=[new_pair()]):
-            live_engine.sniper_cycle(self.send, "1")
-        def evaluate(value_usd):
-            with patch("live_exit_monitor.order", side_effect=[{"outAmount": "1"}, {"outAmount": str(int(value_usd * 1e6))}]):
-                return [s for _, _, s in m._evaluate()][0]
-        self.assertEqual(evaluate(21.6)["action"], "hold")         # -10%: inside sniper stop
-        self.assertEqual(evaluate(20.16)["reason"], "stop_loss")    # -16%
-        data = state._load(); data["positions"][MINT]["opened_at"] -= 3600; state._save(data)
-        self.assertEqual(evaluate(25.2)["reason"], "time_stop")    # 1h, never took off
 
 
 if __name__ == "__main__":

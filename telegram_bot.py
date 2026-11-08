@@ -1,18 +1,14 @@
 """Telegram Solana token radar with optional real-money auto trading (live_engine)."""
 import os,time,logging,threading,requests,re,secrets,html
 from flask import Flask,Response,request
-import paper_positions as paper
-import paper_auto as auto
 from live_preflight import live_status, risk_settings
 import live_trade_state as trade_state
 import live_exit_monitor
 import telegram_owner
 import live_order_bridge
 import live_engine
-import sim_engine
 import pumpfun
 import btc_perps
-import trade_report
 from live_swap_executor import configured as swap_configured
 from jupiter_v2_executor import headers as jupiter_headers
 from bot_wallet_service import create_or_get, get_address, export_private_key
@@ -68,11 +64,6 @@ def keyboard():
   [{"text":"📊 Status MEV","callback_data":"mev_status"},{"text":"⚙️ Configurar MEV","callback_data":"mev_config"}],
   [{"text":"🧪 Simulação","callback_data":"mev_mode_sim"},{"text":"💰 Modo REAL","callback_data":"mev_mode_real"}],
   [{"text":"🔎 Analisar agora","callback_data":"mev_scan"},{"text":"📜 Histórico MEV","callback_data":"mev_history"}],
-  [{"text":"🚀 Trading ON","callback_data":"trade_on"},{"text":"⏹️ Trading OFF","callback_data":"trade_off"}],
-  [{"text":"🎯 Sniper ON","callback_data":"snipe_on"},{"text":"⏹️ Sniper OFF","callback_data":"snipe_off"}],
-  [{"text":"🕯️ Vela 1m ON","callback_data":"candle_on"},{"text":"⏹️ Vela 1m OFF","callback_data":"candle_off"}],
-  [{"text":"🆕 Lançamento ON","callback_data":"launch_on"},{"text":"⏹️ Lançamento OFF","callback_data":"launch_off"}],
-  [{"text":"📈 Status Trading","callback_data":"trade_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def mev_config_keyboard():
@@ -88,7 +79,7 @@ def mev_status_text():
    "Carteira: "+(wallet or "não configurada")+"\n"+__import__("jito_arbitrage").coverage_text()+"\n"+"Busca contínua: nova rodada a cada "+format(MEV_SCAN_SECONDS,".0f")+" s | "+str(__import__("jito_arbitrage")._int_env("MEV_TOKENS_PER_CYCLE",3,1,30))+" moedas por rodada (as de maior diferença de preço primeiro)\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
    "Limite: 30 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
-   "Proteção diária: "+guard_reason)
+   "Proteção diária: "+guard_reason+"\n"+robot_alive_line())
  except Exception as exc:return "Status MEV indisponível: "+type(exc).__name__
 def mev_config_text():
  cfg=trade_state.mev_config()
@@ -100,92 +91,11 @@ def btc_status():
  try:price=btc_perps.fetch_price()
  except Exception:price=None
  return btc_perps.status_text(price)
-def trading_readiness():
- """Report observed switches and ledger state; never imply real trading works."""
- st=trade_state.status()
- checks={
-  "Permissão Render":os.getenv("LIVE_TRADING_ENABLED","true").strip().lower()!="false",
-  "Proprietário privado":bool(telegram_owner.get_owner()),
-  "Jupiter API":bool(os.getenv("JUPITER_API_KEY")),
-  "RPC Solana dedicado":bool(os.getenv("SOLANA_RPC_URL")) and os.getenv("SOLANA_RPC_URL")!="https://api.mainnet-beta.solana.com",
-  "Carteira criptografada":bool(get_address()) and bool(os.getenv("BOT_WALLET_ENCRYPTION_PASSPHRASE")),
-  "Sem ordens pendentes":st["pending"]==0,
-  "Robô ligado pelo botão":st["enabled"] and not st["halted"],
- }
- running=live_engine.ready()
- return st,checks,running
-
-def launch_status_line():
- try:
-  import launch_sniper
-  return launch_sniper.status_line()
- except Exception:return "🆕 Lançamento: indisponível"
-def candle_last_text():
- s=live_engine.CANDLE_SCAN
- if not s["at"]:return ""
- return " | última vela: "+(("comprou "+s["picked"]) if s["picked"] else "não entrou")+(" ("+s["why"]+")" if s.get("why") else "")
 def robot_alive_line():
  if not HEARTBEAT["at"]:return "⏳ Rotina automática ainda não começou"
  ago=int(time.time()-HEARTBEAT["at"])
  if ago>180:return "🚨 Rotina automática PARADA há "+str(ago//60)+" min (em: "+HEARTBEAT["step"]+"). Faça um Manual Deploy no Render."
  return "💓 Rotina automática ativa ("+str(ago)+" s atrás · "+HEARTBEAT["step"]+")"
-def sniper_scan_lines():
- s=live_engine.SNIPER_SCAN
- out=[]
- if not s["at"]:out.append("🎯 Sniper: ainda não varreu (liga o 🎯 Sniper ON).")
- else:
-  out+=["🎯 SNIPER — última varredura ("+datetime.fromtimestamp(s["at"],timezone.utc).strftime("%H:%M:%S UTC")+")",
-        "Moedas novas vistas: "+str(s["total"])+" | passaram nos filtros: "+str(s["passed"])]
-  top=sorted(s["reasons"].items(),key=lambda kv:-kv[1])[:5]
-  out+=["• "+str(n)+" × "+r for r,n in top]
-  if s["unsafe"]:out.append("🛡️ Anti-golpe recusou: "+"; ".join(s["unsafe"]))
- try:
-  import pumpfun
-  ps=pumpfun.last_scan
-  out.append("🟣 Pump.fun: "+(("erro ao ler lista: "+str(ps["error"])[:80]) if ps.get("error") else str(ps.get("tokens",0))+" moedas lidas, "+str(ps.get("passed",0))+" passaram"))
- except Exception:pass
- return out
-def last_scan_lines():
- s=live_engine.LAST_SCAN
- if not s["at"]:return ["🔎 Ainda não houve varredura (liga o 🚀 Trading ON e espera ~1 min)."]
- out=["🔎 ÚLTIMA VARREDURA ("+datetime.fromtimestamp(s["at"],timezone.utc).strftime("%H:%M:%S UTC")+")",
-      "Moedas analisadas: "+str(s["total"])+" | passaram em tudo: "+str(s["qualified"])]
- if s["blocked"]:out.append("⛔ Compra bloqueada: "+str(s["blocked"])[:200])
- top=sorted(s["reasons"].items(),key=lambda kv:-kv[1])[:6]
- if top:out.append("Motivos de recusa:");out+=["• "+str(n)+" × "+r for r,n in top]
- if s["near"]:out.append("Quase passaram:");out+=["• "+x for x in s["near"]]
- if s["unsafe"]:out.append("🛡️ Anti-golpe/teste de venda recusou: "+"; ".join(s["unsafe"]))
- return out
-def trading_status_text():
- st,checks,running=trading_readiness()
- try:sniper_on=trade_state.sniper_enabled();sniper_n=trade_state.positions_by_mode("sniper")
- except Exception:sniper_on=False;sniper_n=0
- try:pump_on=trade_state.flag("pumpfun_enabled");pump_n=trade_state.positions_by_mode("pumpfun")
- except Exception:pump_on=False;pump_n=0
- try:pnl=trade_state.pnl_summary()
- except Exception:pnl={"day_pnl_usd":0.0,"total_pnl_usd":0.0,"trades_closed":0,"trades_won":0}
- lines=["📊 STATUS DO ROBÔ — DINHEIRO REAL",
-        "🟢 ROBÔ LIGADO" if running else "🔴 ROBÔ PARADO — "+(live_engine.why_stopped() or ""),
-        "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
-        robot_alive_line(),
-        launch_status_line(),
-        "🚀 Trading de volume (10% da conta): "+("LIGADO" if running and not trade_state.flag("hot_disabled") else "DESLIGADO"),
-        "🕯️ Vela 1 min ("+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta): "+("LIGADA" if running and trade_state.flag("candle_enabled") else "DESLIGADA")+candle_last_text(),
-        "Vendas automáticas (stop −6% / stop móvel após +8% / 45 min): "+("SIM" if running else "NÃO"),
-        "🎯 Sniper (moedas novas, 12% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
-        "🟣 Pump.fun (12% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
-        "Posições registradas: "+str(st["positions"])+" / 3",
-        "Ordens pendentes: "+str(st["pending"]),
-        "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ "+format(trade_state.daily_loss_limit(),".2f"),
-        "P/L hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD | P/L total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD",
-        "Operações fechadas: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)",
-        "",
-        "VERIFICAÇÕES:"]
- lines += [("✅ " if ok else "❌ ")+name for name,ok in checks.items()]
- lines += [""]+last_scan_lines()+[""]+sniper_scan_lines()
- lines += ["","⚠️ DINHEIRO REAL. Memecoins podem cair a zero; o SL pode não segurar em quedas bruscas."]
- return "\n".join(lines)
-
 def menu(chat):
  send(chat,"⚡ Solana MEV Bot — Jupiter + Jito\n"+mev_status_text(),keyboard())
 def market_json(url):
@@ -292,33 +202,6 @@ def fetch(extra_searches=()):
 def fmt(v):
  if v == 0:return "0"
  return format(v, ".12f").rstrip("0").rstrip(".") if abs(v)<1 else format(v, ".12f").rstrip("0").rstrip(".")
-def coin_keyboard(p):
- token=p.get("baseToken",{})
- mint=str(token.get("address",""))
- try:
-  price=float(p.get("priceUsd") or 0)
- except (ValueError,TypeError):price=0
- if not mint:return None
- buttons=[[{"text":"📋 Copiar contrato","copy_text":{"text":mint}}]]
- if price>0:
-  buttons.append([{"text":"🎯 Copiar TP","copy_text":{"text":fmt(price*(1+TP/100))}},
-                  {"text":"🛑 Copiar SL","copy_text":{"text":fmt(price*(1-SL/100))}}])
- return buttons
-def send_coin(chat,p,prefix=""):
- return send(chat,prefix+message(p),coin_keyboard(p))
-
-def message(p):
- token=p.get("baseToken",{});mint=token.get("address","")
- price=float(p.get("priceUsd") or 0);liq=float(p.get("liquidity",{}).get("usd") or 0)
- tp=fmt(price*(1+TP/100)) if price>0 else "indisponível"
- sl=fmt(price*(1-SL/100)) if price>0 else "indisponível"
- return ("🪙 "+str(token.get("name","Token"))[:80]+" ("+str(token.get("symbol","?"))[:20]+")\n"+
- "📄 CONTRATO (copie a linha abaixo):\n"+mint+"\n"+
- "💰 Preço de referência: $"+fmt(price)+"\n"+
- "🎯 TP +"+str(TP)+"%: "+tp+"\n"+
- "🛑 SL -"+str(SL)+"%: "+sl+"\n"+
- "💧 Liquidez: $"+fmt(liq)+"\n"+
- "⚠️ Não auditado. Risco de scam/rug pull; TP/SL não são ordens.")
 def active_chat():
  if CHAT:return CHAT
  try:return telegram_owner.get_owner()
@@ -326,35 +209,6 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
-def qualifies(p):
- try:
-  liq=float(p.get("liquidity",{}).get("usd") or 0)
-  vol=float(p.get("volume",{}).get("h24") or 0)
-  fdv=float(p.get("fdv") or 0)
-  created=float(p.get("pairCreatedAt") or 0)
-  age=(time.time()*1000-created)/3600000 if created else -1
-  return liq>=MIN_LIQ and vol>=MIN_VOLUME and age>=MIN_AGE_HOURS and liq>0 and 0<fdv/liq<=MAX_FDV_LIQ and float(p.get("priceUsd") or 0)>0
- except (TypeError,ValueError,ZeroDivisionError):return False
-
-def scan(alert=False):
- global last
- rows=fetch();last=rows
- if alert and active_chat():
-  try:live_engine.buy_cycle(rows,send,active_chat())
-  except Exception:logging.exception("live buy cycle failed")
-  try:sim_engine.buy_cycle(rows,send,active_chat())
-  except Exception:logging.exception("sim buy cycle failed")
- if alert and active_chat() and ALERTS_ENABLED:
-  sent=0
-  for p in reversed(rows):
-   mint=p.get("baseToken",{}).get("address")
-   if not mint or mint in seen or not qualifies(p):continue
-   if sent>=MAX_ALERTS:break
-   send_coin(active_chat(),p,"🔔 Nova oportunidade para analisar (não é recomendação):\n")
-   seen.add(mint)
-   sent+=1
-  if len(seen)>2000:seen.clear()
- return rows
 def authorized(chat):
  return bool(active_chat()) and str(chat)==str(active_chat())
 def handle(update):
@@ -422,65 +276,17 @@ def handle(update):
    send(chat,"\n".join(lines if events else ["Ainda sem histórico MEV.","P/L realizado confirmado: "+format(total_lamports/1e9,"+.8f")+" SOL"]),keyboard())
   except Exception as exc:send(chat,"Histórico indisponível ("+type(exc).__name__+").",keyboard())
   return
- legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","sniper_on","sniper_off","pumpfun_on","pumpfun_off"}
- if action=="trade_on":
-  try:
-   live_engine.start();trade_state.set_flag("hot_disabled",False)
-   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 500 mil, ≥ US$ 50 mil na última hora (girando ≥ 15% da liquidez), liquidez ≥ US$ 50 mil, ≥ 60 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Pode dar prejuízo.",keyboard())
-  except Exception as exc:send(chat,"⛔ Não consegui ligar o trading: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.",keyboard())
-  return
- if action=="trade_off":
-  trade_state.set_flag("hot_disabled",True)
-  if not (trade_state.sniper_enabled() or trade_state.flag("pumpfun_enabled")):trade_state.stop()
-  send(chat,"⏹️ Trading de volume desligado: não compra mais. Posições abertas continuam protegidas pelo stop até vender.",keyboard());return
- if action=="snipe_on":
-  try:
-   live_engine.start()
-   trade_state.set_sniper(True);trade_state.set_flag("pumpfun_enabled",True)
-   send(chat,"🎯 SNIPER LIGADO — DINHEIRO REAL · moedas recém-criadas (risco muito alto)\nA cada ~20 s olha moedas novas (DexScreener) e do pump.fun.\nSó compra se passar em TUDO:\n• 5–60 min de vida (pump.fun até 90 min), liquidez ≥ US$ 15 mil, valor ≤ 20× a liquidez\n• criador NÃO pode criar mais moedas nem congelar carteiras\n• 10 maiores donos (fora a pool) com menos de 25%; no pump.fun dev < 5% e ≥ 150 donos\n• tem site ou redes sociais; pump.fun: não marcada como suspeita e sem volume falso (organic score baixo)\n• compra forte e espalhada: ≥ 25 compras em 5 min (30% mais que vendas), ≥ 100 em 1 h, subindo até +40% em 5 min (sem já ter disparado)\n• teste de venda: comprar e vender na hora devolve ≥ 92% (pega taxa escondida e golpe que não deixa vender)\nCompra 12% da conta, máx. 2 sniper + 2 pump.fun (dentro do limite total de 3).\nSaída: stop −12%; a partir de +25% vende 12% abaixo do topo; sai em 30 min se não decolar.\nPara de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Moeda nova pode virar golpe mesmo passando nos filtros. Use pouco.",keyboard())
-  except Exception as exc:send(chat,"⛔ Não consegui ligar o sniper: "+str(exc)[:250],keyboard())
-  return
- if action=="candle_on":
-  try:
-   live_engine.start();trade_state.set_flag("candle_enabled",True)
-   send(chat,"🕯️ VELA 1 MIN LIGADA — DINHEIRO REAL\nA cada vela nova de 1 minuto, compra a moeda com mais hype agora (mais volume em 5 min, liquidez ≥ US$ 100 mil, ≥ 150 negócios em 5 min, 6h+ de vida, anti-golpe OK) e vende no ALVO de +"+format(live_engine.CANDLE_TAKE_PROFIT*100,".1f")+"% durante a vela (confere a cada ~4 s), no stop de −"+format(live_engine.CANDLE_STOP*100,".0f")+"%, ou quando a vela fecha. Só entra se comprar e vender na hora custar ≤ "+format(live_engine.CANDLE_MAX_ROUNDTRIP_COST*100,".1f")+"%.\nTamanho: "+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta por vela. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Vela de 1 min é quase cara ou coroa e cada operação paga taxas: o mais provável é perder aos poucos. Acompanhe pelo 📈 Status Trading.",keyboard())
-  except Exception as exc:send(chat,"⛔ Não consegui ligar a vela 1 min: "+str(exc)[:250],keyboard())
-  return
- if action=="launch_on":
-  try:
-   import launch_sniper as ls
-   if not ls.ws_url():
-    send(chat,"⛔ Preciso do websocket do RPC: configure SOLANA_RPC_URL (https://…) ou SOLANA_WS_URL (wss://…) no Render.",keyboard());return
-   live_engine.start();trade_state.set_flag("launch_enabled",True)
-   send(chat,"🆕 SNIPER DE LANÇAMENTO LIGADO — DINHEIRO REAL · RISCO EXTREMO\nOuve o pump.fun ao vivo (criação + cada compra/venda).\n1) Na criação: precisa ter site/X/Telegram e o criador não pode ter lançado várias moedas na última hora.\n2) Confirmação: acompanha os primeiros "+str(ls.CONFIRM_SECONDS)+" s e só compra se tiver ≥ "+str(ls.MIN_BUYERS)+" carteiras diferentes comprando, ≥ "+format(ls.MIN_SOL_IN,".0f")+" SOL entrando, poucas vendas, nenhuma carteira com mais de "+format(ls.MAX_TOP_BUYER*100,".0f")+"% das compras (bundle) e o criador sem vender.\nCompra "+format(ls.LAUNCH_FRACTION*100,".0f")+"% da conta, 1 por vez.\nVende: na hora se o CRIADOR VENDER; stop móvel 6% abaixo do topo depois de +10%; alvo +40%; sai cedo se cair 10% ou não subir +4% em 25 s; stop −15%; máx. 2 min.\nPara de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Mesmo confirmada, moeda nova pode virar golpe.",keyboard())
-  except Exception as exc:send(chat,"⛔ Não consegui ligar o sniper de lançamento: "+str(exc)[:250],keyboard())
-  return
- if action=="launch_off":
-  trade_state.set_flag("launch_enabled",False)
-  send(chat,"⏹️ Sniper de lançamento desligado. Posição aberta continua com as regras de saída.",keyboard());return
- if action=="candle_off":
-  trade_state.set_flag("candle_enabled",False)
-  send(chat,"⏹️ Vela 1 min desligada. Se tiver posição aberta da vela, ela é vendida no fechamento ou pelo stop.",keyboard());return
- if action=="snipe_off":
-  trade_state.set_sniper(False);trade_state.set_flag("pumpfun_enabled",False)
-  if trade_state.flag("hot_disabled"):trade_state.stop()
-  send(chat,"⏹️ Sniper desligado. Posições sniper abertas continuam com stop até vender.",keyboard());return
- if action=="trade_status":
-  send(chat,trading_status_text(),keyboard());return
+ legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","/btc_reset",
+  "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real","unstick","/destravar",
+  "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
+  "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
+  "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
+  "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off"}
  if action in legacy or action.startswith("lev_"):
   try:btc_perps.set_enabled(False)
   except Exception:pass
-  send(chat,"Controles antigos de BTC/Perps desativados. Use o menu MEV.",keyboard());return
+  send(chat,"Esse controle foi removido: o bot agora opera só MEV. Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
- elif action in ("scan","/scan"):
-  try:
-   rows=scan(False);selected=[p for p in rows if qualifies(p)];send(chat,"🔎 "+str(len(rows))+" tokens nesta amostra; "+str(len(selected))+" passaram nos filtros. Exibindo até 5.")
-   for p in selected[:5]:send_coin(chat,p)
-   if not selected:send(chat,"Nenhum token passou nos filtros; não vou sugerir tokens sem dados suficientes.")
-  except Exception:logging.exception("scan failed");send(chat,"Falha temporária ao consultar DexScreener.")
- elif action in ("latest","/latest"):
-  for p in last[:5]:send_coin(chat,p)
-  if not last:send(chat,"Nenhuma leitura ainda. Use Analisar agora.")
  elif action in ("wallet_export","/exportar_chave"):
   if not get_address():
    send(chat,"Crie uma carteira primeiro.");return
@@ -529,149 +335,6 @@ def handle(update):
  elif action=="/desconectar":
   CONNECTED_WALLETS.pop(str(chat),None)
   send(chat,"Carteira pública desvinculada desta sessão.")
- elif action in ("live_start","/iniciar","/live_on"):
-  try:
-   live_engine.start()
-   send(chat,"🟢 ROBÔ LIGADO — DINHEIRO REAL\nA cada varredura compra até 2 moedas em alta e aprovada no anti-golpe, usando 10% da conta (máx. 3 posições). Vende sozinho: stop -8%; a partir de +15% deixa o lucro correr e vende 10% abaixo do topo. Para ao perder 15% da conta no dia.\nUse ⏹️ Parar trading para desligar.",keyboard())
-  except Exception as exc:
-   send(chat,"⛔ Não foi possível ligar o robô. Motivo: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.\n\n"+trading_status_text(),keyboard())
- elif action in ("btc_on","/btc_on"):
-  btc_perps.set_enabled(True);lev=btc_perps.summary()["leverage"]
-  st=btc_perps.summary()
-  send(chat,"₿ ROBÔ BTC LIGADO — "+str(lev)+"x · "+("💵 DINHEIRO REAL" if st["mode"]=="real" else "🧪 SIMULAÇÃO com preço real")+" · gráfico "+st["timeframe"]+"\nRompimento de 20 velas a favor da média de 200 + stop por ATR e stop móvel. LONG e SHORT, 20% da conta por ordem. Decide a cada vela fechada e controla o stop a cada ~20 s.",keyboard())
- elif action in ("backtest","/backtest"):
-  send(chat,"⏳ Backtest LONG DCA M5 · 07/11/2025 → 07/11/2026 com velas de 1 min (~540 mil). Na 1ª vez baixa os dados (2–5 min); depois fica salvo e é rápido.")
-  def run_bt():
-   try:
-    import dca_backtest
-    marks=set()
-    def progress(f):
-     step=int(f*4)
-     if 0<step<4 and step not in marks:
-      marks.add(step);send(chat,"⏳ Baixando dados: "+str(step*25)+"%")
-    for part in dca_backtest.run_report(btc_perps._get,progress):
-     for chunk in split_message(part):send(chat,chunk)
-    send(chat,"Fim do backtest.",keyboard())
-   except Exception as exc:
-    logging.exception("backtest failed");send(chat,"❌ Backtest falhou: "+type(exc).__name__+": "+str(exc)[:200])
-  threading.Thread(target=run_bt,daemon=True).start()
- elif action in ("strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok"):
-  st=btc_perps.summary()
-  note=""
-  if st["mode"]=="real" and not st["position"]:
-   btc_perps.set_option("mode","sim");note="\n🧪 Coloquei em MODO SIMULAÇÃO (operações reais não são ativadas automaticamente). Para dinheiro real, toque em 💵 Modo REAL depois de validar no backtest."
-  elif st["mode"]=="real":
-   note="\n⚠️ Há uma posição real aberta; o modo continua REAL até ela fechar."
-  btc_perps.set_option("strategy","dip")
-  send(chat,"📉 LONG DCA M5 ATIVA — só LONG, nunca short"+note+"\n• Entrada (vela de 5 min fechada): RSI 14 < 30 + queda ≥ 2% em 4 h + fechou acima da máxima da vela anterior + H1 sem tendência de baixa forte.\n• Margem $25 × 10x por compra (posição $250), até 3 compras ($750), uma de cada vez: 2ª a −2,5% da 1ª, 3ª a −3,5% da 2ª.\n• Fecha 100% quando o lucro LÍQUIDO (taxas, slippage e juros) chega a +$2,50.\n• Stop de emergência: −5% do preço médio ou perda máx. de $50 no ciclo (sempre antes da liquidação).",keyboard())
- elif action=="strat_trend":
-  btc_perps.set_option("strategy","trend");send(chat,"📈 Estratégia de tendência ativa (rompimento + stop móvel).",keyboard())
- elif action in ("tf_1h","tf_5m"):
-  try:
-   tf=btc_perps.set_option("timeframe",action[3:])
-   send(chat,"✅ Gráfico "+tf+(": tendência, poucas operações por semana, deixa o lucro correr." if tf=="1h" else ": operações rápidas o dia todo (rompimentos de 100 min a favor da tendência de ~16 h), stop 1,5×ATR e stop móvel 2,5×ATR. Pula sinais em que a taxa da Jupiter comeria mais de 1/3 do risco.\n⚠️ Com 10x, cada ida e volta custa ~1,2% da garantia em taxas."),keyboard())
-  except ValueError as exc:send(chat,"⚠️ "+str(exc),keyboard())
- elif action in ("mode_real","mode_sim"):
-  try:
-   mode=btc_perps.set_option("mode","real" if action=="mode_real" else "sim")
-   send(chat,("💵 MODO REAL ATIVO: o robô vai abrir LONG/SHORT de verdade na Jupiter Perps com a carteira do bot (garantia em USDC; troca SOL→USDC sozinho quando precisa). Mantenha ~0,05 SOL para taxas." if mode=="real" else "🧪 Modo simulação ativo: dinheiro de mentira, preço real."),keyboard())
-  except ValueError as exc:send(chat,"⚠️ "+str(exc),keyboard())
- elif action in ("btc_test","/btc_teste"):
-  try:btc_perps.test_real_order(send,chat)
-  except Exception as exc:logging.exception("btc test failed");send(chat,"❌ Teste falhou: "+str(exc)[:300])
- elif action in ("btc_off","/btc_off"):
-  btc_perps.set_enabled(False);send(chat,"₿ Robô BTC desligado. Uma posição simulada aberta fica parada até religar.",keyboard())
- elif action in ("btc_status","/btc"):
-  send(chat,btc_status(),keyboard())
- elif action in ("lev","/alavancagem"):
-  send(chat,"⚙️ Escolha a alavancagem (atual: "+str(btc_perps.summary()["leverage"])+"x).\nQuanto maior, maior o ganho e a perda: com 10x, ~9% contra liquida; com 20x, ~4,5%. O stop fica sempre antes da liquidação. Recomendado: 2x–3x.",leverage_keyboard())
- elif action.startswith("lev_"):
-  try:
-   lev=btc_perps.set_leverage(action[4:])
-   pos=btc_perps.summary()["position"]
-   send(chat,"✅ Alavancagem: "+str(lev)+"x. Vale para as próximas ordens"+(" (a posição aberta continua com "+str(pos["leverage"])+"x)." if pos else "."),keyboard())
-  except ValueError:send(chat,"Alavancagem inválida.",leverage_keyboard())
- elif action=="/btc_reset":
-  btc_perps.reset();send(chat,"₿ Simulação BTC reiniciada com $"+format(btc_perps.START_USD,".2f")+".")
- elif action in ("pump_on","/pump_on"):
-  trade_state.set_flag("pumpfun_enabled",True)
-  extra="" if live_engine.ready() else "\n⚠️ O robô principal está desligado: toque em ▶️ Iniciar trading real para operar com dinheiro real (a 🧪 simulação testa o pump.fun mesmo assim)."
-  send(chat,"🟣 PUMP.FUN LIGADO — RISCO MUITO ALTO\nA cada ~20 s olha as moedas novas e em alta do pump.fun (lista da Jupiter). Compra só se tiver 5–90 min, liquidez ≥ US$ 15 mil, ≥ 150 donos, mint/freeze revogados, 10 maiores donos < 25%, dev < 5%, compras fortes e espalhadas sem já ter disparado, e passar no TESTE DE VENDA (≥ 92%).\nCompra 5% da conta (máx. 2 posições pump.fun).\nSaída: stop -12%; a partir de +25% deixa correr e vende 12% abaixo do topo; vende após 30 min se não decolar."+extra,keyboard())
- elif action in ("pump_off","/pump_off"):
-  trade_state.set_flag("pumpfun_enabled",False)
-  send(chat,"🟣 Pump.fun DESLIGADO. Posições abertas continuam com stop e venda automática.",keyboard())
- elif action in ("history","/historico"):
-  try:send(chat,trade_report.btc_history_text(btc_perps.summary()),keyboard())
-  except Exception as exc:logging.exception("history failed");send(chat,"⚠️ Histórico indisponível: "+str(exc)[:150])
- elif action in ("sim_on","/sim_on"):
-  sim_engine.set_enabled(True);st=sim_engine.summary()
-  send(chat,"🧪 SIMULAÇÃO LIGADA\nRoda as MESMAS estratégias (normal + sniper) com preços reais da Jupiter e dinheiro de mentira (saldo simulado: US$ "+format(st["equity"],".2f")+"). Inclui 1% de custo por lado. Não mexe na carteira.\nVeja os resultados em 📜 Histórico. /sim_reset recomeça do zero.",keyboard())
- elif action in ("sim_off","/sim_off"):
-  sim_engine.set_enabled(False);send(chat,"🧪 Simulação desligada. O histórico simulado fica salvo.",keyboard())
- elif action=="/sim_reset":
-  sim_engine.reset();send(chat,"🧪 Simulação reiniciada com US$ "+format(sim_engine.START_USD,".2f")+".")
- elif action in ("unstick","/destravar"):
-  try:live_engine.unstick(send,chat)
-  except Exception as exc:
-   logging.exception("unstick failed");send(chat,"❌ Falha ao destravar: "+type(exc).__name__+": "+str(exc)[:200])
- elif action in ("sniper_on","/sniper_on"):
-  try:
-   trade_state.set_sniper(True)
-   trade_state.set_flag("pumpfun_enabled",True)  # sniper also trades pump.fun tokens
-   extra="" if live_engine.ready() else "\n⚠️ O robô principal está desligado: toque em ▶️ Iniciar trading real para o sniper operar."
-   send(chat,"🎯 SNIPER LIGADO (DINHEIRO REAL) — inclui moedas do 🟣 PUMP.FUN — RISCO MUITO ALTO\nA cada ~20 s procura moedas de 5 a 60 min, liquidez ≥ US$ 15 mil, compras fortes e espalhadas (sem já ter disparado). Só compra se passar no anti-golpe, se os 10 maiores donos tiverem < 25% e no TESTE DE VENDA (comprar e vender de volta tem que devolver ≥ 92%).\nCompra 5% da conta (máx. 2 posições sniper).\nSaída: stop -12%; a partir de +25% deixa o lucro correr e vende 12% abaixo do topo; se não decolar em 30 min, vende.\n⚠️ A maioria das moedas novas vai a zero. Quedas rápidas podem passar muito do stop."+extra,keyboard())
-  except Exception:
-   logging.exception("sniper switch failed");send(chat,"⚠️ Não consegui salvar a configuração do sniper.")
- elif action in ("sniper_off","/sniper_off"):
-  try:
-   trade_state.set_sniper(False)
-   trade_state.set_flag("pumpfun_enabled",False)
-   send(chat,"🎯 Sniper DESLIGADO (inclusive pump.fun). Posições abertas continuam com stop e venda automática.",keyboard())
-  except Exception:
-   logging.exception("sniper switch failed");send(chat,"⚠️ Não consegui salvar a configuração do sniper.")
- elif action in ("live_stop","/parar","/live_off"):
-  auto.set_enabled(chat,False)
-  try:
-   trade_state.stop()
-   send(chat,"⏹️ Novas operações bloqueadas no estado persistente. Posições eventualmente abertas precisam continuar monitoradas até liquidação.")
-  except Exception:
-   logging.exception("persistent trading stop failed")
-   send(chat,"⚠️ Falha ao salvar parada no disco. Trading real permanece bloqueado no executor; verifique o Render.")
- elif action in ("live_status","/status_real"):
-  send(chat,trading_status_text(),keyboard())
- elif action in ("autostatus","/auto","/autostatus"):
-  st=auto.status(chat)
-  send(chat,"🤖 TRADING AUTOMÁTICO — SIMULAÇÃO\nStatus: "+("ATIVADO" if st["enabled"] else "DESATIVADO")+"\nCompra: US$ 10 | TP: +15% | SL: -8%\nSaldo fictício livre: $"+fmt(st["balance"])+"\nPosições automáticas: "+str(st["open"])+" / 3\nResultado realizado: $"+fmt(st["realized"])+"\nPerdas realizadas hoje: $"+fmt(st["daily_loss"])+" / $3\n/auto_on para iniciar | /auto_off para parar novas entradas e monitoramento.\n⚠️ Sem carteira real. Dados podem atrasar e não há verificação on-chain de scam. Estado temporário: reinícios podem zerar a simulação.")
- elif action in ("/auto_on","auto_start"):
-  auto.set_enabled(chat,True);send(chat,"🧪 Trading SIMULADO ATIVADO. Compras fictícias de $10, até 3 posições, TP +15%, SL -8%. Não há ordens reais.")
- elif action in ("/auto_off","auto_stop"):
-  auto.set_enabled(chat,False);send(chat,"⏸️ Trading simulado pausado. Nenhuma ordem real existe. Posições fictícias não serão monitoradas até /auto_on.")
- elif action in ("positions","/posicoes"):
-  items=paper.list_open(chat)
-  if not items:send(chat,"Nenhuma simulação aberta. Use /simular CONTRATO PRECO_ENTRADA VALOR_USD")
-  else:
-   for mint,p in items:send(chat,"📊 SIMULAÇÃO\nContrato: "+mint+"\nEntrada: $"+fmt(p["entry"])+"\nTP: $"+fmt(p["entry"]*(1+p["tp"]/100))+"\nSL: $"+fmt(p["entry"]*(1-p["sl"]/100))+"\n/remover "+mint)
- elif action=="/simular":
-  parts=(msg or {}).get("text","").split()
-  if len(parts)!=4:send(chat,"Uso: /simular CONTRATO PRECO_ENTRADA VALOR_USD\nExemplo: /simular <contrato> 0.000012 2")
-  else:
-   try:
-    mint=parts[1];entry=float(parts[2]);usd=float(parts[3])
-    paper.add(chat,mint,entry,usd,TP,SL)
-    send(chat,"✅ Simulação registrada (nenhuma compra real).\nContrato: "+mint+"\nTP: $"+fmt(entry*(1+TP/100))+"\nSL: $"+fmt(entry*(1-SL/100))+"\nAvisarei quando o preço observado atingir um alvo.")
-   except (ValueError,OverflowError) as exc:send(chat,"Erro: "+str(exc))
- elif action=="/remover":
-  parts=(msg or {}).get("text","").split()
-  if len(parts)!=2:send(chat,"Uso: /remover CONTRATO")
-  else:send(chat,"Simulação removida." if paper.remove(chat,parts[1]) else "Contrato não encontrado.")
- elif action in ("alerts","/alerts"):
-  send(chat,"🔔 Alertas automáticos: "+("ATIVADOS" if ALERTS_ENABLED else "PAUSADOS")+"\nVarredura a cada "+str(INTERVAL)+" segundos enquanto o serviço estiver ativo.\nUse /pausar ou /ativar.")
- elif action=="/pausar":
-  ALERTS_ENABLED=False;send(chat,"🔕 Alertas pausados. Use /ativar para retomar.")
- elif action=="/ativar":
-  ALERTS_ENABLED=True;send(chat,"🔔 Alertas automáticos ativados.")
- elif action in ("settings","/settings"):
-  send(chat,"⚙️ TP: +"+str(TP)+"% | SL: -"+str(SL)+"%\nLiquidez mínima: $"+str(MIN_LIQ)+"\nVolume 24h mínimo: $"+str(MIN_VOLUME)+"\nIdade mínima: "+str(MIN_AGE_HOURS)+" horas\nFDV/liquidez máximo: "+str(MAX_FDV_LIQ)+"\nAlertas por varredura: "+str(MAX_ALERTS)+"\nSem auditoria on-chain. Ajuste no Render.")
  else:menu(chat)
 def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
@@ -724,18 +387,6 @@ def background_loop():
     next_sync=time.monotonic()+60
     try:live_engine.sync_positions(send,active_chat())
     except Exception:logging.exception("position sync failed")
-   beat("sniper/pump.fun")
-   if active_chat() and time.monotonic()>=next_snipe and trade_state.status()["enabled"]:
-    next_snipe=time.monotonic()+20
-    try:live_engine.sniper_cycle(send,active_chat())
-    except Exception:logging.exception("sniper cycle failed")
-    try:pumpfun.cycle(send,active_chat())
-    except Exception:logging.exception("pump.fun cycle failed")
-   beat("trading de volume")
-   if active_chat() and time.monotonic()>=next_trade and trade_state.status()["enabled"] and not trade_state.flag("hot_disabled"):
-    next_trade=time.monotonic()+60
-    try:live_engine.buy_cycle(fetch_cached(MEV_PAIR_SEARCHES),send,active_chat())
-    except Exception:logging.exception("trading buy cycle failed")
    beat("devolução de depósito")
    if active_chat() and time.monotonic()>=next_reclaim:
     next_reclaim=time.monotonic()+600
@@ -820,20 +471,6 @@ def mev_loop():
       send(active_chat(),"⚡ Bundle Jito enviado; aguardando confirmação. ID: "+outcome["bundle_id"]+"\nContrato: "+outcome["mint"]+"\nLucro mínimo estimado em SOL: "+format(outcome["estimated_net_lamports"]/1e9,".6f"))
   except Exception as exc:logging.error("MEV cycle stopped: %s",type(exc).__name__)
   time.sleep(MEV_SCAN_SECONDS)
-def candle_loop():
- """1-minute candle strategy: at each minute boundary close the old candle trade, then open a new one."""
- while True:
-  try:
-   now=time.time();time.sleep(max(0.5,(int(now//60)+1)*60-now+1))
-   chat=active_chat()
-   if not chat:continue
-   has_open=trade_state.positions_by_mode("candle")>0
-   if has_open:live_engine.candle_close(send,chat)
-   if trade_state.flag("candle_enabled") and trade_state.status()["enabled"]:
-    live_engine.candle_open(fetch_cached(MEV_PAIR_SEARCHES,max_age=50),send,chat)
-   if trade_state.positions_by_mode("candle"):
-    live_engine.candle_watch(send,chat,(int(time.time()//60)+1)*60)
-  except Exception:logging.exception("candle loop failed");time.sleep(5)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
 def loop():
@@ -841,12 +478,7 @@ def loop():
  try:startup_notice()
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
- threading.Thread(target=candle_loop,daemon=True).start()
  threading.Thread(target=mev_loop,daemon=True).start()
- try:
-  import launch_sniper
-  launch_sniper.start(send,active_chat)
- except Exception:logging.exception("launch sniper start failed")
  while True:
   try:
    if TOKEN:

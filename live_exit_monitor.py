@@ -37,7 +37,7 @@ def position_signal(position, cost, proceeds):
             signal.update(action="sell", reason="time_stop")
         return signal
     if position.get("mode") == "launch":
-        # Normally sold by launch_sniper.watch_and_sell; this is the safety net.
+        # Launch strategy removed; kept so any old position is still sold safely.
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0),
                                       stop_loss="0.20", arm="1.15", drop="0.08")
         held = time.time() - float(position.get("opened_at") or time.time())
