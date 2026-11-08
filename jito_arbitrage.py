@@ -9,6 +9,7 @@ import base64
 import json
 import logging
 import os
+import struct
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ from bot_wallet_service import create_or_get, export_private_key, get_address
 LOG = logging.getLogger("jito_arbitrage")
 JUPITER_BUILD = "https://api.jup.ag/swap/v2/build"
 SOL_MINT = "So11111111111111111111111111111111111111112"
+COMPUTE_BUDGET_PROGRAM = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
 JITO_URL = os.getenv("JITO_BLOCK_ENGINE_URL", "https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles").rstrip("/")
 _LOCK = threading.Lock()
 
@@ -90,7 +92,8 @@ def _instruction(raw):
 
 
 def _compile_and_sign(build, signer, extra_instructions=()):
-    instructions = []
+    cu_limit = _int_env("MEV_COMPUTE_UNIT_LIMIT", 1_000_000, 200_000, 1_400_000)
+    instructions = [Instruction(COMPUTE_BUDGET_PROGRAM, b"\x02" + struct.pack("<I", cu_limit), [])]
     for group in ("computeBudgetInstructions", "setupInstructions"):
         instructions.extend(_instruction(ix) for ix in build.get(group, []))
     instructions.append(_instruction(build["swapInstruction"]))
@@ -110,6 +113,22 @@ def _compile_and_sign(build, signer, extra_instructions=()):
     recent_blockhash = Hash.from_bytes(blockhash_bytes)
     message = MessageV0.try_compile(signer.pubkey(), instructions, alts, recent_blockhash)
     return VersionedTransaction(message, [signer])
+
+
+def _priority_fee_lamports(build):
+    """Estimate the priority fee implied by Jupiter's compute-budget price."""
+    cu_limit = _int_env("MEV_COMPUTE_UNIT_LIMIT", 1_000_000, 200_000, 1_400_000)
+    price_micro_lamports = 0
+    for raw in build.get("computeBudgetInstructions", []):
+        if raw.get("programId") != str(COMPUTE_BUDGET_PROGRAM):
+            continue
+        try:
+            data = base64.b64decode(raw.get("data", ""), validate=True)
+            if len(data) >= 9 and data[0] == 3:
+                price_micro_lamports = max(price_micro_lamports, struct.unpack("<Q", data[1:9])[0])
+        except (ValueError, struct.error):
+            raise RuntimeError("Malformed Jupiter compute-budget instruction") from None
+    return (price_micro_lamports * cu_limit + 999_999) // 1_000_000
 
 
 def _jito(method, params):
@@ -233,7 +252,7 @@ def try_arbitrage(mint):
         raise RuntimeError("First Jupiter route returned no tokens")
     second = _build(mint, SOL_MINT, token_amount, str(signer.pubkey()))
     minimum_back = int(second["otherAmountThreshold"])
-    fixed_cost_reserve = 25_000  # conservative allowance for two base fees
+    fixed_cost_reserve = 10_000 + _priority_fee_lamports(first) + _priority_fee_lamports(second)
     required_profit = max(_int_env("MEV_MIN_NET_PROFIT_LAMPORTS", 100_000, 1_000, 10_000_000),
                           amount * min_bps // 10_000)
     net_minimum = minimum_back - amount - tip_lamports - fixed_cost_reserve
