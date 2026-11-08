@@ -71,6 +71,7 @@ def keyboard():
   [{"text":"🚀 Trading ON","callback_data":"trade_on"},{"text":"⏹️ Trading OFF","callback_data":"trade_off"}],
   [{"text":"🎯 Sniper ON","callback_data":"snipe_on"},{"text":"⏹️ Sniper OFF","callback_data":"snipe_off"}],
   [{"text":"🕯️ Vela 1m ON","callback_data":"candle_on"},{"text":"⏹️ Vela 1m OFF","callback_data":"candle_off"}],
+  [{"text":"🆕 Lançamento ON","callback_data":"launch_on"},{"text":"⏹️ Lançamento OFF","callback_data":"launch_off"}],
   [{"text":"📈 Status Trading","callback_data":"trade_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
@@ -114,6 +115,11 @@ def trading_readiness():
  running=live_engine.ready()
  return st,checks,running
 
+def launch_status_line():
+ try:
+  import launch_sniper
+  return launch_sniper.status_line()
+ except Exception:return "🆕 Lançamento: indisponível"
 def candle_last_text():
  s=live_engine.CANDLE_SCAN
  if not s["at"]:return ""
@@ -162,6 +168,7 @@ def trading_status_text():
         "🟢 ROBÔ LIGADO" if running else "🔴 ROBÔ PARADO — "+(live_engine.why_stopped() or ""),
         "Chave geral Render: "+("ATIVADA" if checks["Permissão Render"] else "DESATIVADA"),
         robot_alive_line(),
+        launch_status_line(),
         "🚀 Trading de volume (10% da conta): "+("LIGADO" if running and not trade_state.flag("hot_disabled") else "DESLIGADO"),
         "🕯️ Vela 1 min ("+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta): "+("LIGADA" if running and trade_state.flag("candle_enabled") else "DESLIGADA")+candle_last_text(),
         "Vendas automáticas (stop −6% / stop móvel após +8% / 45 min): "+("SIM" if running else "NÃO"),
@@ -439,6 +446,18 @@ def handle(update):
    send(chat,"🕯️ VELA 1 MIN LIGADA — DINHEIRO REAL\nA cada vela nova de 1 minuto, compra a moeda com mais hype agora (mais volume em 5 min, liquidez ≥ US$ 100 mil, ≥ 150 negócios em 5 min, 6h+ de vida, anti-golpe OK) e vende no ALVO de +"+format(live_engine.CANDLE_TAKE_PROFIT*100,".1f")+"% durante a vela (confere a cada ~4 s), no stop de −"+format(live_engine.CANDLE_STOP*100,".0f")+"%, ou quando a vela fecha. Só entra se comprar e vender na hora custar ≤ "+format(live_engine.CANDLE_MAX_ROUNDTRIP_COST*100,".1f")+"%.\nTamanho: "+format(live_engine.CANDLE_FRACTION*100,".0f")+"% da conta por vela. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Vela de 1 min é quase cara ou coroa e cada operação paga taxas: o mais provável é perder aos poucos. Acompanhe pelo 📈 Status Trading.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar a vela 1 min: "+str(exc)[:250],keyboard())
   return
+ if action=="launch_on":
+  try:
+   import launch_sniper as ls
+   if not ls.ws_url():
+    send(chat,"⛔ Preciso do websocket do RPC: configure SOLANA_RPC_URL (https://…) ou SOLANA_WS_URL (wss://…) no Render.",keyboard());return
+   live_engine.start();trade_state.set_flag("launch_enabled",True)
+   send(chat,"🆕 SNIPER DE LANÇAMENTO LIGADO — DINHEIRO REAL · RISCO EXTREMO\nOuve o pump.fun direto na blockchain e pega cada moeda no momento em que é criada.\nSó compra se: os dados da moeda tiverem site/X/Telegram e o criador não tiver lançado várias moedas na última hora (o pump.fun já impede criar mais moedas e congelar). Máx. 1 por vez, 1 compra a cada 20 s.\nCompra "+format(ls.LAUNCH_FRACTION*100,".0f")+"% da conta (leva uns segundos pela Jupiter).\nVende sozinho: se cair 8% abaixo do topo (perto do pico se estiver no lucro), se não subir +5% em 15 s, no stop −20%, ou ao completar 1 minuto.\nPara de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ A maioria das moedas recém-criadas morre ou é golpe em minutos.",keyboard())
+  except Exception as exc:send(chat,"⛔ Não consegui ligar o sniper de lançamento: "+str(exc)[:250],keyboard())
+  return
+ if action=="launch_off":
+  trade_state.set_flag("launch_enabled",False)
+  send(chat,"⏹️ Sniper de lançamento desligado. Posição aberta continua com as regras de saída.",keyboard());return
  if action=="candle_off":
   trade_state.set_flag("candle_enabled",False)
   send(chat,"⏹️ Vela 1 min desligada. Se tiver posição aberta da vela, ela é vendida no fechamento ou pelo stop.",keyboard());return
@@ -813,6 +832,10 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=candle_loop,daemon=True).start()
+ try:
+  import launch_sniper
+  launch_sniper.start(send,active_chat)
+ except Exception:logging.exception("launch sniper start failed")
  while True:
   try:
    if TOKEN:

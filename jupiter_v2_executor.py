@@ -73,6 +73,18 @@ def sign_order(order_data, wallet_passphrase):
     signed = VersionedTransaction.populate(unsigned.message, signatures)
     return base64.b64encode(bytes(signed)).decode("ascii")
 
+def _execute_error(result):
+    """Human reason from Jupiter's /execute failure (code + message), never secrets."""
+    try:
+        code = int(result.get("code"))
+    except (TypeError, ValueError):
+        code = None
+    message = str(result.get("error") or "")[:120]
+    label = "preço mudou demais (slippage)" if ("lippage" in message or "6001" in message) else ""
+    parts = [x for x in (label, ("código " + str(code)) if code is not None else "", message) if x]
+    return (" — " + " · ".join(parts)) if parts else ""
+
+
 def execute_signed(signed_transaction, request_id):
     if os.getenv("LIVE_TRADING_ENABLED", "true").strip().lower() == "false":
         raise OrderError("Real swaps are disabled")
@@ -83,7 +95,7 @@ def execute_signed(signed_transaction, request_id):
     response.raise_for_status()
     result = response.json()
     if result.get("status") != "Success" or not result.get("signature"):
-        raise OrderError("Swap execution uncertain or failed; reconcile requestId before retry")
+        raise OrderError("Swap execution uncertain or failed; reconcile requestId before retry" + _execute_error(result))
     return {"signature": result["signature"],
             "total_input_amount": int(result["totalInputAmount"]),
             "total_output_amount": int(result["totalOutputAmount"])}
