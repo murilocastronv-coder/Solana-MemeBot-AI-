@@ -64,6 +64,15 @@ class StrategyTests(unittest.TestCase):
         self.assertTrue(j._is_cu_limit(limit))
         self.assertFalse(j._is_cu_limit(price))
 
+    def test_priority_fee_off_by_default(self):
+        price = {"programId": str(j.COMPUTE_BUDGET_PROGRAM), "accounts": [],
+                 "data": base64.b64encode(b"\x03" + (100_000).to_bytes(8, "little")).decode()}
+        b = {"computeBudgetInstructions": [price]}
+        os.environ.pop("MEV_PRIORITY_FEE_ENABLED", None)
+        self.assertEqual(j._priority_fee_lamports(b), 0)
+        with patch.dict(os.environ, {"MEV_PRIORITY_FEE_ENABLED": "true"}):
+            self.assertEqual(j._priority_fee_lamports(b), 100_000)
+
 
 if __name__ == "__main__":
     unittest.main()

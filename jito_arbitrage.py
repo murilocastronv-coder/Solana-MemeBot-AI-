@@ -107,6 +107,11 @@ def _instruction(raw):
     return Instruction(Pubkey.from_string(raw["programId"]), data, accounts)
 
 
+def _priority_fee_enabled():
+    """Jito bundles are ranked by the tip, so the per-CU priority fee is off by default."""
+    return os.getenv("MEV_PRIORITY_FEE_ENABLED", "false").strip().lower() == "true"
+
+
 def _is_cu_limit(raw):
     try:
         data = base64.b64decode((raw or {}).get("data", ""), validate=True)
@@ -121,6 +126,8 @@ def _compile_and_sign(build, signer, extra_instructions=()):
     for raw in build.get("computeBudgetInstructions", []):
         if _is_cu_limit(raw):
             continue  # we already set our own limit; a duplicate makes the tx invalid
+        if not _priority_fee_enabled() and raw.get("programId") == str(COMPUTE_BUDGET_PROGRAM):
+            continue  # drop setComputeUnitPrice: pay the Jito tip only
         instructions.append(_instruction(raw))
     instructions.extend(_instruction(ix) for ix in build.get("setupInstructions", []))
     instructions.append(_instruction(build["swapInstruction"]))
@@ -144,6 +151,8 @@ def _compile_and_sign(build, signer, extra_instructions=()):
 
 def _priority_fee_lamports(build):
     """Estimate the priority fee implied by Jupiter's compute-budget price."""
+    if not _priority_fee_enabled():
+        return 0
     cu_limit = _int_env("MEV_COMPUTE_UNIT_LIMIT", 1_000_000, 200_000, 1_400_000)
     price_micro_lamports = 0
     for raw in build.get("computeBudgetInstructions", []):
