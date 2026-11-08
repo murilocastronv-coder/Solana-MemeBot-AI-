@@ -126,9 +126,11 @@ def record_mev_event(event):
     """Keep secret-free MEV history and update an existing bundle as it settles."""
     import time as _time
     allowed = ("status", "mint", "bundle_id", "estimated_net_lamports",
-               "realized_net_lamports", "signature", "slot", "error")
+               "realized_net_lamports", "signature", "slot", "error", "notification_sent")
     item = {key: event[key] for key in allowed if key in event}
     item["timestamp"] = int(_time.time())
+    if item.get("status") in ("landed", "not_landed"):
+        item.setdefault("notification_sent", False)
     with _LOCK:
         state = _load()
         history = state.setdefault("mev_history", [])
@@ -146,6 +148,24 @@ def record_mev_event(event):
 def mev_history(limit=5):
     with _LOCK:
         return list(_load().get("mev_history", []))[:max(1, min(int(limit), 20))]
+
+def mev_notifications_pending(limit=5):
+    with _LOCK:
+        events = _load().get("mev_history", [])
+        return [dict(item) for item in events
+                if item.get("status") in ("landed", "not_landed")
+                and not item.get("notification_sent")][:max(1, min(int(limit), 20))]
+
+def mark_mev_notification_sent(bundle_id):
+    if not bundle_id:
+        return
+    with _LOCK:
+        state = _load()
+        for item in state.get("mev_history", []):
+            if item.get("bundle_id") == bundle_id and item.get("status") in ("landed", "not_landed"):
+                item["notification_sent"] = True
+                _save(state)
+                return
 
 def mev_pnl_summary():
     """Return (confirmed realized P/L in lamports, confirmed bundles with P/L)."""
