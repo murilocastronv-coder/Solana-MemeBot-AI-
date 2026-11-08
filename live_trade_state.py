@@ -126,10 +126,13 @@ def record_mev_event(event):
     """Keep secret-free MEV history and update an existing bundle as it settles."""
     import time as _time
     allowed = ("status", "mint", "bundle_id", "estimated_net_lamports",
-               "realized_net_lamports", "signature", "slot", "error", "notification_sent")
+               "realized_net_lamports", "signature", "slot", "error", "notification_sent", "submitted_at", "settled_at")
     item = {key: event[key] for key in allowed if key in event}
     item["timestamp"] = int(_time.time())
+    if item.get("status") == "submitted_pending":
+        item.setdefault("submitted_at", item["timestamp"])
     if item.get("status") in ("landed", "not_landed"):
+        item.setdefault("settled_at", item["timestamp"])
         item.setdefault("notification_sent", False)
     with _LOCK:
         state = _load()
@@ -178,6 +181,29 @@ def mark_mev_notification_sent(bundle_id):
                 item["notification_sent"] = True
                 _save(state)
                 return
+
+def mev_daily_guard():
+    """Cap confirmed live bundles and realized daily loss in UTC."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    max_bundles = 20
+    max_loss_lamports = 10_000_000  # 0.01 SOL
+    with _LOCK:
+        events = _load().get("mev_history", [])
+        todays_submissions = [item for item in events
+                              if item.get("submitted_at")
+                              and datetime.fromtimestamp(int(item["submitted_at"]), timezone.utc).date().isoformat() == today]
+        daily_pnl = sum(int(item["realized_net_lamports"]) for item in events
+                        if item.get("status") == "landed"
+                        and isinstance(item.get("realized_net_lamports"), int)
+                        and not isinstance(item.get("realized_net_lamports"), bool)
+                        and item.get("settled_at")
+                        and datetime.fromtimestamp(int(item["settled_at"]), timezone.utc).date().isoformat() == today)
+        if len(todays_submissions) >= max_bundles:
+            return False, "Limite diário de 20 bundles atingido", len(todays_submissions), daily_pnl
+        if daily_pnl <= -max_loss_lamports:
+            return False, "Limite diário de perda de 0,01 SOL atingido", len(todays_submissions), daily_pnl
+        return True, "Ready", len(todays_submissions), daily_pnl
 
 def mev_pnl_summary():
     """Return lifetime confirmed realized P/L in lamports and bundle count."""
