@@ -159,8 +159,8 @@ def trading_status_text():
         robot_alive_line(),
         "🚀 Trading de volume (10% da conta): "+("LIGADO" if running and not trade_state.flag("hot_disabled") else "DESLIGADO"),
         "Vendas automáticas (stop −6% / stop móvel após +8% / 45 min): "+("SIM" if running else "NÃO"),
-        "🎯 Sniper (moedas novas, 15% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
-        "🟣 Pump.fun (15% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
+        "🎯 Sniper (moedas novas, 12% da conta): "+("LIGADO" if sniper_on else "DESLIGADO")+" | posições sniper: "+str(sniper_n)+"/2",
+        "🟣 Pump.fun (12% da conta): "+("LIGADO" if pump_on else "DESLIGADO")+" | posições pump.fun: "+str(pump_n)+"/2",
         "Posições registradas: "+str(st["positions"])+" / 3",
         "Ordens pendentes: "+str(st["pending"]),
         "Perda diária registrada: US$ "+format(st["daily_loss_usd"],".2f")+" / US$ "+format(trade_state.daily_loss_limit(),".2f"),
@@ -413,7 +413,7 @@ def handle(update):
  if action=="trade_on":
   try:
    live_engine.start();trade_state.set_flag("hot_disabled",False)
-   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 500 mil, ≥ US$ 50 mil na última hora (girando ≥ 15% da liquidez), liquidez ≥ US$ 50 mil, ≥ 60 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder 15% da conta no dia.\n⚠️ Pode dar prejuízo.",keyboard())
+   send(chat,"🚀 TRADING LIGADO — DINHEIRO REAL · moedas de VOLUME ALTO\nA cada ~1 min olha as moedas mais negociadas da última hora e compra as que têm: volume 24h ≥ US$ 500 mil, ≥ US$ 50 mil na última hora (girando ≥ 15% da liquidez), liquidez ≥ US$ 50 mil, ≥ 60 negócios em 5 min com mais compras que vendas, subindo em 5m/1h/6h sem pico exagerado, e aprovadas no anti-golpe e no teste de venda. Até 2 por rodada, 10% da conta cada (máx. 3 abertas).\nVende rápido: stop −6%; a partir de +8% deixa correr e vende 5% abaixo do topo; sai em 45 min se não andar. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Pode dar prejuízo.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar o trading: "+str(exc)[:250]+"\nNenhuma ordem foi enviada.",keyboard())
   return
  if action=="trade_off":
@@ -424,7 +424,7 @@ def handle(update):
   try:
    live_engine.start()
    trade_state.set_sniper(True);trade_state.set_flag("pumpfun_enabled",True)
-   send(chat,"🎯 SNIPER LIGADO — DINHEIRO REAL · moedas recém-criadas (risco muito alto)\nA cada ~20 s olha moedas novas (DexScreener) e do pump.fun.\nSó compra se passar em TUDO:\n• 5–60 min de vida (pump.fun até 90 min), liquidez ≥ US$ 15 mil, valor ≤ 20× a liquidez\n• criador NÃO pode criar mais moedas nem congelar carteiras\n• 10 maiores donos (fora a pool) com menos de 25%; no pump.fun dev < 5% e ≥ 150 donos\n• tem site ou redes sociais; pump.fun: não marcada como suspeita e sem volume falso (organic score baixo)\n• compra forte e espalhada: ≥ 25 compras em 5 min (30% mais que vendas), ≥ 100 em 1 h, subindo até +40% em 5 min (sem já ter disparado)\n• teste de venda: comprar e vender na hora devolve ≥ 92% (pega taxa escondida e golpe que não deixa vender)\nCompra 15% da conta, máx. 2 sniper + 2 pump.fun (dentro do limite total de 3).\nSaída: stop −12%; a partir de +25% vende 12% abaixo do topo; sai em 30 min se não decolar.\n⚠️ Moeda nova pode virar golpe mesmo passando nos filtros. Use pouco.",keyboard())
+   send(chat,"🎯 SNIPER LIGADO — DINHEIRO REAL · moedas recém-criadas (risco muito alto)\nA cada ~20 s olha moedas novas (DexScreener) e do pump.fun.\nSó compra se passar em TUDO:\n• 5–60 min de vida (pump.fun até 90 min), liquidez ≥ US$ 15 mil, valor ≤ 20× a liquidez\n• criador NÃO pode criar mais moedas nem congelar carteiras\n• 10 maiores donos (fora a pool) com menos de 25%; no pump.fun dev < 5% e ≥ 150 donos\n• tem site ou redes sociais; pump.fun: não marcada como suspeita e sem volume falso (organic score baixo)\n• compra forte e espalhada: ≥ 25 compras em 5 min (30% mais que vendas), ≥ 100 em 1 h, subindo até +40% em 5 min (sem já ter disparado)\n• teste de venda: comprar e vender na hora devolve ≥ 92% (pega taxa escondida e golpe que não deixa vender)\nCompra 12% da conta, máx. 2 sniper + 2 pump.fun (dentro do limite total de 3).\nSaída: stop −12%; a partir de +25% vende 12% abaixo do topo; sai em 30 min se não decolar.\nPara de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Moeda nova pode virar golpe mesmo passando nos filtros. Use pouco.",keyboard())
   except Exception as exc:send(chat,"⛔ Não consegui ligar o sniper: "+str(exc)[:250],keyboard())
   return
  if action=="snipe_off":

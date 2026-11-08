@@ -60,6 +60,13 @@ class SniperFilterTests(unittest.TestCase):
         self.assertIn("compra fraca", e.sniper_reasons(weak))
 
 
+class DailyLimitTests(unittest.TestCase):
+    def test_fixed_30_usd(self):
+        import live_trade_state as st
+        self.assertEqual(st._loss_limit({"max_daily_loss_usd": 11.46}), 30.0)
+        self.assertEqual(st.set_daily_loss_limit(500), 30.0)
+
+
 class SyncTests(unittest.TestCase):
     def test_drops_positions_sold_by_hand(self):
         positions = {"A": {"symbol": "AAA", "token_amount_raw": "1000"},

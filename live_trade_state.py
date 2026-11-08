@@ -7,6 +7,8 @@ _LOCK = threading.RLock()
 MAX_POSITIONS = 3
 ORDER_USD = 10.0
 MAX_DAILY_LOSS_USD = 3.0
+# Fixed daily loss limit for spot/sniper trading (owner choice); env overrides.
+DAILY_LOSS_LIMIT_USD = float(os.getenv("DAILY_LOSS_LIMIT_USD", "30"))
 
 def _path():
     wallet = os.environ.get("BOT_WALLET_FILE", "")
@@ -284,10 +286,14 @@ def start():
         return status()
 
 def _loss_limit(state):
-    return float(state.get("max_daily_loss_usd") or MAX_DAILY_LOSS_USD)
+    return DAILY_LOSS_LIMIT_USD
 
 def set_daily_loss_limit(usd):
-    """Scale the daily loss limit with account size (set once per UTC day)."""
+    """The daily loss limit is a fixed USD amount (DAILY_LOSS_LIMIT_USD)."""
+    return DAILY_LOSS_LIMIT_USD
+
+def _scaled_daily_loss_limit(usd):
+    """Old behaviour (limit scaled with account size); kept for reference."""
     with _LOCK:
         state = _load()
         today = datetime.now(timezone.utc).date().isoformat()

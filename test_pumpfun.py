@@ -66,12 +66,12 @@ class PumpfunTradingTests(LiveEngineTests):
         live_engine.start()
         self.assertIsNone(pumpfun.cycle(self.send, "1"))
 
-    def test_real_buy_15pct_marked_pumpfun(self):
+    def test_real_buy_12pct_marked_pumpfun(self):
         live_engine.start(); state.set_flag("pumpfun_enabled", True); self.side = "buy"
         result = pumpfun.cycle(self.send, "1")
         self.assertEqual(result["status"], "settled_buy")
         pos = state._load()["positions"][MINT]
-        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 30.0))
+        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 24.0))
         self.assertIn("PUMP.FUN COMPROU PEPE2", self.sent[-1])
         self.assertIn("Stop -12%", self.sent[-1])
 
@@ -79,7 +79,7 @@ class PumpfunTradingTests(LiveEngineTests):
         sim_engine.set_enabled(True)
         self.assertEqual(sim_engine.pumpfun_cycle(self.send, "1"), 1)
         pos = list(sim_engine._load()["positions"].values())[0]
-        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 15.0))
+        self.assertEqual((pos["mode"], pos["cost_usd"]), ("pumpfun", 12.0))
         self.assertEqual(state.status()["positions"], 0)
 
 

@@ -491,7 +491,7 @@ def exit_cycle(send, chat):
 # ---------------------------------------------------------------- sniper mode
 # Brand-new tokens (< 60 min) with strong buying right now. Very high risk:
 # most new tokens go to zero; smaller size, wider stop, time stop.
-SNIPER_FRACTION = float(os.getenv("SNIPER_FRACTION", "0.15"))
+SNIPER_FRACTION = float(os.getenv("SNIPER_FRACTION", "0.12"))
 SNIPER_MAX_POSITIONS = 2
 SNIPER_MAX_AGE_MINUTES = 60
 SNIPER_MIN_LIQUIDITY = 15000
