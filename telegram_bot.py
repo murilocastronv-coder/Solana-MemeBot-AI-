@@ -63,6 +63,8 @@ def keyboard():
   [{"text":"📊 Status Lançamento","callback_data":"launch_status"}],
   [{"text":"👥 Copy SIM","callback_data":"copy_sim"},{"text":"👥 Copy REAL","callback_data":"copy_real"}],
   [{"text":"⏹️ Copy OFF","callback_data":"copy_off"},{"text":"📊 Status Copy","callback_data":"copy_status"}],
+  [{"text":"📈 Volume SIM","callback_data":"vol_sim"},{"text":"📈 Volume REAL","callback_data":"vol_real"}],
+  [{"text":"⏹️ Volume OFF","callback_data":"vol_off"},{"text":"📊 Status Volume","callback_data":"vol_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def leverage_keyboard():
@@ -225,6 +227,18 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
+ if action in ("vol_sim","vol_real","vol_off","vol_status","/volume"):
+  import sniper_bot as sb
+  try:
+   if action=="vol_sim":sb.set_mode(True,False);pre="🧪 Sniper de volume (5–25 min) em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
+   elif action=="vol_real":
+    live_engine.start();sb.set_mode(True,True)
+    pre="📈 SNIPER DE VOLUME COM DINHEIRO REAL LIGADO — moedas do pump.fun com 5 a 25 min, mais compradores que vendedores, volume ≥ US$ "+format(sb.MIN_VOLUME_5M/1000,".0f")+" mil em 5 min, anti-golpe e teste de venda. US$ "+format(sb.ORDER_USD,".0f")+" por compra, máx. "+str(sb.MAX_POSITIONS)+". Stop −12%, stop móvel após +25%, sai em 30 min. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Moeda nova pode virar golpe.\n\n"
+   elif action=="vol_off":sb.set_mode(False);pre="⏹️ Sniper de volume desligado. Posições abertas continuam com stop até vender.\n\n"
+   else:pre=""
+   send(chat,pre+sb.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Sniper de volume: "+str(exc)[:200]+"\nNenhuma ordem foi enviada.",keyboard())
+  return
  if action in ("copy_sim","copy_real","copy_off","copy_status","/copy","/seguir","/deixar"):
   import copy_trader as ct
   try:
@@ -382,6 +396,20 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
+def volume_loop():
+ """Volume sniper (5-25 min tokens): one pass every 20 s."""
+ while True:
+  time.sleep(20)
+  try:
+   import sniper_bot
+   chat=active_chat()
+   if not chat:continue
+   for c in sniper_bot.exit_cycle():
+    send(chat,"🧪 VOLUME SIM "+("💰 LUCRO" if c["pnl_usd"]>0 else "🔻 PREJUÍZO")+" — "+str(c["symbol"])+": "+format(c["pnl_usd"],"+.2f")+" USD ("+c["reason"]+")")
+   if sniper_bot.enabled():
+    for o in sniper_bot.buy_cycle(None,send,chat):
+     if not o.get("real"):send(chat,"🧪 VOLUME SIM 🟢 comprou "+o["symbol"]+" · US$ "+format(o["cost_usd"],".2f")+"\n"+o["mint"])
+  except Exception as exc:logging.warning("volume sniper cycle failed: %s",type(exc).__name__)
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -422,6 +450,7 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
+ threading.Thread(target=volume_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  try:
   import launch_sniper
