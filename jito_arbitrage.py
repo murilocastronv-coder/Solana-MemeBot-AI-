@@ -2,8 +2,9 @@
 
 The strategy only trades against public pool prices. It never reads pending
 user transactions and never constructs sandwich/front-running transactions.
-Dry-run is the default. Live execution requires two dedicated switches:
-MEV_AUTOTRADE_ENABLED=true and MEV_LIVE_ENABLED=true.
+Live permission is on by default (MEV_AUTOTRADE_ENABLED / MEV_LIVE_ENABLED
+can be set to "false" to block it). Real bundles are still only sent after the
+owner arms real mode in Telegram and every preflight check passes.
 """
 import base64
 import json
@@ -319,11 +320,9 @@ def _simulate_bundle(transactions):
 def _live_enabled():
     try:
         import live_trade_state
-        armed = live_trade_state.flag("mev_real_armed")
+        return live_trade_state.mev_live_allowed() and live_trade_state.flag("mev_real_armed")
     except Exception:
-        armed = False
-    return (os.getenv("MEV_AUTOTRADE_ENABLED") == "true" and
-            os.getenv("MEV_LIVE_ENABLED") == "true" and armed)
+        return False
 
 
 def _preflight(signer, amount, tip_lamports, first, second):
@@ -482,7 +481,7 @@ def try_arbitrage(mint, quote_only=False, buy_dexes=None, sell_dexes=None):
 def scan_cycle(assessments, force=False, quote_only=False):
     """Use the read-only token scanner; live submits require MEV ON in Telegram."""
     import live_trade_state
-    if not force and (os.getenv("MEV_AUTOTRADE_ENABLED") != "true" or
+    if not force and (not live_trade_state.mev_autotrade_allowed() or
                       not live_trade_state.flag("mev_enabled")):
         return []
     if _live_enabled() and not quote_only:

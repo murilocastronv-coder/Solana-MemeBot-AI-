@@ -95,12 +95,10 @@ class TelegramBTCTests(unittest.TestCase):
                  patch.object(t, "request_api", return_value={}), \
                  patch("btc_perps.fetch_price", return_value=65000.0):
                 cb = lambda a: t.handle({"callback_query": {"id": "1", "data": a, "message": {"chat": {"id": 5, "type": "private"}}}})
-                cb("lev")
-                self.assertEqual([x["text"] for x in out[-1][1][0]], ["2x", "3x", "5x", "10x", "20x"])
-                cb("lev_10"); self.assertIn("10x", out[-1][0])
-                cb("btc_on"); self.assertIn("LIGADO — 10x", out[-1][0])
-                cb("btc_status"); self.assertIn("Alavancagem: 10x", out[-1][0])
-                cb("history"); self.assertIn("BTC ALAVANCADO", out[-1][0])
+                # Old BTC/Perps controls were retired in favour of the MEV menu.
+                for action in ("lev", "lev_10", "btc_on", "btc_status"):
+                    cb(action)
+                    self.assertIn("desativados", out[-1][0])
                 labels = [b["text"] for row in t.keyboard() for b in row]
                 self.assertFalse(any("Sniper" in l or "Pump" in l for l in labels))
 

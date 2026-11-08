@@ -206,8 +206,8 @@ class LiveDcaTests(unittest.TestCase):
         with patch.object(t, "send", side_effect=lambda c, x, k=None: out.append(x)), \
              patch.object(t, "request_api", return_value={}), patch("btc_perps.real_equity", return_value=150.0):
             t.handle({"callback_query": {"id": "1", "data": "strat_dip", "message": {"chat": {"id": 5, "type": "private"}}}})
-        self.assertEqual(b._load()["mode"], "sim")
-        self.assertIn("MODO SIMULAÇÃO", out[-1])
+        # BTC strategies are retired: the button only explains that.
+        self.assertIn("desativados", out[-1])
 
 
 if __name__ == "__main__":

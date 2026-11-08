@@ -98,6 +98,16 @@ def flag(name):
     with _LOCK:
         return bool(_load().get(name, False))
 
+def _env_on(name):
+    """MEV switches default to ON; set the variable to "false" to turn it off."""
+    return os.getenv(name, "true").strip().lower() != "false"
+
+def mev_autotrade_allowed():
+    return _env_on("MEV_AUTOTRADE_ENABLED")
+
+def mev_live_allowed():
+    return mev_autotrade_allowed() and _env_on("MEV_LIVE_ENABLED")
+
 def mev_config():
     """Persisted settings for the Telegram MEV controls."""
     defaults = {"input_lamports": 10_000_000, "min_profit_bps": 10, "jito_tip_lamports": 1_000}

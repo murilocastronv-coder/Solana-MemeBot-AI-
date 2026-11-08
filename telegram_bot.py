@@ -77,8 +77,8 @@ def mev_status_text():
   cfg=trade_state.mev_config();enabled=trade_state.flag("mev_enabled");armed=trade_state.flag("mev_real_armed");wallet=get_address()
   _,guard_reason,daily_count,daily_pnl=trade_state.mev_daily_guard()
   return ("📊 STATUS MEV — Solana/Jito\n"+"Busca automática: "+("LIGADA" if enabled else "DESLIGADA")+"\n"+
-   "Execução: "+("REAL armada" if armed and os.getenv("MEV_LIVE_ENABLED")=="true" else "SIMULAÇÃO / cotação")+"\n"+
-   "Permissão real no Render: "+("ATIVADA" if os.getenv("MEV_LIVE_ENABLED")=="true" else "DESATIVADA")+"\n"+
+   "Execução: "+("REAL armada" if armed and trade_state.mev_live_allowed() else "SIMULAÇÃO / cotação")+"\n"+
+   "Permissão real no Render: "+("ATIVADA" if trade_state.mev_live_allowed() else "DESATIVADA")+"\n"+
    "Carteira: "+(wallet or "não configurada")+"\n"+"Busca: 30s | até 10 moedas por ciclo\n"+"Entrada: "+format(cfg["input_lamports"]/1e9,".4f")+" SOL | lucro mínimo: "+format(cfg["min_profit_bps"]/100,".2f")+"%\n"+
    "Gorjeta Jito: "+format(cfg["jito_tip_lamports"]/1e9,".6f")+" SOL\n"+
    "Limite: 30 bundles/dia; pausa em -0,01 SOL. Hoje: "+str(daily_count)+" bundles / P&L "+format(daily_pnl/1e9,"+.8f")+" SOL\n"+
@@ -316,7 +316,7 @@ def handle(update):
  elif action=="mev_mode_sim":
   trade_state.set_flag("mev_real_armed",False);send(chat,"🧪 Simulação selecionada; não envia bundles.",keyboard());return
  elif action=="mev_mode_real":
-  if os.getenv("MEV_AUTOTRADE_ENABLED")!="true" or os.getenv("MEV_LIVE_ENABLED")!="true":
+  if not trade_state.mev_live_allowed():
    send(chat,"🔒 Modo real bloqueado pelas permissões do Render. O botão não habilita transações.",keyboard());return
   trade_state.set_flag("mev_real_armed",True);send(chat,"⚠️ Modo real armado; Jito ainda exige validação de rota, lucro, saldo e segurança.",keyboard());return
  elif action=="mev_scan":
@@ -589,7 +589,7 @@ def loop():
       except Exception as exc:
        logging.warning("MEV Telegram notification deferred type=%s",type(exc).__name__)
     except Exception as exc:logging.warning("MEV bundle reconciliation failed type=%s",type(exc).__name__)
-   if active_chat() and os.getenv("MEV_AUTOTRADE_ENABLED")=="true" and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
+   if active_chat() and trade_state.mev_autotrade_allowed() and trade_state.flag("mev_enabled") and time.monotonic()>=next_scan:
     next_scan=time.monotonic()+max(30,INTERVAL)
     try:
      from bot import assess_pair

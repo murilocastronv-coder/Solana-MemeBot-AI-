@@ -8,8 +8,8 @@ O fluxo usa `GET /swap/v2/build` do Jupiter para obter instruções ajustáveis 
 
 1. Confirme que `BOT_WALLET_FILE` aponta para a carteira já criada e para um disco persistente do Render. Configure `BOT_WALLET_ENCRYPTION_PASSPHRASE` e `JUPITER_API_KEY` como secrets do Render. A carteira usada é a mesma do `bot_wallet_service.py`; nenhuma chave privada é gravada no GitHub ou enviada ao Telegram.
 2. Configure um RPC Solana dedicado em `SOLANA_RPC_URL`. O arquivo de estado `mev_pending_bundle.json` fica ao lado do arquivo cifrado da carteira. Se preferir, defina `MEV_PENDING_FILE` para outro caminho absoluto no mesmo disco persistente.
-3. Ative primeiro apenas a varredura: `MEV_AUTOTRADE_ENABLED=true`. O módulo continua em modo de cotação/simulação enquanto `MEV_LIVE_ENABLED` permanecer desligada.
-4. O envio real exige `MEV_AUTOTRADE_ENABLED=true` e `MEV_LIVE_ENABLED=true`. O pré-check específico do MEV exige proprietário privado cadastrado, nenhuma ordem spot pendente, carteira válida, saldo SOL para a entrada e reservas de taxa/rent, e RPC/Jupiter configurados. Ele não ativa o executor spot separado do projeto.
+3. A permissão de dinheiro real vem **ligada por padrão** (`MEV_AUTOTRADE_ENABLED` e `MEV_LIVE_ENABLED` não precisam mais ser configuradas). Para bloquear, defina qualquer uma delas como `false` no Render.
+4. No Telegram: **⚡ MEV ON** e depois armar o **modo real**. Só então bundles reais são enviados. Para voltar à simulação, escolha o modo simulação ou **⏹️ MEV OFF**. O pré-check específico do MEV exige proprietário privado cadastrado, nenhuma ordem spot pendente, carteira válida, saldo SOL para a entrada e reservas de taxa/rent, e RPC/Jupiter configurados. Ele não ativa o executor spot separado do projeto.
 
 ## Limites iniciais
 
@@ -21,4 +21,4 @@ O fluxo usa `GET /swap/v2/build` do Jupiter para obter instruções ajustáveis 
 
 O bot estima o lucro pelo valor mínimo de saída da segunda perna, desconta a gorjeta e uma reserva para taxas, e pede simulação do bundle antes de enviá-lo. Um bundle aceito não significa que pousou na blockchain. O identificador fica salvo para reconciliação; uma submissão incerta bloqueia novos envios e não é reenviada automaticamente.
 
-Arbitragem não garante lucro: cotações mudam, bundles podem não pousar, taxas e gorjetas podem superar o spread e a verificação de autoridade do mint não certifica o token ou a liquidez como seguros. O padrão de execução permanece desligado até que as três variáveis de envio real sejam configuradas deliberadamente.
+Arbitragem não garante lucro: cotações mudam, bundles podem não pousar, taxas e gorjetas podem superar o spread e a verificação de autoridade do mint não certifica o token ou a liquidez como seguros. O envio real só acontece depois de armar o modo real no Telegram.
