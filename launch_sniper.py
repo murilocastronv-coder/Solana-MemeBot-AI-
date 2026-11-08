@@ -8,7 +8,8 @@ How it works
   socials, and creators who launched several tokens in the last hour are skipped.
   Pump.fun itself does not let the creator mint more or freeze holders.
 - Buys LAUNCH_FRACTION of the account through the normal live engine (Jupiter),
-  then watches the price every ~2.5 s and sells when: it falls 8% below its best
+  then watches the price every ~2.5 s and sells AS SOON AS it is in profit after
+  fees (+1%), or when: it falls 8% below its best
   value (near the peak if in profit), it did not rise +5% in the first 15 s,
   it hits the -20% stop, or LAUNCH_HOLD_SECONDS is over.
 
@@ -38,6 +39,10 @@ LAUNCH_HOLD_SECONDS = int(os.getenv("LAUNCH_HOLD_SECONDS", "60"))
 LAUNCH_STOP = float(os.getenv("LAUNCH_STOP", "0.20"))          # sell at -20%
 LAUNCH_TRAIL_ARM = float(os.getenv("LAUNCH_TRAIL_ARM", "0.15"))  # from +15% ...
 LAUNCH_TRAIL_DROP = float(os.getenv("LAUNCH_TRAIL_DROP", "0.08"))  # sell 8% below the best value (also before profit)
+# Take profit as soon as the executable sell value beats the cost by this much.
+# cost_usd already includes the buy fees and the Jupiter sell quote includes the
+# sell fees/price impact; the margin covers the network fee and a quote moving.
+LAUNCH_TAKE_PROFIT = float(os.getenv("LAUNCH_TAKE_PROFIT", "0.01"))
 LAUNCH_NO_MOVE_SECONDS = int(os.getenv("LAUNCH_NO_MOVE_SECONDS", "15"))  # if it did not go up fast...
 LAUNCH_MIN_MOVE = float(os.getenv("LAUNCH_MIN_MOVE", "0.05"))           # ...(at least +5%), sell
 LAUNCH_MAX_AGE_SECONDS = 8      # skip a launch we saw too late
@@ -153,6 +158,8 @@ def exit_decision(ratio, peak, held_seconds):
     """Return a sell reason or None. ratio/peak are value/cost."""
     if ratio <= 1 - LAUNCH_STOP:
         return "stop_loss"
+    if ratio >= 1 + LAUNCH_TAKE_PROFIT:
+        return "launch_profit"
     if ratio <= peak * (1 - LAUNCH_TRAIL_DROP):
         # started falling: near the peak if it was in profit, otherwise cut early
         return "launch_peak" if peak >= 1 + LAUNCH_TRAIL_ARM else "launch_drop"

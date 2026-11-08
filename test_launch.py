@@ -74,14 +74,15 @@ class ExitTests(unittest.TestCase):
         d = ls.exit_decision
         self.assertEqual(d(0.79, 0.98, 3), "stop_loss")
         self.assertEqual(d(0.89, 0.98, 3), "launch_drop")       # started falling
-        self.assertEqual(d(1.30, 1.42, 10), "launch_peak")      # 8% below a +42% peak
-        self.assertEqual(d(1.02, 1.03, 16), "launch_flat")      # did not go up fast
-        self.assertIsNone(d(1.10, 1.12, 16))                    # moving up: hold
-        self.assertEqual(d(1.10, 1.12, 60), "launch_time")
+        self.assertEqual(d(1.011, 1.011, 2), "launch_profit")   # profit after fees: sell now
+        self.assertEqual(d(1.30, 1.42, 10), "launch_profit")
+        self.assertEqual(d(1.005, 1.006, 16), "launch_flat")    # did not go up fast
+        self.assertIsNone(d(1.005, 1.006, 5))                   # tiny gain, still early: hold
+        self.assertEqual(d(1.005, 1.006, 60), "launch_flat")
 
 
 class FlowTests(unittest.TestCase):
-    def test_buy_then_sell_when_flat(self):
+    def _flow(self, value):
         ls._last_buy = 0.0
         event = {"name": "Pepe", "symbol": "PEPE", "uri": "u", "creator": "C9", "mint": "M1", "seen_at": time.time()}
         sold, bought = [], []
@@ -94,13 +95,19 @@ class FlowTests(unittest.TestCase):
              patch.object(ls.engine, "get_address", return_value="W"), \
              patch.object(ls.engine, "_execute_buy", side_effect=lambda *a: bought.append(a[-2:]) or {"status": "settled_buy"}), \
              patch.object(ls.state, "_load", return_value={"positions": pos}), \
-             patch("live_exit_monitor.quote_value_usd", return_value=8.1), \
+             patch("live_exit_monitor.quote_value_usd", return_value=value), \
              patch.object(ls.engine, "sell_now", side_effect=lambda m, r, s, c: sold.append(r) or "sold"), \
              patch.object(ls.time, "sleep", return_value=None), \
              patch.object(ls.time, "time", side_effect=lambda: 1_000_000 + next(clock)):
             ls._handle(event, lambda *a: None, "1")
         self.assertEqual(bought, [(ls.LAUNCH_FRACTION, "launch")])
-        self.assertEqual(sold, ["launch_flat"])
+        return sold
+
+    def test_sells_immediately_in_profit(self):
+        self.assertEqual(self._flow(8.1), ["launch_profit"])
+
+    def test_sells_when_flat(self):
+        self.assertEqual(self._flow(8.04), ["launch_flat"])
 
 
 if __name__ == "__main__":
