@@ -170,7 +170,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
              "💵 Valor: US$ " + format(order_usd, ".2f") + " (" + format(result["input_amount_raw"] / 1e9, ".4f") + " SOL)\n"
              + EXIT_TEXT[mode] + "\n"
              "🛡️ Anti-golpe OK\n"
-             "📦 Posições abertas: " + str(n) + "/3\n"
+             "📦 Posições abertas: " + str(n) + "/" + str(state.MAX_POSITIONS) + "\n"
              "📄 " + mint + "\n"
              "🔗 https://solscan.io/tx/" + settled["signature"])
     else:
