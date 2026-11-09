@@ -51,7 +51,7 @@ MIN_WALLET_USD = _env("COPY_MIN_WALLET_USD", 150)
 BALANCE_MAX_AGE = 600
 # Only copy buys where the wallet put at least this much in the coin (and only follow
 # wallets whose average buy is at least this much).
-MIN_BUY_USD = _env("COPY_MIN_BUY_USD", 100)
+MIN_BUY_USD = _env("COPY_MIN_BUY_USD", 40)
 # Only follow wallets that have been trading for at least this many days.
 MIN_WALLET_DAYS = _env("COPY_MIN_WALLET_DAYS", 7)   # created at least 7 days ago
 # Only follow wallets that trade (almost) every day: active in >= this many of the last 7 days.
