@@ -558,12 +558,29 @@ def recover_real_orphans(force=False):
         return []
     _RECOVER["at"] = time.time()
     import live_trade_state as st
+    msgs = []
+    # coins the bot wallet really holds but no record knows about: register them so they can be sold
+    try:
+        import live_engine
+        import wallet_holdings
+        owner = live_engine.get_address()
+        held = wallet_holdings.raw_balances(owner) if owner else {}
+        worth = wallet_holdings.coins_held(owner, fresh=True) if owner else {}
+    except Exception:
+        held, worth = {}, {}
+    live = st._load()["positions"]
+    with _LOCK:
+        known_copy = set(_load()["positions"])
+    for mint, usd in worth.items():
+        if mint not in live and mint not in known_copy and held.get(mint):
+            st.adopt_position(mint, held[mint], usd, mint[:6], mode="copy")
+            msgs.append("📥 " + mint[:6] + "… (US$ " + format(usd, ".0f") + ") estava na carteira sem registro: "
+                        "registrei para o bot poder vender.")
     live = st._load()["positions"]
     with _LOCK:
         d = _load()
         known = set(d["positions"])
         wallets = list(d["wallets"])
-    msgs = []
     for mint, lp in live.items():
         if mint in known or lp.get("mode") == "clone" or lp.get("copy_recovered"):
             continue

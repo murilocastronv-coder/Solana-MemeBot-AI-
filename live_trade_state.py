@@ -343,6 +343,19 @@ def daily_loss_limit():
     with _LOCK:
         return _loss_limit(_load())
 
+def adopt_position(mint, amount_raw, cost_usd, symbol, mode="copy", **fields):
+    """Register a coin the wallet holds but the engine lost track of, so it can be sold by the bot."""
+    import time as _time
+    with _LOCK:
+        state = _load()
+        if mint in state["positions"]:
+            return False
+        state["positions"][mint] = {"token_amount_raw": int(amount_raw), "cost_usd": round(float(cost_usd), 4),
+                                    "symbol": str(symbol)[:20], "mode": mode, "opened_at": _time.time(),
+                                    "adopted": True, **fields}
+        _save(state)
+        return True
+
 def set_position_fields(mint, **fields):
     """Attach extra settings to an open position (e.g. a cloned wallet's own TP/SL)."""
     with _LOCK:

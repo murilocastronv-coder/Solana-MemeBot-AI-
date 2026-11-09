@@ -333,3 +333,25 @@ class RealRecoveryTests(unittest.TestCase):
         self.assertTrue(pos["pending_buy"])
         self.assertEqual(c.sync_real_closed(), [])          # not dropped while being confirmed
         self.assertIn(MINT, c._load()["positions"])
+
+
+class OnChainRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start(); self.addCleanup(p.stop)
+        c._RECOVER["at"] = 0.0
+
+    def test_coin_only_on_chain_is_registered_and_tied_to_wallet(self):
+        import live_trade_state as st
+        c.follow(WALLET)
+        with patch("live_engine.get_address", return_value="BOT"), \
+                patch("wallet_holdings.raw_balances", return_value={MINT: 12345}), \
+                patch("wallet_holdings.coins_held", return_value={MINT: 49.16}), \
+                patch.object(c, "wallet_token_balance", side_effect=lambda w, m: 7 if w == WALLET else 0):
+            msgs = c.recover_real_orphans(force=True)
+        self.assertTrue(any("registrei" in m for m in msgs))
+        self.assertTrue(any("Recuperei" in m for m in msgs))
+        pos = st._load()["positions"][MINT]
+        self.assertEqual((pos["token_amount_raw"], pos["mode"], pos["copy_wallet"]), (12345, "copy", WALLET))
+        self.assertEqual(c._load()["positions"][MINT]["wallet"], WALLET)
