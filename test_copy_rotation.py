@@ -8,6 +8,7 @@ from solders.keypair import Keypair
 import copy_trader as c
 
 REAL_WALLET_USD = c.wallet_usd
+REAL_SOL_USD = c._sol_usd
 
 
 def setUpModule():
@@ -244,3 +245,27 @@ class NoticeTests(unittest.TestCase):
 class OrderSizeTests(unittest.TestCase):
     def test_order_size_per_copy(self):
         self.assertEqual(c.ORDER_USD, 32)
+
+
+class PanelSpeedTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_wallet_list_never_touches_the_network(self):
+        w = cand()
+        c.auto_follow(w)
+        with patch.object(c, "_sol_usd", side_effect=AssertionError("network from a button")), \
+                patch("live_order_bridge.sol_usd_price", side_effect=AssertionError("network from a button")):
+            self.assertIn("CARTEIRAS COPIADAS", c.wallets_text())
+
+    def test_sol_price_is_cached(self):
+        c._SOL_PRICE.update(at=0.0, usd=None)
+        import copy_trader as real
+        with patch("live_order_bridge.sol_usd_price", return_value=150.0) as price:
+            for _ in range(5):
+                REAL_SOL_USD()
+        self.assertEqual(price.call_count, 1)
+        self.assertEqual(real.sol_usd_cached(), 150.0)
