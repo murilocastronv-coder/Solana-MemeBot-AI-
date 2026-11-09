@@ -88,8 +88,8 @@ O que a carteira usa para decidir entrar (sinais, informações, leitura própri
 blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simulação antes.
 
 ## Limites de ordens e regra dos 5 minutos
-- **No máximo 3 ordens abertas ao mesmo tempo**, somando copy trade e robô da estratégia
-  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 3 abertas, nada novo abre.
+- **No máximo 6 ordens abertas ao mesmo tempo**, somando copy trade e robô da estratégia
+  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 6 abertas, nada novo abre.
 - **Toda carteira seguida**, inclusive as de `/clonar` e `/seguir`, só tem compras copiadas se
   segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
   abre ordem. A compra mínima de US$ 40 vale para todas.
@@ -123,3 +123,9 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   1×2, 1,5×1, 2×1 e 3×1 ATR; com e sem filtro de volume). Escolhe a melhor nos primeiros 8 meses
   e confere nos últimos 4, que ela não viu. Só aplica no robô se der lucro também na conferência;
   senão avisa e não muda nada.
+- **Resultado dos últimos 14 dias:** a auditoria (ao iniciar, a cada 6 h, ao seguir uma carteira e
+  logo que a busca adiciona uma) lê até 300 transações e calcula o resultado da carteira nos
+  últimos 14 dias. Só copia se tiver lucro, ≥ 3 operações e acerto ≥ 50% nesse período
+  (`COPY_RESULT_DAYS`, `COPY_RESULT_MIN_TRADES`, `COPY_RESULT_MIN_WIN`, `COPY_RESULT_MIN_USD`).
+  Carteira ainda não auditada não é copiada; a que não passa é removida.
+

@@ -449,11 +449,12 @@ def wallet_discovery_loop():
     send(chat,"🗑️ Parei de copiar "+str(len(removed))+" carteira(s): saldo < US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+
      ", compras < US$ "+format(copy_trader.MIN_BUY_USD,".0f")+", idade < "+format(copy_trader.MIN_WALLET_DAYS,".0f")+
      " dias, sem operar quase todo dia ou fechando posições em menos de 5 min. A busca coloca outras no lugar.\n"+"\n".join("solscan.io/account/"+x for x in removed))
+   if added:run_async(audit_job,None,list(added))   # new wallets are copied only after the 14-day check
    if chat and added:
     total=sum(1 for w in copy_trader._load()["wallets"].values() if not w.get("paused"))
     text=("🆕 NOVA CARTEIRA PARA COPIAR" if len(added)==1 else "🆕 "+str(len(added))+" NOVAS CARTEIRAS PARA COPIAR")+\
      " — agora copiando "+str(total)+".\nSó as próximas compras serão copiadas; nenhuma posição antiga.\n\n"+\
-     "\n\n".join(copy_trader.wallet_card(x) for x in added)
+     "\n\n".join(copy_trader.wallet_card(x) for x in added)+"\n\n🔍 Auditando os últimos "+format(copy_trader.RESULT_DAYS,".0f")+" dias de cada uma: só copio se tiver bom resultado."
     for part in split_message(text):send(chat,part)
   except Exception as exc:
    logging.warning("wallet discovery failed: %s: %s",type(exc).__name__,str(exc)[:200])
@@ -467,10 +468,7 @@ def audit_job(chat=None,addresses=None):
    lines=[]
    for a in addresses:
     res=copy_trader.audit_wallet(a,rpc,copy_trader._sol_usd())
-    if res:
-     status,med,share,n=res
-     lines.append(("✅ Liberada para copiar: " if status=="ok" else "🗑️ REMOVIDA (fecha rápido demais): " if status=="fast" else "👀 Sem dados suficientes ainda: ")+
-      a[:6]+"…"+a[-4:]+" segura "+format(med/60,".1f")+" min (mediana), "+format(share*100,".0f")+"% das posições ≥ 5 min ("+str(n)+" medidas)")
+    if res:lines.append(copy_trader.audit_line(a,res))
    copy_trader.remove_fast_wallets()
    text="\n".join(lines)
   else:

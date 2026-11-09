@@ -1,4 +1,5 @@
 import os
+import time
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -159,7 +160,7 @@ class NewRulesTests(unittest.TestCase):
 
     def test_defaults_three_orders(self):
         import live_trade_state
-        self.assertEqual((c.MAX_POSITIONS, c.MAX_OPEN_TOTAL, live_trade_state.MAX_POSITIONS), (3, 3, 3))
+        self.assertEqual((c.MAX_POSITIONS, c.MAX_OPEN_TOTAL, live_trade_state.MAX_POSITIONS), (6, 6, 6))
 
     def test_cloned_fast_wallet_never_opens(self):
         c.set_mode(True)
@@ -178,7 +179,8 @@ class NewRulesTests(unittest.TestCase):
         c.set_mode(True)
         c.follow(W)
         d = c._load()
-        d["wallets"][W].update(clone=True, holds=[600, 700, 900])
+        d["wallets"][W].update(clone=True, holds=[600, 700, 900],
+                               audit={"at": time.time(), "pnl_recent": 50.0, "trades_recent": 5, "win_recent": 0.8})
         c._save(d)
         with patch.object(c, "new_signals", return_value=[("buy", "MINTX", 200.0)]), \
                 patch.object(c, "_open", return_value=None) as op:
@@ -188,12 +190,13 @@ class NewRulesTests(unittest.TestCase):
     def test_total_cap_counts_copy_and_robot(self):
         import clone_strategy as cs
         d = cs._load()
-        d["positions"] = {"A": {}, "B": {}}
+        d["positions"] = {"A": {}, "B": {}, "D": {}, "E": {}}
         cs._save(d)
         d = c._load()
         d["positions"]["C"] = {"wallet": W, "real": False}
+        d["positions"]["F"] = {"wallet": W, "real": False}
         c._save(d)
-        self.assertEqual(c.open_sim_total(), 3)
+        self.assertEqual(c.open_sim_total(), 6)
         c.follow(W)
         with patch.object(c, "safety_reason", return_value=""), patch.object(c, "_sol_usd", return_value=200.0), \
                 patch.object(c, "_order", return_value={"outAmount": "1000"}):
@@ -270,3 +273,69 @@ class AuditTests(unittest.TestCase):
                 "active_days_7": 7}
         with patch.object(c, "wallet_usd", return_value=1000.0), patch.object(c, "_sol_usd", return_value=200.0):
             self.assertFalse(c.auto_follow(cand))
+
+
+class RecentResultTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def rpc_for(self, owner, results, days_ago=3):
+        """Closed trades `days_ago` days ago; results = SOL received back per 1 SOL bought."""
+        txs, t = [], int(time.time()) - days_ago * 86400
+        for back in results:
+            m = str(Keypair().pubkey())
+            txs += [swap(m, 1000, -1.0, t, owner=owner), swap(m, -1000, back, t + 900, owner=owner)]
+            t += 3600
+        sigs = [{"signature": "s%d" % i, "err": None} for i in range(len(txs))][::-1]
+        by_sig = {"s%d" % i: x for i, x in enumerate(txs)}
+
+        def rpc(method, params):
+            if method == "getSignaturesForAddress":
+                return [] if "before" in params[1] else sigs
+            if method == "getTokenSupply":
+                return {"value": {"uiAmount": 1e9}}
+            return by_sig[params[0]]
+        return rpc
+
+    def audit(self, results, days_ago=3):
+        a = str(Keypair().pubkey())
+        c.follow(a)
+        c.audit_wallet(a, self.rpc_for(a, results, days_ago), 100.0)
+        return a, c._load()["wallets"][a]
+
+    def test_profitable_last_two_weeks_is_ok(self):
+        a, w = self.audit([1.5, 1.4, 0.9, 1.6])          # 3 wins, 1 loss, +US$ 140
+        self.assertEqual(w["audit"]["trades_recent"], 4)
+        self.assertAlmostEqual(w["audit"]["pnl_recent"], 140.0, places=0)
+        self.assertEqual(c.result_status(w), "ok")
+        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 4)))
+
+    def test_losing_or_old_results_are_bad_and_removed(self):
+        a, w = self.audit([0.5, 0.6, 1.2, 0.7])          # losing
+        self.assertEqual(c.result_status(w), "bad")
+        b, w2 = self.audit([1.5, 1.5, 1.5], days_ago=30)  # good, but more than 14 days ago
+        self.assertEqual(c.result_status(w2), "bad")
+        c.remove_fast_wallets()
+        left = c._load()["wallets"]
+        self.assertNotIn(a, left)
+        self.assertNotIn(b, left)
+
+    def test_unaudited_or_stale_audit_is_unknown(self):
+        self.assertEqual(c.result_status({}), "unknown")
+        old = {"audit": {"at": time.time() - 3 * 86400, "pnl_recent": 50, "trades_recent": 5, "win_recent": 0.8}}
+        self.assertEqual(c.result_status(old), "unknown")
+
+    def test_copy_waits_for_audit(self):
+        c.set_mode(True)
+        c.follow(W)
+        d = c._load()
+        d["wallets"][W].update(holds=[600, 700, 900])
+        c._save(d)
+        with patch.object(c, "new_signals", return_value=[("buy", "MINTX", 200.0)]), \
+                patch.object(c, "_open") as op:
+            c.cycle()
+        op.assert_not_called()
+        self.assertIn("aguardando auditoria", c.status_text())
