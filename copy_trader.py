@@ -53,7 +53,7 @@ BALANCE_MAX_AGE = 600
 # wallets whose average buy is at least this much).
 MIN_BUY_USD = _env("COPY_MIN_BUY_USD", 100)
 # Only follow wallets that have been trading for at least this many days.
-MIN_WALLET_DAYS = _env("COPY_MIN_WALLET_DAYS", 30)
+MIN_WALLET_DAYS = _env("COPY_MIN_WALLET_DAYS", 49)   # 7 weeks
 # Only follow wallets that trade (almost) every day: active in >= this many of the last 7 days.
 MIN_ACTIVE_DAYS = int(_env("COPY_MIN_ACTIVE_DAYS", 6))
 _balance_cache = {}
