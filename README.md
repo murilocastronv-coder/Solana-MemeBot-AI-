@@ -125,7 +125,7 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   senão avisa e não muda nada.
 - **Resultado dos últimos 14 dias:** a auditoria (ao iniciar, a cada 6 h, ao seguir uma carteira e
   logo que a busca adiciona uma) lê até 300 transações e calcula o resultado da carteira nos
-  últimos 14 dias. Só copia se tiver lucro, ≥ 3 operações e acerto ≥ 50% nesse período
+  últimos 14 dias. Só copia se tiver lucro, ≥ 10 operações e acerto ≥ 50% nesse período
   (`COPY_RESULT_DAYS`, `COPY_RESULT_MIN_TRADES`, `COPY_RESULT_MIN_WIN`, `COPY_RESULT_MIN_USD`).
   Carteira ainda não auditada não é copiada; a que não passa é removida.
 

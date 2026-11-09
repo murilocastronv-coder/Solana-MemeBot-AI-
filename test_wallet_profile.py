@@ -180,7 +180,7 @@ class NewRulesTests(unittest.TestCase):
         c.follow(W)
         d = c._load()
         d["wallets"][W].update(clone=True, holds=[600, 700, 900],
-                               audit={"at": time.time(), "pnl_recent": 50.0, "trades_recent": 5, "win_recent": 0.8})
+                               audit={"at": time.time(), "pnl_recent": 50.0, "trades_recent": 12, "win_recent": 0.8})
         c._save(d)
         with patch.object(c, "new_signals", return_value=[("buy", "MINTX", 200.0)]), \
                 patch.object(c, "_open", return_value=None) as op:
@@ -307,11 +307,16 @@ class RecentResultTests(unittest.TestCase):
         return a, c._load()["wallets"][a]
 
     def test_profitable_last_two_weeks_is_ok(self):
-        a, w = self.audit([1.5, 1.4, 0.9, 1.6])          # 3 wins, 1 loss, +US$ 140
-        self.assertEqual(w["audit"]["trades_recent"], 4)
-        self.assertAlmostEqual(w["audit"]["pnl_recent"], 140.0, places=0)
+        a, w = self.audit([1.5, 1.4, 0.9, 1.6] * 3)      # 12 trades, 9 wins, +US$ 420
+        self.assertEqual(w["audit"]["trades_recent"], 12)
+        self.assertAlmostEqual(w["audit"]["pnl_recent"], 420.0, places=0)
         self.assertEqual(c.result_status(w), "ok")
-        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 4)))
+        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 12)))
+
+    def test_needs_ten_trades(self):
+        self.assertEqual(c.RESULT_MIN_TRADES, 10)
+        a, w = self.audit([1.5] * 9)                     # profitable, but only 9 trades
+        self.assertEqual(c.result_status(w), "bad")
 
     def test_losing_or_old_results_are_bad_and_removed(self):
         a, w = self.audit([0.5, 0.6, 1.2, 0.7])          # losing
