@@ -36,7 +36,8 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
-    if position.get("mode") == "copy" and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet":
+    if (position.get("mode") == "copy" and not position.get("copy_orphan")
+            and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet"):
         # Copy trade: no fixed TP/SL; copy_trader sells when the copied wallet sells.
         return {"action": "hold", "reason": "follow_wallet"}
     if position.get("mode") in ("copy", "clone"):

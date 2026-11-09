@@ -278,3 +278,58 @@ class OrphanTests(unittest.TestCase):
         self.assertEqual(c._load()["positions"], {})
         self.assertTrue(any("a carteira vendeu" in m for m in msgs))
 
+
+
+class RealRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start(); self.addCleanup(p.stop)
+        c._RECOVER["at"] = 0.0
+
+    def live(self, positions):
+        import live_trade_state as st
+        state = st._load()
+        state["positions"] = positions
+        st._save(state)
+
+    def test_lost_real_coin_is_tied_to_the_wallet_that_holds_it(self):
+        other = "So11111111111111111111111111111111111111112"
+        c.follow(WALLET)
+        self.live({MINT: {"symbol": "timmy", "mode": "normal", "opened_at": 1, "token_amount_raw": 5}})
+        with patch.object(c, "wallet_token_balance", side_effect=lambda w, m: 100 if w == WALLET else 0):
+            msgs = c.recover_real_orphans(force=True)
+        self.assertIn("Recuperei timmy", msgs[0])
+        self.assertEqual(c._load()["positions"][MINT]["wallet"], WALLET)
+        import live_trade_state as st
+        self.assertEqual(st._load()["positions"][MINT]["mode"], "copy")
+        self.assertEqual(c.recover_real_orphans(force=True), [])   # done once
+
+    def test_coin_without_known_wallet_gets_safety_exit(self):
+        import time as _t
+        import live_exit_monitor as m
+        import live_trade_state as st
+        self.live({MINT: {"symbol": "FLOAT", "mode": "copy", "opened_at": _t.time(), "token_amount_raw": 5}})
+        with patch.object(c, "wallet_token_balance", return_value=0):
+            msgs = c.recover_real_orphans(force=True)
+        self.assertIn("Saída de segurança", msgs[0])
+        pos = st._load()["positions"][MINT]
+        self.assertTrue(pos["copy_orphan"])
+        self.assertEqual(m.position_signal(pos, 10, 17.0)["action"], "sell")    # +70% >= target 50%
+        self.assertIn("saída de segurança", c.positions_text())
+
+    def test_pending_real_buy_is_remembered(self):
+        c.follow(WALLET)
+        self.live({})
+        with patch("live_engine.ready", return_value=True), \
+                patch("live_trade_state.can_open", return_value=(True, "Ready")), \
+                patch("live_engine.get_address", return_value="W"), \
+                patch("wallet_holdings.can_buy", return_value=(True, 0)), \
+                patch.object(c, "safety_reason", return_value=""), \
+                patch("live_engine._execute_buy", return_value={"status": "pending"}):
+            c.set_mode(True, real=True)
+            c._open(MINT, WALLET, lambda *a: None, "1")
+        pos = c._load()["positions"][MINT]
+        self.assertTrue(pos["pending_buy"])
+        self.assertEqual(c.sync_real_closed(), [])          # not dropped while being confirmed
+        self.assertIn(MINT, c._load()["positions"])
