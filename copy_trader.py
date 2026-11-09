@@ -49,6 +49,9 @@ REPLACE_MARGIN = _env("COPY_REPLACE_MARGIN", 1.5)
 # Only follow wallets holding at least this much (SOL balance in USD); remove them below it.
 MIN_WALLET_USD = _env("COPY_MIN_WALLET_USD", 150)
 BALANCE_MAX_AGE = 600
+# Only copy buys where the wallet put at least this much in the coin (and only follow
+# wallets whose average buy is at least this much).
+MIN_BUY_USD = _env("COPY_MIN_BUY_USD", 100)
 _balance_cache = {}
 # Only copy wallets that HOLD: we first watch each wallet's own buy->sell
 # round trips and copy it only if the median hold is at least this long.
@@ -148,7 +151,7 @@ def auto_follow(candidate):
         auto_count = sum(bool(w.get("auto_discovered")) for w in d["wallets"].values())
         if auto_count >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS:
             return False
-    if not has_min_balance(address):
+    if not big_enough_buyer(candidate) or not has_min_balance(address):
         return False
     with _LOCK:
         d = _load()
@@ -187,6 +190,19 @@ def wallet_usd(address, max_age=BALANCE_MAX_AGE):
     return usd
 
 
+def big_enough_buyer(stats):
+    """Average buy in the wallet's history >= MIN_BUY_USD (None/unknown counts as no)."""
+    if MIN_BUY_USD <= 0:
+        return True
+    lamports = stats.get("average_buy_lamports")
+    if lamports is None:
+        return False
+    try:
+        return int(lamports) / 1e9 * _sol_usd() >= MIN_BUY_USD
+    except Exception:
+        return False
+
+
 def has_min_balance(address):
     if MIN_WALLET_USD <= 0:
         return True
@@ -214,12 +230,15 @@ def prune_low_balance():
             if not w:
                 continue
             w["balance_usd"] = round(usd, 2)
-            if usd < MIN_WALLET_USD and a not in {p.get("wallet") for p in d["positions"].values()}:
+            st = w.get("stats") or {}
+            small = st.get("average_buy_lamports") is not None and not big_enough_buyer(st)
+            if (usd < MIN_WALLET_USD or small) and a not in {p.get("wallet") for p in d["positions"].values()}:
                 d["wallets"].pop(a)
                 removed.append(a)
             _save(d)
     for a in removed:
-        _event("removi " + a[:6] + "…: saldo abaixo de US$ " + format(MIN_WALLET_USD, ".0f"))
+        _event("removi " + a[:6] + "…: saldo abaixo de US$ " + format(MIN_WALLET_USD, ".0f") +
+               " ou compras menores que US$ " + format(MIN_BUY_USD, ".0f"))
     return removed
 
 
@@ -238,6 +257,7 @@ def _record_stats(w, candidate):
                   "win_rate": float(candidate.get("win_rate", 0.0)),
                   "realized_lamports": int(candidate.get("realized_lamports", 0)),
                   "average_hold_seconds": int(candidate.get("average_hold_seconds", 0)),
+                  "average_buy_lamports": candidate.get("average_buy_lamports"),
                   "updated_at": int(time.time())}
     w["score"] = score(candidate)
 
@@ -258,7 +278,7 @@ def replace_worst(candidate):
             or int(candidate.get("closed_trades", 0)) < MIN_ROUND_TRIPS
             or int(candidate.get("realized_lamports", 0)) <= 0):
         return False
-    if not has_min_balance(address):
+    if not big_enough_buyer(candidate) or not has_min_balance(address):
         return False
     with _LOCK:
         d = _load()
@@ -315,7 +335,8 @@ def wallets_text():
              "Ordenadas pela nota (lucro × acerto × experiência). Carteira sem resultado é trocada "
              "por outra com nota " + format(REPLACE_MARGIN, "g") + "× maior; com " + str(MIN_COPIES_TO_JUDGE) +
              " cópias no prejuízo, é pausada.",
-             "Saldo mínimo da carteira copiada: US$ " + format(MIN_WALLET_USD, ".0f") + " em SOL (abaixo disso é removida)."]
+             "Saldo mínimo da carteira copiada: US$ " + format(MIN_WALLET_USD, ".0f") + " em SOL (abaixo disso é removida).",
+             "Compra mínima: só copia quando a carteira coloca ≥ US$ " + format(MIN_BUY_USD, ".0f") + " na moeda."]
     for i, (addr, w) in enumerate(rows, 1):
         st = w.get("stats") or {}
         status, med = holder_status(w)
@@ -324,6 +345,8 @@ def wallets_text():
         if st:
             hist = (" · histórico " + format(st.get("realized_lamports", 0) / 1e9, "+.3f") + " SOL, acerto " +
                     format(st.get("win_rate", 0) * 100, ".0f") + "%, " + str(st.get("closed_trades", 0)) + " ops")
+            if st.get("average_buy_lamports") is not None:
+                hist += ", compra média " + format(int(st["average_buy_lamports"]) / 1e9, ".2f") + " SOL"
         bal = (" · saldo US$ " + format(w["balance_usd"], ".0f")) if w.get("balance_usd") is not None else ""
         lines.append(str(i) + ". " + icon + " nota " + format(w.get("score", 0.0), ".3f") + bal + hist +
                      " · segura " + format(med / 60, ".0f") + " min · cópias " + str(w.get("copies", 0)) +
@@ -359,6 +382,25 @@ def _sol_usd():
 
 def signal_from_tx(tx, wallet):
     """('buy'|'sell', mint) from the wallet's own balance changes, or None."""
+    parsed = _parse_tx(tx, wallet)
+    return parsed[:2] if parsed else None
+
+
+def buy_value_usd(tx, wallet):
+    """USD the wallet paid for the token in a buy transaction (SOL/WSOL + USDC), or None."""
+    parsed = _parse_tx(tx, wallet)
+    if not parsed or parsed[0] != "buy":
+        return None
+    _, _, sol_change, usdc_change = parsed
+    try:
+        price = _sol_usd()
+    except Exception:
+        return None
+    return max(0, -sol_change) / 1e9 * price + max(0, -usdc_change) / 1e6
+
+
+def _parse_tx(tx, wallet):
+    """(side, mint, SOL+WSOL change in lamports, USDC change in raw units) or None."""
     meta = (tx or {}).get("meta") or {}
     if meta.get("err") is not None:
         return None
@@ -382,10 +424,12 @@ def signal_from_tx(tx, wallet):
     if len(tokens) != 1:
         return None
     mint, change = next(iter(tokens.items()))
+    sol_change = sol_delta + deltas.get(SOL_MINT, 0)
+    usdc_change = deltas.get(USDC_MINT, 0)
     if change > 0 and quote_change < 0:
-        return "buy", mint
+        return "buy", mint, sol_change, usdc_change
     if change < 0 and quote_change > 0:
-        return "sell", mint
+        return "sell", mint, sol_change, usdc_change
     return None
 
 
@@ -411,7 +455,7 @@ def new_signals(wallet, info):
                                            "commitment": "confirmed"}])
         signal = signal_from_tx(tx, wallet)
         if signal:
-            out.append(signal)
+            out.append(signal + (buy_value_usd(tx, wallet) if signal[0] == "buy" else None,))
     return out
 
 
@@ -647,7 +691,7 @@ def cycle(send=None, chat=None):
             if wallet in d["wallets"]:
                 d["wallets"][wallet]["last_sig"] = info.get("last_sig")
                 _save(d)
-        for side, mint in signals:
+        for side, mint, paid_usd in signals:
             _track_hold(wallet, side, mint, time.time())
             if side == "sell":
                 with _LOCK:
@@ -659,6 +703,11 @@ def cycle(send=None, chat=None):
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
                 if status != "ok":
                     _event(("observando " if status == "watching" else "não copia (vende rápido) ") + wallet[:6] + "…")
+                    continue
+                if MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
+                    _event("ignorou compra pequena de " + wallet[:6] + "…: " +
+                           ("valor desconhecido" if paid_usd is None else "US$ " + format(paid_usd, ".0f")) +
+                           " < US$ " + format(MIN_BUY_USD, ".0f"))
                     continue
                 m = _open(mint, wallet, send, chat)
                 if m:

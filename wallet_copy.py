@@ -103,6 +103,7 @@ def process_confirmed_block(state, block, slot=None):
                     stats["closed_trades"] += 1
                     stats["wins"] += int(proceeds > allocated_cost)
                     stats["realized_lamports"] += proceeds - allocated_cost
+                    stats["cost_lamports_closed"] = int(stats.get("cost_lamports_closed", 0)) + allocated_cost
                     stats["total_hold_seconds"] += hold
                     stats["long_holds"] += int(hold >= MIN_HOLD_SECONDS)
                     stats.setdefault("hold_samples", []).append(hold)
@@ -148,6 +149,7 @@ def best_wallets(state=None, limit=10):
         rows.append({"wallet": owner, "closed_trades": trades,
             "win_rate": float(stats["wins"]) / trades,
             "realized_lamports": int(stats["realized_lamports"]),
+            "average_buy_lamports": int(stats.get("cost_lamports_closed", 0) / trades),
             "average_hold_seconds": int(stats["total_hold_seconds"] / trades),
             "long_holds": int(stats.get("long_holds", 0)),
             "hold_samples": list(stats.get("hold_samples", []))})
