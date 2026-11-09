@@ -474,10 +474,7 @@ def wallets_text():
             if st.get("average_buy_lamports") is not None:
                 hist += ", compra média " + format(int(st["average_buy_lamports"]) / 1e9, ".2f") + " SOL"
         bal = (" · saldo US$ " + format(w["balance_usd"], ".0f")) if w.get("balance_usd") is not None else ""
-        try:
-            typical = typical_buy_usd(w)
-        except Exception:
-            typical = None
+        typical = typical_buy_usd(w, offline=True)   # panel: never wait on the network
         if typical:
             bal += " · costuma colocar US$ " + format(typical, ".0f")
         if w.get("clone"):
@@ -512,9 +509,29 @@ def _order(input_mint, output_mint, amount):
     return order(input_mint, output_mint, int(amount))
 
 
+_SOL_PRICE = {"at": 0.0, "usd": None}
+
+
 def _sol_usd():
+    """SOL price in USD, cached 60 s (one network call, not one per wallet / per tap).
+    If the price service fails, the last price from the past hour is used."""
+    now = time.monotonic()
+    if _SOL_PRICE["usd"] and now - _SOL_PRICE["at"] < 60:
+        return _SOL_PRICE["usd"]
     import live_order_bridge
-    return float(live_order_bridge.sol_usd_price())
+    try:
+        usd = float(live_order_bridge.sol_usd_price())
+    except Exception:
+        if _SOL_PRICE["usd"] and now - _SOL_PRICE["at"] < 3600:
+            return _SOL_PRICE["usd"]
+        raise
+    _SOL_PRICE.update(at=now, usd=usd)
+    return usd
+
+
+def sol_usd_cached():
+    """Last known SOL price without any network call (None if never fetched)."""
+    return _SOL_PRICE["usd"]
 
 
 def signal_from_tx(tx, wallet):
@@ -931,7 +948,7 @@ def audit_all(rpc, sol_usd, max_tx=None):
     return head + ("\n\n" + "\n".join(rows) if rows else "\nNenhuma carteira na lista.")
 
 
-def typical_buy_usd(w):
+def typical_buy_usd(w, offline=False):
     """What this wallet usually puts in one coin (USD): median of its last observed buys,
     or its historical average buy while there are fewer than 3 observations."""
     sizes = [float(x) for x in (w.get("buy_sizes") or []) if x]
@@ -940,7 +957,8 @@ def typical_buy_usd(w):
     lamports = (w.get("stats") or {}).get("average_buy_lamports")
     if lamports:
         try:
-            return int(lamports) / 1e9 * _sol_usd()
+            price = sol_usd_cached() if offline else _sol_usd()
+            return int(lamports) / 1e9 * price if price else None
         except Exception:
             return None
     return _median(sizes) if sizes else None
