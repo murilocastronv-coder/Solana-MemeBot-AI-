@@ -257,4 +257,6 @@ def summary(now=None):
             "paper_signals_24h": len(recent),
             "transactions_scanned": int(state.get("transactions_scanned", 0)),
             "blocks_scanned": int(state.get("blocks_scanned", 0)),
+            "dex_transactions_scanned": int(state.get("dex_transactions_scanned", 0)),
+            "dex_tokens": list(state.get("dex_tokens", [])),
             "last_slot": state.get("last_slot")}
