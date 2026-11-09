@@ -45,10 +45,15 @@ class FakeRpc:
         self.calls.append((method, params))
         if method == "getSignaturesForAddress":
             pair, opts = params
-            rows = self.txs.get(pair, [])
+            if pair == TRADER:   # the trader's own history = every trade it made, newest first
+                rows = sorted((r for rs in self.txs.values() for r in rs), key=lambda r: -r[1]["blockTime"])
+                if "before" in opts:
+                    return []
+            else:
+                rows = self.txs.get(pair, [])
             if "until" in opts:
                 return []
-            return [{"signature": sig, "err": None} for sig, _ in rows]
+            return [{"signature": sig, "err": None, "blockTime": tx["blockTime"]} for sig, tx in rows]
         if method == "getTransaction":
             for rows in self.txs.values():
                 for sig, tx in rows:
@@ -59,10 +64,15 @@ class FakeRpc:
 
 class DexWalletTests(unittest.TestCase):
     def setUp(self):
+        import copy_trader
         d = tempfile.mkdtemp()
         p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
         p.start()
         self.addCleanup(p.stop)
+        for name in ("old_enough", "active_daily", "has_min_balance"):
+            q = patch.object(copy_trader, name, return_value=True)
+            q.start()
+            self.addCleanup(q.stop)
 
     def test_trending_filters_chain_and_liquidity(self):
         self.assertEqual(len(dw.trending_pairs(fake_dex())), 3)
@@ -301,3 +311,39 @@ class RpcLimiterTests(unittest.TestCase):
         self.assertEqual(c["tx_read"], 6)
         self.assertEqual(c["failed"], 0)
         self.assertGreaterEqual(c["buyers"], 1)
+
+
+class StaleApprovalTests(unittest.TestCase):
+    """Wallets approved before the age / activity / buy-size filters existed."""
+
+    def setUp(self):
+        import copy_trader
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        self.ok = True
+        for name in ("old_enough", "active_daily", "has_min_balance"):
+            q = patch.object(copy_trader, name, side_effect=lambda *_a: self.ok)
+            q.start()
+            self.addCleanup(q.stop)
+        state = wallet_copy.empty_state()
+        state["wallets"][TRADER] = {"closed_trades": 5, "wins": 5, "realized_lamports": 10**8,
+                                    "total_hold_seconds": 5 * 900, "long_holds": 5, "hold_samples": [900] * 5}
+        state["dex_analyzed"] = {TRADER: 1_800_000_000 - 60}     # analysed 1 min ago (old code)
+        wallet_copy._save_state(wallet_copy._state_path(), state)
+
+    def test_unmeasured_buy_size_is_none_not_zero(self):
+        self.assertIsNone(wallet_copy.best_wallets()[0]["average_buy_lamports"])
+
+    def test_old_approval_is_reanalysed_now(self):
+        rpc = WalletHistoryTests.rpc(self)
+        dw.scan(get=lambda p: [], rpc=rpc, now=1_800_000_000)
+        st = wallet_copy._load_state(wallet_copy._state_path())["wallets"][TRADER]
+        self.assertIn("cost_lamports_closed", st)
+        self.assertIn(("getSignaturesForAddress", TRADER), rpc.calls)
+
+    def test_old_approval_failing_filters_is_dropped(self):
+        self.ok = False
+        dw.scan(get=lambda p: [], rpc=WalletHistoryTests.rpc(self), now=1_800_000_000)
+        self.assertNotIn(TRADER, wallet_copy._load_state(wallet_copy._state_path())["wallets"])

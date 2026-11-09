@@ -35,6 +35,7 @@ WALLETS_PER_CYCLE = int(_env("COPY_DEX_WALLETS_PER_CYCLE", 6))
 # Cheap screening first (age, daily activity, balance: 1-3 calls per wallet); only wallets that
 # pass get the full history read (~50 calls). Many more wallets checked per RPC credit.
 SCREEN_PER_CYCLE = int(_env("COPY_DEX_SCREEN_PER_CYCLE", 25))
+REANALYZE_STALE = int(_env("COPY_DEX_REANALYZE_STALE", 5))   # old approved wallets re-read per round
 WALLET_HISTORY = int(_env("COPY_DEX_WALLET_HISTORY", 50))
 REANALYZE_SECONDS = _env("COPY_DEX_REANALYZE_HOURS", 12) * 3600
 # Wallet age: how far back we page (1000 signatures per call) to find activity >= 30 days ago.
@@ -273,7 +274,12 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         # Speed-up: read the recent history of new buyers instead of waiting to see them sell.
         analyzed = state.setdefault("dex_analyzed", {})
         now = int(now or time.time())
-        fresh = [w for w in dict.fromkeys(buyers) if now - int(analyzed.get(w, 0)) >= REANALYZE_SECONDS]
+        # Approved wallets analysed before the newer filters existed (no age / activity / buy size
+        # measured) go first, so they get a complete re-analysis now instead of in 12 h.
+        stale = [w for w, st in state["wallets"].items()
+                 if wallet_copy._qualifies(st) and ("age_days" not in st or "cost_lamports_closed" not in st)]
+        fresh = [w for w in dict.fromkeys(stale[:REANALYZE_STALE] + buyers)
+                 if w in stale or now - int(analyzed.get(w, 0)) >= REANALYZE_SECONDS]
         done = with_trades = screened = 0
         rejected = {"idade": 0, "atividade": 0, "saldo": 0}
         for w in fresh[:max(0, screen)]:
@@ -288,6 +294,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
             screened += 1
             if reason:
                 rejected[reason] += 1
+                if w in stale:
+                    state["wallets"].pop(w, None)   # old approval no longer valid: drop it
                 continue
             try:
                 stats = analyze_wallet(w, rpc, history, now=now, sigs=sigs, activity=act)
@@ -298,6 +306,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
             if stats:
                 state["wallets"][w] = stats
                 with_trades += 1
+            elif w in stale:
+                state["wallets"].pop(w, None)   # no closed trades in the fresh history
         if len(analyzed) > 5000:
             state["dex_analyzed"] = dict(sorted(analyzed.items(), key=lambda kv: kv[1])[-3000:])
         state["dex_seen_sigs"] = list(seen)[-20000:]
