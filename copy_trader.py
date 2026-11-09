@@ -34,7 +34,9 @@ def _env(name, default):
 
 
 ORDER_USD = _env("COPY_ORDER_USD", 10)
-MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 5))
+MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 3))
+# Simulation: copy + strategy robot together never hold more than this many open orders.
+MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 3))
 STOP_LOSS = _env("COPY_STOP_LOSS", 0.15)
 TAKE_PROFIT = _env("COPY_TAKE_PROFIT", 0.50)
 MIN_COPIES_TO_JUDGE = int(_env("COPY_MIN_TRADES_TO_JUDGE", 5))
@@ -159,6 +161,17 @@ def clone(address, summary, closed):
     _event("clonou " + address[:6] + "…: TP +" + format(exit_cfg["tp"] * 100, ".0f") + "% · SL -" +
            format(exit_cfg["sl"] * 100, ".0f") + "%")
     return exit_cfg
+
+
+def open_sim_total():
+    """Simulated open orders of the copy trade + the strategy robot."""
+    n = sum(1 for p in _load()["positions"].values() if not p.get("real"))
+    try:
+        import clone_strategy
+        n += len(clone_strategy._load()["positions"])
+    except Exception:
+        pass
+    return n
 
 
 def _exit_for(wallet):
@@ -620,11 +633,14 @@ def _open(mint, wallet, send, chat):
         if not live_engine.ready():
             return None
         allowed, _ = st.can_open()
-        if not allowed or st.positions_by_mode("copy") >= MAX_POSITIONS or mint in st._load()["positions"]:
+        open_now = len(st._load()["positions"])
+        if (not allowed or open_now >= MAX_OPEN_TOTAL or st.positions_by_mode("copy") >= MAX_POSITIONS
+                or mint in st._load()["positions"]):
             return None
     with _LOCK:
         d = _load()
-        if mint in d["positions"] or (not real and len(d["positions"]) >= MAX_POSITIONS):
+        if mint in d["positions"] or (not real and (len(d["positions"]) >= MAX_POSITIONS or
+                                                    open_sim_total() >= MAX_OPEN_TOTAL)):
             return None
     why = safety_reason(mint)
     if why:
@@ -820,10 +836,6 @@ def cycle(send=None, chat=None):
             elif not info.get("paused"):
                 with _LOCK:
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
-                if info.get("clone"):
-                    status = "ok"        # chosen by the owner: copy every entry
-                    paid_usd = paid_usd if paid_usd is not None else MIN_BUY_USD
-                    paid_usd = max(paid_usd, MIN_BUY_USD)
                 if status != "ok":
                     _event(("observando " if status == "watching" else "não copia (vende rápido) ") + wallet[:6] + "…")
                     continue

@@ -401,6 +401,10 @@ def analyze_wallet_job(chat,address,do_clone=None):
    if not summary.get("positions"):
     send(chat,"⛔ Não clonei: sem operações fechadas para medir a estratégia.",keyboard());return
    ex=copy_trader.clone(address,summary,closed)
+   hold_status,med=copy_trader.holder_status(copy_trader._load()["wallets"].get(address,{}))
+   if hold_status!="ok":
+    send(chat,"⚡ ADICIONADA, MAS NÃO VAI ABRIR ORDENS: "+address[:6]+"…"+address[-4:]+" segura as moedas só "+
+     format(med/60,".1f")+" min (mediana). Só copio carteiras que seguram ≥ "+format(copy_trader.MIN_HOLD_SECONDS/60,".0f")+" min.",keyboard());return
    send(chat,"🧬 CLONADO: vou copiar as próximas compras de "+address[:6]+"…"+address[-4:]+" e sair como ele sai:\n"+
     "TP +"+format(ex["tp"]*100,".0f")+"% · SL -"+format(ex["sl"]*100,".0f")+"%"+
     (" · vende em no máximo "+format(ex["max_hold_s"]/60,".0f")+" min" if ex["max_hold_s"] else "")+
