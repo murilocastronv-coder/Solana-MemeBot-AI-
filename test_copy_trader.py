@@ -193,6 +193,31 @@ class CopyTests(unittest.TestCase):
         self.assertAlmostEqual(c.typical_buy_usd({"buy_sizes": [50, 100, 400], "stats": {"average_buy_lamports": 1}}), 100.0)
         self.assertIsNone(c.typical_buy_usd({}))
 
+    def test_copy_off_still_sells_open_copies_but_does_not_buy(self):
+        self.make_holder()
+        c.set_mode(True)
+        self.push("s0", tx(0, -5000)); c.cycle()
+        self.push("s1", tx(500, -1_000_000_000)); c.cycle()
+        self.assertIn(MINT, c._load()["positions"])
+        c.set_mode(False)                                          # owner taps "Parar cópia"
+        self.push("s2", tx(500, -1_000_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()
+        self.assertEqual(list(c._load()["positions"]), [MINT])    # no new buy
+        self.push("s3", tx(-1000, 300_000_000)); c.cycle()        # wallet sells -> we sell too
+        self.assertEqual(c._load()["positions"], {})
+
+    def test_unfollow_with_open_copy_waits_for_the_sale(self):
+        self.make_holder()
+        c.set_mode(True)
+        self.push("s0", tx(0, -5000)); c.cycle()
+        self.push("s1", tx(500, -1_000_000_000)); c.cycle()
+        self.assertFalse(c.unfollow(WALLET))                       # kept, marked as leaving
+        self.assertTrue(c._load()["wallets"][WALLET]["leaving"])
+        self.push("s2", tx(500, -1_000_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()
+        self.assertEqual(list(c._load()["positions"]), [MINT])    # no new copies from it
+        self.push("s3", tx(-1000, 300_000_000)); c.cycle()
+        self.assertEqual(c._load()["positions"], {})
+        self.assertNotIn(WALLET, c._load()["wallets"])             # gone after the sale
+
     def test_buy_value_counts_sol_spent(self):
         self.assertAlmostEqual(c.buy_value_usd(tx(500, -1_000_000_000), WALLET), 200.0)
         self.assertIsNone(c.buy_value_usd(tx(-500, 1_000_000_000), WALLET))
