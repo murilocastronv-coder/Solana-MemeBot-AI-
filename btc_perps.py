@@ -27,7 +27,7 @@ import time
 import requests
 
 _LOCK = threading.RLock()
-START_USD = float(os.getenv("BTC_SIM_START_USD", "100"))
+START_USD = float(os.getenv("BTC_SIM_START_USD", "50"))
 ORDER_FRACTION = 0.20
 LEVERAGES = (2, 3, 5, 10, 20)
 DEFAULT_LEVERAGE = 3

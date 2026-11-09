@@ -39,7 +39,7 @@ class BTCTests(unittest.TestCase):
         candles = series([60000 + i * 10 for i in range(230)] + [62600])
         b.cycle(self.send, "1", candles=candles, price=62600)
         pos = b.summary()["position"]
-        self.assertEqual((pos["side"], pos["leverage"], pos["collateral"], pos["size_usd"]), ("long", 3, 20.0, 60.0))
+        self.assertEqual((pos["side"], pos["leverage"], pos["collateral"], pos["size_usd"]), ("long", 3, b.START_USD * 0.2, b.START_USD * 0.6))
         self.assertLess(pos["stop"], 62600)
         self.assertGreater(pos["stop"], b._liq_price(pos))          # stop before liquidation
         self.assertIn("LONG BTC 3x", self.sent[-1])
@@ -50,7 +50,7 @@ class BTCTests(unittest.TestCase):
         t = s["history"][-1]
         self.assertEqual(t["reason"], "trailing")
         self.assertGreater(t["pnl_usd"], 0)
-        self.assertAlmostEqual(s["equity"], 100 + t["pnl_usd"], places=4)
+        self.assertAlmostEqual(s["equity"], b.START_USD + t["pnl_usd"], places=4)
 
     def test_high_leverage_stop_is_before_liquidation(self):
         b.set_enabled(True); b.set_leverage(20)
@@ -68,7 +68,7 @@ class BTCTests(unittest.TestCase):
         b.cycle(self.send, "1", candles=candles, price=55000)   # gap far through stop
         t = b.summary()["history"][-1]
         self.assertEqual(t["reason"], "liquidated")
-        self.assertAlmostEqual(t["pnl_usd"], -20.0)
+        self.assertAlmostEqual(t["pnl_usd"], -b.START_USD * 0.2)
 
     def test_reversal_long_to_short(self):
         b.set_enabled(True)
@@ -95,11 +95,15 @@ class TelegramBTCTests(unittest.TestCase):
                  patch.object(t, "request_api", return_value={}), \
                  patch("btc_perps.fetch_price", return_value=65000.0):
                 cb = lambda a: t.handle({"callback_query": {"id": "1", "data": a, "message": {"chat": {"id": 5, "type": "private"}}}})
-                # Old BTC/Perps controls were retired in favour of the MEV menu.
-                for action in ("lev", "lev_10", "btc_on", "btc_status"):
+                # Old callback names stay retired; the new BTC buttons work.
+                for action in ("lev", "btc_on", "btc_status"):
                     cb(action)
                     self.assertIn("removido", out[-1][0])
+                cb("lev_10"); self.assertIn("10x", out[-1][0])
+                cb("btcx_sim"); self.assertIn("SIMULAÇÃO", out[-1][0])
+                cb("btcx_off"); self.assertIn("BTC desligado", out[-1][0])
                 labels = [b["text"] for row in t.keyboard() for b in row]
+                self.assertIn("📊 Backtest BTC 30 dias", labels)
                 self.assertFalse(any(w in l for l in labels for w in ("Vela", "Trading", "Market", "Estratégia", "MEV")))
 
 

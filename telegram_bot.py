@@ -65,6 +65,10 @@ def keyboard():
   [{"text":"⏹️ Copy OFF","callback_data":"copy_off"},{"text":"📊 Status Copy","callback_data":"copy_status"}],
   [{"text":"📈 Volume SIM","callback_data":"vol_sim"},{"text":"📈 Volume REAL","callback_data":"vol_real"}],
   [{"text":"⏹️ Volume OFF","callback_data":"vol_off"},{"text":"📊 Status Volume","callback_data":"vol_status"}],
+  [{"text":"₿ BTC SIM","callback_data":"btcx_sim"},{"text":"₿ BTC REAL","callback_data":"btcx_real"}],
+  [{"text":"⏹️ BTC OFF","callback_data":"btcx_off"},{"text":"📊 Status BTC","callback_data":"btcx_status"}],
+  [{"text":"⚙️ Alavancagem","callback_data":"btcx_lev"},{"text":"🧪 Teste real $5","callback_data":"btcx_test"}],
+  [{"text":"📊 Backtest BTC 30 dias","callback_data":"btcx_bt"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def leverage_keyboard():
@@ -281,10 +285,36 @@ def handle(update):
   "tsim_on","tsim_off","tsim_status","/tsim","/tsim_reset","tb_real_on","tb_real_off","sn_sim","sn_real","sn_off","sn_status","/sniper",
   "mm_on","mm_off","mm_status","/mm",
   "mev_on","mev_off","mev_status","/mev","mev_config","mev_amount","mev_min","mev_tip","mev_mode_sim","mev_mode_real","mev_scan","mev_history"}
- if action in legacy or action.startswith("lev_"):
-  try:btc_perps.set_enabled(False)
-  except Exception:pass
-  send(chat,"Esse controle foi removido: o bot agora é o sniper de lançamento. Use o menu abaixo.",keyboard());return
+ if action.startswith("btcx_") or action.startswith("lev_"):
+  try:
+   if action=="btcx_sim":
+    btc_perps.set_option("mode","sim");btc_perps.set_option("strategy","trend");btc_perps.set_enabled(True)
+    send(chat,"🧪 BTC alavancado LIGADO em SIMULAÇÃO (preço real, dinheiro de mentira).\n\n"+btc_status(),keyboard());return
+   if action=="btcx_real":
+    btc_perps.set_option("mode","real");btc_perps.set_option("strategy","trend");btc_perps.set_enabled(True)
+    lev=btc_perps.summary()["leverage"]
+    send(chat,"💵 BTC ALAVANCADO COM DINHEIRO REAL LIGADO na Jupiter Perps — "+str(lev)+"x.\nRompimento de 20 h a favor da média de 200 h, LONG e SHORT, 20% da conta como garantia, stop 2×ATR e stop móvel 3×ATR, stop sempre antes da liquidação. Cada transação é simulada na blockchain antes de enviar.\n⚠️ Alavancagem pode zerar a garantia rapidamente.\n\n"+btc_status(),keyboard());return
+   if action=="btcx_off":
+    btc_perps.set_enabled(False)
+    send(chat,"⏹️ BTC desligado: não abre novas posições. Posição aberta continua com stop até fechar.\n\n"+btc_status(),keyboard());return
+   if action=="btcx_status":send(chat,btc_status(),keyboard());return
+   if action=="btcx_lev":send(chat,"⚙️ Escolha a alavancagem (quanto maior, mais rápido ganha E mais rápido perde):",leverage_keyboard());return
+   if action.startswith("lev_"):
+    lev=btc_perps.set_leverage(int(action[4:]))
+    send(chat,"⚙️ Alavancagem: "+str(lev)+"x. Em "+str(lev)+"x, uma queda de ~"+format(90/lev,".1f")+"% contra a posição liquida a garantia (o stop fica antes disso).",keyboard());return
+   if action=="btcx_test":
+    send(chat,"🧪 Rodando o teste real de US$ 5 na Jupiter Perps…");run_async(btc_perps.test_real_order,send,chat);return
+   if action=="btcx_bt":
+    send(chat,"⏳ Backtest de 30 dias com velas reais de BTC… resultado em instantes.")
+    def run_bt():
+     try:
+      import btc_backtest
+      send(chat,btc_backtest.report(),keyboard())
+     except Exception as exc:send(chat,"Backtest indisponível ("+type(exc).__name__+").",keyboard())
+    run_async(run_bt);return
+  except Exception as exc:send(chat,"⛔ BTC: "+str(exc)[:200],keyboard());return
+ if action in legacy:
+  send(chat,"Esse controle foi removido. Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("wallet_export","/exportar_chave"):
   if not get_address():
@@ -339,8 +369,6 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
- try:btc_perps.set_enabled(False)
- except Exception:logging.warning("legacy BTC entry stop unavailable")
  send(chat,"🔄 Bot reiniciado (deploy).\n"+launch_status_text(),keyboard())
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  st=trade_state.status()
