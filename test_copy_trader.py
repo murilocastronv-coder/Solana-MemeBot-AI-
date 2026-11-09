@@ -52,7 +52,7 @@ class CopyTests(unittest.TestCase):
 
     def good_results(self):
         d = c._load()
-        d["wallets"][WALLET]["audit"] = {"at": time.time(), "pnl_recent": 120.0, "trades_recent": 20, "win_recent": 0.75}
+        d["wallets"][WALLET]["audit"] = {"at": time.time(), "pnl_recent": 120.0, "trades_recent": 45, "win_recent": 0.75}
         c._save(d)
 
     def rpc(self, method, params):

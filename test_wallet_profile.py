@@ -180,7 +180,7 @@ class NewRulesTests(unittest.TestCase):
         c.follow(W)
         d = c._load()
         d["wallets"][W].update(clone=True, holds=[600, 700, 900],
-                               audit={"at": time.time(), "pnl_recent": 50.0, "trades_recent": 20, "win_recent": 0.8})
+                               audit={"at": time.time(), "pnl_recent": 50.0, "trades_recent": 45, "win_recent": 0.8})
         c._save(d)
         with patch.object(c, "new_signals", return_value=[("buy", "MINTX", 200.0)]), \
                 patch.object(c, "_open", return_value=None) as op:
@@ -307,15 +307,15 @@ class RecentResultTests(unittest.TestCase):
         return a, c._load()["wallets"][a]
 
     def test_profitable_last_two_weeks_is_ok(self):
-        a, w = self.audit([1.5, 1.4, 0.9, 1.6] * 4, days_ago=2)   # 16 trades, 12 wins, +US$ 560
-        self.assertEqual(w["audit"]["trades_recent"], 16)
-        self.assertAlmostEqual(w["audit"]["pnl_recent"], 560.0, places=0)
+        a, w = self.audit([1.5, 1.4, 0.9, 1.6] * 10, days_ago=4)  # 40 trades, 30 wins, +US$ 1400
+        self.assertEqual(w["audit"]["trades_recent"], 40)
+        self.assertAlmostEqual(w["audit"]["pnl_recent"], 1400.0, places=0)
         self.assertEqual(c.result_status(w), "ok")
-        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 16)))
+        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 40)))
 
-    def test_needs_more_than_15_trades_in_9_days(self):
-        self.assertEqual((c.RESULT_MIN_TRADES, c.RESULT_DAYS), (16, 9))
-        a, w = self.audit([1.5] * 15, days_ago=2)        # profitable, but only 15 trades
+    def test_needs_40_trades_in_9_days(self):
+        self.assertEqual((c.RESULT_MIN_TRADES, c.RESULT_DAYS), (40, 9))
+        a, w = self.audit([1.5] * 39, days_ago=3)        # profitable, but only 39 trades
         self.assertEqual(c.result_status(w), "bad")
         b, w2 = self.audit([1.5] * 16, days_ago=12)      # good, but 12 days ago (outside 9 days)
         self.assertEqual(c.result_status(w2), "bad")
@@ -328,7 +328,7 @@ class RecentResultTests(unittest.TestCase):
             c.follow(a)
             d = c._load()
             d["wallets"][a].update(holds=[600] * 5, audit={"at": now, "pnl_recent": 10.0 * (k + 1),
-                                                          "trades_recent": 20, "win_recent": 0.7})
+                                                          "trades_recent": 45, "win_recent": 0.7})
             c._save(d)
             wallets.append(a)
         removed = c.remove_fast_wallets()

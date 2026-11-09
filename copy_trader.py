@@ -75,7 +75,7 @@ AUDIT_MAX_TX = int(_env("COPY_AUDIT_MAX_TX", 300))
 # Recent results: only copy wallets that made money in the last RESULT_DAYS days
 # (>= RESULT_MIN_TRADES closed trades, win rate >= RESULT_MIN_WIN, profit > RESULT_MIN_USD).
 RESULT_DAYS = _env("COPY_RESULT_DAYS", 9)
-RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 16))   # more than 15 trades in the period
+RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 40))   # at least 40 trades in the period
 # Keep only the TOP_WALLETS wallets with the highest profit in the period; the rest are removed.
 TOP_WALLETS = int(_env("COPY_TOP_WALLETS", 10))
 RESULT_MIN_WIN = _env("COPY_RESULT_MIN_WIN", 0.5)
