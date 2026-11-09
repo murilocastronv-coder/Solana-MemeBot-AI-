@@ -546,13 +546,74 @@ def sell_if_already_sold(send=None, chat=None):
     return msgs
 
 
+_RECOVER = {"at": 0.0}
+
+
+def recover_real_orphans(force=False):
+    """Real coins the live engine holds but the copy trader lost track of (e.g. a buy that was
+    confirmed late). Find which followed wallet still holds the coin and sell together with it;
+    if none does, give the position a safety exit (target / stop) so it never stays open forever.
+    Runs at most every 5 minutes. Returns messages."""
+    if not force and time.time() - _RECOVER["at"] < 300:
+        return []
+    _RECOVER["at"] = time.time()
+    import live_trade_state as st
+    live = st._load()["positions"]
+    with _LOCK:
+        d = _load()
+        known = set(d["positions"])
+        wallets = list(d["wallets"])
+    msgs = []
+    for mint, lp in live.items():
+        if mint in known or lp.get("mode") == "clone" or lp.get("copy_recovered"):
+            continue
+        holder = lp.get("copy_wallet")
+        if not holder:
+            for w in wallets:
+                try:
+                    if wallet_token_balance(w, mint) > 0:
+                        holder = w
+                        break
+                except Exception:
+                    continue
+        if holder:
+            with _LOCK:
+                d = _load()
+                d["positions"][mint] = {"wallet": holder, "real": True, "opened_at": float(lp.get("opened_at") or time.time())}
+                if holder not in d["wallets"]:
+                    d["wallets"][holder] = {"last_sig": None, "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False,
+                                            "open_buys": {}, "holds": [], "leaving": True}
+                _save(d)
+            st.set_position_fields(mint, mode="copy", copy_wallet=holder, copy_recovered=True)
+            msgs.append("🔁 Recuperei " + str(lp.get("symbol") or mint[:6]) + ": vendo junto quando " + holder[:6] + "…" +
+                        holder[-4:] + " vender.")
+        else:
+            st.set_position_fields(mint, mode="copy", copy_orphan=True, copy_recovered=True)
+            msgs.append("⚠️ " + str(lp.get("symbol") or mint[:6]) + " está na carteira sem carteira de origem conhecida "
+                        "(nenhuma carteira seguida ainda tem essa moeda). Saída de segurança: alvo +" +
+                        format(TAKE_PROFIT * 100, ".0f") + "% / stop −" + format(STOP_LOSS * 100, ".0f") + "%.")
+    return msgs
+
+
 def positions_text():
     """Open copies, where each came from and whether that wallet is being watched."""
     with _LOCK:
         d = _load()
-    if not d["positions"]:
+    try:
+        import live_trade_state as st
+        live = st._load()["positions"]
+    except Exception:
+        live = {}
+    extra = [(m, lp) for m, lp in live.items() if m not in d["positions"] and lp.get("mode") != "clone"]
+    if not d["positions"] and not extra:
         return "📦 Nenhuma posição copiada aberta."
-    lines = ["📦 POSIÇÕES COPIADAS ABERTAS: " + str(len(d["positions"]))]
+    lines = ["📦 POSIÇÕES COPIADAS ABERTAS: " + str(len(d["positions"]) + len(extra))]
+    for m, lp in extra:
+        how = ("🛟 saída de segurança: alvo +" + format(TAKE_PROFIT * 100, ".0f") + "% / stop −" +
+               format(STOP_LOSS * 100, ".0f") + "%" if lp.get("copy_orphan") else
+               "🔎 procurando a carteira de origem (até 5 min)")
+        lines.append("• " + str(lp.get("symbol") or m[:6]) + " 💵 REAL · sem carteira de origem registrada\n  " + how +
+                     "\n  solscan.io/token/" + m)
     for mint, p in d["positions"].items():
         w = p.get("wallet") or "?"
         info = d["wallets"].get(w)
@@ -787,16 +848,20 @@ def _open(mint, wallet, send, chat):
         pair = {"baseToken": {"address": mint, "symbol": mint[:6]}}
         settled = live_engine._execute_buy(pair, mint, mint[:6], send, chat, live_engine.get_address(), None, "copy",
                                            usd=ORDER_USD)
-        if not settled or settled.get("status") != "settled_buy":
+        if not settled:
             return None
+        pending = settled.get("status") != "settled_buy"
         with _LOCK:
             d = _load()
-            d["positions"][mint] = {"wallet": wallet, "real": True, "opened_at": time.time()}
+            # also when the buy is still being confirmed: the live engine finishes it later, and we must
+            # remember which wallet to sell together with
+            d["positions"][mint] = {"wallet": wallet, "real": True, "opened_at": time.time(), "pending_buy": pending}
             _save(d)
         ex = _exit_for(wallet)
         try:
             import live_trade_state as st
-            st.set_position_fields(mint, copy_tp=ex["tp"], copy_sl=ex["sl"], copy_max_hold_s=ex["max_hold_s"])
+            st.set_position_fields(mint, mode="copy", copy_wallet=wallet, copy_tp=ex["tp"], copy_sl=ex["sl"],
+                                   copy_max_hold_s=ex["max_hold_s"])
         except Exception:
             pass
         _event("REAL copiou compra de " + wallet[:6] + "… em " + mint[:6])
@@ -931,7 +996,12 @@ def sync_real_closed():
     msgs = []
     with _LOCK:
         d = _load()
-        gone = [m for m, p in d["positions"].items() if p.get("real") and m not in held]
+        for m, p in d["positions"].items():
+            if p.get("pending_buy") and m in held:
+                p["pending_buy"] = False                     # the pending buy got confirmed
+                st.set_position_fields(m, mode="copy", copy_wallet=p["wallet"])
+        gone = [m for m, p in d["positions"].items() if p.get("real") and m not in held
+                and not (p.get("pending_buy") and time.time() - float(p.get("opened_at", 0)) < 900)]
         for mint in gone:
             pos = d["positions"].pop(mint)
             last = next((h for h in reversed(st.history()) if h.get("mint") == mint), {}) if hasattr(st, "history") else {}
@@ -1131,6 +1201,10 @@ def cycle(send=None, chat=None):
     msgs = []
     adopt_orphans()
     msgs += sell_if_already_sold(send, chat)
+    try:
+        msgs += recover_real_orphans()
+    except Exception as exc:
+        LAST_ERROR["text"] = "recuperação de posições falhou: " + type(exc).__name__
     with _LOCK:
         d = _load()
         busy = {p.get("wallet") for p in d["positions"].values()}

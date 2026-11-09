@@ -241,6 +241,7 @@ def handle(update):
   import copy_trader as ct
   try:
    ct.adopt_orphans()
+   for m in ct.recover_real_orphans(force=True):send(chat,m)
    for part in split_message(ct.positions_text()):send(chat,part)
    send(chat,"Menu:",keyboard())
   except Exception as exc:send(chat,"Posições indisponíveis: "+type(exc).__name__,keyboard())
