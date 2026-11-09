@@ -57,6 +57,9 @@ BALANCE_MAX_AGE = 600
 # Only copy buys where the wallet put at least this much in the coin (and only follow
 # wallets whose average buy is at least this much).
 MIN_BUY_USD = _env("COPY_MIN_BUY_USD", 40)
+# Conviction filter: copy only buys of at least this multiple of what the wallet usually puts in
+# a coin (median of its recent buys). 1.0 = its normal size or more; 0 = off.
+CONVICTION_MULT = _env("COPY_CONVICTION_MULT", 1.0)
 # Only follow wallets that have been trading for at least this many days.
 MIN_WALLET_DAYS = _env("COPY_MIN_WALLET_DAYS", 7)   # created at least 7 days ago
 # Only follow wallets that trade (almost) every day: active in >= this many of the last 7 days.
@@ -452,6 +455,8 @@ def wallets_text():
              " cópias no prejuízo, é pausada.",
              "Saldo mínimo da carteira copiada: US$ " + format(MIN_WALLET_USD, ".0f") + " em SOL (abaixo disso é removida).",
              "Compra mínima: só copia quando a carteira coloca ≥ US$ " + format(MIN_BUY_USD, ".0f") + " na moeda.",
+             ("Convicção: só copia quando ela coloca pelo menos " + format(CONVICTION_MULT, "g") +
+              "× o que costuma colocar numa moeda." if CONVICTION_MULT > 0 else "Convicção: desligada."),
              "Idade mínima: carteira operando há ≥ " + format(MIN_WALLET_DAYS, ".0f") + " dias.",
              "Ativa: operou em ≥ " + str(MIN_ACTIVE_DAYS) + " dos últimos 7 dias."]
     for i, (addr, w) in enumerate(rows, 1):
@@ -469,6 +474,12 @@ def wallets_text():
             if st.get("average_buy_lamports") is not None:
                 hist += ", compra média " + format(int(st["average_buy_lamports"]) / 1e9, ".2f") + " SOL"
         bal = (" · saldo US$ " + format(w["balance_usd"], ".0f")) if w.get("balance_usd") is not None else ""
+        try:
+            typical = typical_buy_usd(w)
+        except Exception:
+            typical = None
+        if typical:
+            bal += " · costuma colocar US$ " + format(typical, ".0f")
         if w.get("clone"):
             ex = w.get("exit") or {}
             bal += (" · 🧬 CLONE: TP +" + format(float(ex.get("tp") or TAKE_PROFIT) * 100, ".0f") + "%, SL -" +
@@ -920,6 +931,31 @@ def audit_all(rpc, sol_usd, max_tx=None):
     return head + ("\n\n" + "\n".join(rows) if rows else "\nNenhuma carteira na lista.")
 
 
+def typical_buy_usd(w):
+    """What this wallet usually puts in one coin (USD): median of its last observed buys,
+    or its historical average buy while there are fewer than 3 observations."""
+    sizes = [float(x) for x in (w.get("buy_sizes") or []) if x]
+    if len(sizes) >= 3:
+        return _median(sizes)
+    lamports = (w.get("stats") or {}).get("average_buy_lamports")
+    if lamports:
+        try:
+            return int(lamports) / 1e9 * _sol_usd()
+        except Exception:
+            return None
+    return _median(sizes) if sizes else None
+
+
+def _record_buy_size(wallet, usd):
+    with _LOCK:
+        d = _load()
+        w = d["wallets"].get(wallet)
+        if w is None:
+            return
+        w["buy_sizes"] = ((w.get("buy_sizes") or []) + [round(float(usd), 2)])[-30:]
+        _save(d)
+
+
 def _track_hold(wallet, side, mint, now):
     """Record the copied wallet's own buy time / hold duration."""
     with _LOCK:
@@ -959,6 +995,11 @@ def cycle(send=None, chat=None):
         for side, mint, extra in signals:
             paid_usd = extra if side == "buy" else None
             _track_hold(wallet, side, mint, time.time())
+            typical = None
+            if side == "buy" and paid_usd:
+                with _LOCK:
+                    typical = typical_buy_usd(_load()["wallets"].get(wallet, {}))   # usual size BEFORE this buy
+                _record_buy_size(wallet, paid_usd)
             if side == "sell":
                 with _LOCK:
                     pos = _load()["positions"].get(mint)
@@ -979,6 +1020,11 @@ def cycle(send=None, chat=None):
                            ("valor desconhecido" if paid_usd is None else "US$ " + format(paid_usd, ".0f")) +
                            " < US$ " + format(MIN_BUY_USD, ".0f"))
                     continue
+                if CONVICTION_MULT > 0:
+                    if typical and paid_usd < CONVICTION_MULT * typical:
+                        _event("ignorou compra baixa de " + wallet[:6] + "…: US$ " + format(paid_usd, ".0f") +
+                               " (ela costuma colocar US$ " + format(typical, ".0f") + ")")
+                        continue
                 m = _open(mint, wallet, send, chat)
                 if m:
                     msgs.append(m)

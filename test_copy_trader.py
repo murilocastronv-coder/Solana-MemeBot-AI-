@@ -169,6 +169,23 @@ class CopyTests(unittest.TestCase):
     def test_min_buy_default_is_40(self):
         self.assertEqual(c.MIN_BUY_USD, 40)
 
+    def test_conviction_copies_big_buys_and_skips_small_ones(self):
+        self.make_holder()
+        c.set_mode(True)
+        d = c._load(); d["wallets"][WALLET]["buy_sizes"] = [200.0, 200.0, 200.0]; c._save(d)   # usually US$ 200
+        self.push("s0", tx(0, -5000)); c.cycle()
+        self.push("s1", tx(500, -500_000_000)); c.cycle()              # 0.5 SOL = US$ 100: below its usual
+        self.assertEqual(c._load()["positions"], {})
+        self.assertIn("ignorou compra baixa", c.status_text())
+        self.push("s2", tx(500, -1_500_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()  # US$ 300
+        self.assertEqual(len(c._load()["positions"]), 1)
+        self.assertEqual(c._load()["wallets"][WALLET]["buy_sizes"][-2:], [100.0, 300.0])   # every buy recorded
+
+    def test_typical_buy_falls_back_to_history_average(self):
+        self.assertAlmostEqual(c.typical_buy_usd({"stats": {"average_buy_lamports": 10**9}}), 200.0)
+        self.assertAlmostEqual(c.typical_buy_usd({"buy_sizes": [50, 100, 400], "stats": {"average_buy_lamports": 1}}), 100.0)
+        self.assertIsNone(c.typical_buy_usd({}))
+
     def test_buy_value_counts_sol_spent(self):
         self.assertAlmostEqual(c.buy_value_usd(tx(500, -1_000_000_000), WALLET), 200.0)
         self.assertIsNone(c.buy_value_usd(tx(-500, 1_000_000_000), WALLET))
