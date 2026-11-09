@@ -501,10 +501,17 @@ def wallets_text():
 
 
 def unfollow(address):
+    """Stop following. With an open copy, the wallet stays only to sell together with it
+    (no new buys) and leaves when that copy closes. Returns True if removed now."""
     with _LOCK:
         d = _load()
+        if address in {p.get("wallet") for p in d["positions"].values()} and address in d["wallets"]:
+            d["wallets"][address]["leaving"] = True
+            _save(d)
+            return False
         d["wallets"].pop(address, None)
         _save(d)
+        return True
 
 
 # ---------------------------------------------------------------- chain reading
@@ -784,6 +791,9 @@ def _close(mint, reason, send=None, chat=None):
                                          "pnl_usd": round(pnl, 4), "real": bool(pos.get("real")),
                                          "closed_at": time.time()}])[-300:]
         paused = _score(d, pos["wallet"], pnl)
+        w = d["wallets"].get(pos["wallet"])
+        if w and w.get("leaving") and pos["wallet"] not in {p.get("wallet") for p in d["positions"].values()}:
+            d["wallets"].pop(pos["wallet"])
         _save(d)
     if not pos.get("real"):
         msgs.append("👥 SIM " + ("💰" if pnl > 0 else "🔻") + " vendeu " + mint[:6] + " (" +
@@ -1047,12 +1057,17 @@ def _track_hold(wallet, side, mint, now):
 
 
 def cycle(send=None, chat=None):
-    """One pass over every followed wallet. Returns Telegram messages."""
-    if not enabled():
-        return []
+    """One pass over every followed wallet. Returns Telegram messages.
+    With copying switched off, wallets that still have an open copy are watched anyway, only to
+    sell together with them (there is no fixed TP/SL)."""
+    active = enabled()
     msgs = []
     with _LOCK:
-        wallets = dict(_load()["wallets"])
+        d = _load()
+        busy = {p.get("wallet") for p in d["positions"].values()}
+        wallets = {a: w for a, w in d["wallets"].items() if active or a in busy}
+    if not wallets:
+        return msgs
     for wallet, info in wallets.items():
         try:
             signals = new_signals(wallet, info)
@@ -1081,7 +1096,7 @@ def cycle(send=None, chat=None):
                         msgs += _sell_part(mint, frac)        # same movement: sold part -> sell the same part
                     else:
                         msgs += _close(mint, "copy_follow", send, chat)
-            elif not info.get("paused"):
+            elif active and not info.get("paused") and not info.get("leaving"):
                 with _LOCK:
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
                 if status != "ok":

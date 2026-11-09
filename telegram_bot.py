@@ -257,12 +257,13 @@ def handle(update):
     run_async(audit_job,chat,[parts[1]])
    elif action=="/deixar":
     if len(parts)!=2:send(chat,"Uso: /deixar ENDERECO_DA_CARTEIRA",keyboard());return
-    ct.unfollow(parts[1]);pre="🗑️ Parei de seguir "+parts[1]+".\n\n"
+    pre=("🗑️ Parei de seguir "+parts[1]+".\n\n" if ct.unfollow(parts[1]) else
+     "⏳ "+parts[1][:6]+"… tem uma posição copiada aberta: não copio mais compras dela, mas vendo junto quando ela vender e depois tiro da lista.\n\n")
    elif action=="copy_sim":ct.set_mode(True,False);pre="🧪 Copy trade em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
    elif action=="copy_real":
     live_engine.start();ct.set_mode(True,True)
     pre="💵 COPY TRADE COM DINHEIRO REAL LIGADO — US$ "+format(ct.ORDER_USD,".0f")+" por cópia, anti-golpe e teste de venda antes de cada compra, ordem confirmada na blockchain. "+("Sai só quando a carteira vender (sem alvo/stop fixo). " if ct.EXIT_MODE=="wallet" else "Vende quando a carteira vender, ou no stop −"+format(ct.STOP_LOSS*100,".0f")+"% / alvo +"+format(ct.TAKE_PROFIT*100,".0f")+"%. ")+("Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia." if trade_state.DAILY_LOSS_LIMIT_ENABLED else "Sem limite de perda diária.")+"\n⚠️ Copiar não garante lucro: você entra depois da carteira copiada.\n\n"
-   elif action=="copy_off":ct.set_mode(False);pre="⏹️ Copy trade desligado. Posições abertas continuam com stop/alvo até vender.\n\n"
+   elif action=="copy_off":ct.set_mode(False);pre="⏹️ Copy trade desligado: não abre novas cópias. As posições abertas continuam sendo vendidas quando a carteira copiada vender.\n\n"
    else:pre=""
    send(chat,pre+status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
@@ -412,8 +413,8 @@ def copy_loop():
   try:
    import copy_trader
    chat=active_chat()
-   if not chat or not copy_trader.enabled():continue
-   for m in copy_trader.cycle(send,chat):send(chat,m)
+   if not chat:continue
+   for m in copy_trader.cycle(send,chat):send(chat,m)   # also runs with copy off: sells open copies with the wallet
   except Exception as exc:logging.warning("copy cycle failed: %s",type(exc).__name__)
 
 def wallet_discovery_loop():
