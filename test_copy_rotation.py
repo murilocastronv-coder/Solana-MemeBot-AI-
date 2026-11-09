@@ -269,3 +269,59 @@ class PanelSpeedTests(unittest.TestCase):
                 REAL_SOL_USD()
         self.assertEqual(price.call_count, 1)
         self.assertEqual(real.sol_usd_cached(), 150.0)
+
+
+class PreAuditTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def audit(self, pnl, trades=45, win=0.7):
+        import time as _t
+        return [900] * 10, {"at": _t.time(), "positions": trades, "median_s": 900, "long_share": 1.0,
+                            "pnl_recent": pnl, "trades_recent": trades, "win_recent": win}
+
+    def test_only_audited_wallets_enter_and_rejected_do_not_come_back(self):
+        good, bad = cand(), cand()
+        with patch.object(c, "measure", return_value=self.audit(300.0)):
+            self.assertEqual(c.preaudit_and_follow(good, None, 200.0), "added")
+        w = c._load()["wallets"][good["wallet"]]
+        self.assertEqual(c.result_status(w), "ok")                 # copied right away, no second audit
+        with patch.object(c, "measure", return_value=self.audit(-50.0)):
+            self.assertEqual(c.preaudit_and_follow(bad, None, 200.0), "rejected")
+        self.assertNotIn(bad["wallet"], c._load()["wallets"])
+        self.assertTrue(c.is_rejected(bad["wallet"]))
+        self.assertFalse(c.auto_follow(bad))                       # cannot come back for 3 days
+
+    def test_full_list_swaps_only_for_clearly_better_profit(self):
+        with patch.object(c, "measure", return_value=self.audit(100.0)):
+            for _ in range(c.MAX_AUTO_WALLETS):
+                self.assertEqual(c.preaudit_and_follow(cand(), None, 200.0), "added")
+        before = set(c._load()["wallets"])
+        with patch.object(c, "measure", return_value=self.audit(110.0)):        # only 10% better
+            self.assertEqual(c.preaudit_and_follow(cand(), None, 200.0), "full")
+        self.assertEqual(set(c._load()["wallets"]), before)                     # no churn
+        better = cand()
+        with patch.object(c, "measure", return_value=self.audit(500.0)):
+            self.assertEqual(c.preaudit_and_follow(better, None, 200.0), "replaced")
+        after = set(c._load()["wallets"])
+        self.assertIn(better["wallet"], after)
+        self.assertEqual(len(after), c.MAX_AUTO_WALLETS)
+        (gone,) = before - after
+        self.assertTrue(c.is_rejected(gone))
+
+    def test_removed_wallets_are_remembered(self):
+        w = cand()
+        with patch.object(c, "measure", return_value=self.audit(100.0)):
+            c.preaudit_and_follow(w, None, 200.0)
+        d = c._load()
+        d["wallets"][w["wallet"]]["holds"] = [60] * 5               # became a fast flipper
+        c._save(d)
+        self.assertEqual(c.remove_fast_wallets(), [w["wallet"]])
+        self.assertTrue(c.is_rejected(w["wallet"]))
+
+    def test_prefilter_is_cheap_and_strict(self):
+        self.assertTrue(c.prefilter(cand()))
+        self.assertFalse(c.prefilter(cand(holds=(30, 60, 90))))
