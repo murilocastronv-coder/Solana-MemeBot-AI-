@@ -36,7 +36,7 @@ compras e vendas delas, em simulação ou com dinheiro real.
    em menos de 5 min não é copiada.
 4. **Copiar**: quando uma carteira seguida compra **US$ 40 ou mais** numa moeda (compras menores
    são ignoradas), o bot checa anti-golpe (mint/freeze revogados,
-   10 maiores donos < 25%, teste de venda ≥ 92%) e compra US$ 20 por cópia (`COPY_ORDER_USD`; o limite por ordem real é `MAX_ORDER_USD`).
+   10 maiores donos < 25%, teste de venda ≥ 92%) e compra US$ 34 por cópia (`COPY_ORDER_USD`; o limite por ordem real é `MAX_ORDER_USD`).
 5. **Sair**: só quando a carteira vender, com o mesmo movimento: se ela vende uma parte, a
    simulação vende a mesma parte; no real, vende a posição inteira. Sem TP/SL fixo
    (`COPY_EXIT_MODE=tp_sl` liga de novo o stop −15% / alvo +50%).
@@ -60,7 +60,7 @@ Variáveis obrigatórias (segredos):
 - `BOT_WALLET_ENCRYPTION_PASSPHRASE` (senha que criptografa a carteira do bot no disco);
 - `SOLANA_RPC_URL`: RPC dedicado (ex.: Helius). **Sem ele a busca automática não roda.**
 
-Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=20`, `MAX_ORDER_USD=20`, `COPY_MAX_POSITIONS=3`,
+Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=34`, `MAX_ORDER_USD=34`, `COPY_MAX_POSITIONS=3`,
 `COPY_MIN_HOLD_MINUTES=5`, `COPY_AUTO_DISCOVERY_ENABLED=true`, `DAILY_LOSS_LIMIT_ENABLED=false`.
 
 Use uma **carteira dedicada** só para o bot, com pouco dinheiro (ver `DEDICATED_WALLET.md` e

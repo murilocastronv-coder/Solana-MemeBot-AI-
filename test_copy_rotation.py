@@ -242,5 +242,5 @@ class NoticeTests(unittest.TestCase):
 
 
 class OrderSizeTests(unittest.TestCase):
-    def test_twenty_dollars_per_copy(self):
-        self.assertEqual(c.ORDER_USD, 20)
+    def test_order_size_per_copy(self):
+        self.assertEqual(c.ORDER_USD, 34)
