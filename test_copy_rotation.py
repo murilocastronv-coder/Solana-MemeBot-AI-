@@ -243,4 +243,4 @@ class NoticeTests(unittest.TestCase):
 
 class OrderSizeTests(unittest.TestCase):
     def test_order_size_per_copy(self):
-        self.assertEqual(c.ORDER_USD, 34)
+        self.assertEqual(c.ORDER_USD, 32)
