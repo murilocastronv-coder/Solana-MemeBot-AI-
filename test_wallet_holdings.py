@@ -45,6 +45,9 @@ class HoldingsTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("não consegui ler", why)
 
-    def test_status_line(self):
-        with patch.object(wh, "coins_held", return_value={"AAAAxyz": 31.0}):
+    def test_status_line_uses_cache_only(self):
+        import time
+        self.assertIn("conferindo", wh.status_line("W"))
+        wh._cache.update(at=time.monotonic(), wallet="W", coins={"AAAAxyz": 31.0})
+        with patch.object(wh, "raw_balances", side_effect=AssertionError("no network from the button")):
             self.assertIn("1/3", wh.status_line("W"))
