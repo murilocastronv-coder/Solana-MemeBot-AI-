@@ -186,7 +186,8 @@ def _open(pair, cfg, real, send, chat):
         if not live_engine.ready():
             return None
         allowed, _ = st.can_open()
-        if not allowed or st.positions_by_mode("clone") >= MAX_POSITIONS or mint in st._load()["positions"]:
+        if (not allowed or len(st._load()["positions"]) >= ct.MAX_OPEN_TOTAL
+                or st.positions_by_mode("clone") >= MAX_POSITIONS or mint in st._load()["positions"]):
             return None
         settled = live_engine._execute_buy(pair, mint, symbol, send, chat, live_engine.get_address(), None, "clone",
                                            usd=ORDER_USD)
@@ -202,6 +203,8 @@ def _open(pair, cfg, real, send, chat):
         _event("cotação falhou em " + symbol + ": " + type(exc).__name__)
         return None
     cost = ORDER_USD + NETWORK_FEE_USD
+    if ct.open_sim_total() >= ct.MAX_OPEN_TOTAL:
+        return None
     with _LOCK:
         d = _load()
         if d["balance"] < cost or mint in d["positions"]:
@@ -261,7 +264,8 @@ def cycle(send=None, chat=None, get=_get_json, now=None):
         d = _load()
         open_count = len(d["positions"])
         tried = {m: t for m, t in d.get("tried", {}).items() if time.time() - t < RETRY_MINT_AFTER}
-    if not real and open_count >= MAX_POSITIONS:
+    import copy_trader as ct
+    if not real and (open_count >= MAX_POSITIONS or ct.open_sim_total() >= ct.MAX_OPEN_TOTAL):
         return msgs
     for pair in candidates(get):
         mint = pair["baseToken"]["address"]
@@ -275,7 +279,7 @@ def cycle(send=None, chat=None, get=_get_json, now=None):
         if m:
             msgs.append(m)
             open_count += 1
-        if not real and open_count >= MAX_POSITIONS:
+        if not real and (open_count >= MAX_POSITIONS or ct.open_sim_total() >= ct.MAX_OPEN_TOTAL):
             break
     with _LOCK:
         d = _load()

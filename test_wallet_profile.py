@@ -134,3 +134,54 @@ class CloneTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NewRulesTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_defaults_three_orders(self):
+        import live_trade_state
+        self.assertEqual((c.MAX_POSITIONS, c.MAX_OPEN_TOTAL, live_trade_state.MAX_POSITIONS), (3, 3, 3))
+
+    def test_cloned_fast_wallet_never_opens(self):
+        c.set_mode(True)
+        c.follow(W)
+        d = c._load()
+        d["wallets"][W].update(clone=True, holds=[60, 60, 90], last_sig="s0")   # holds ~1 min
+        c._save(d)
+        buy = swap("MINTX", 1000, -1.0, T0)
+        with patch.object(c, "new_signals", return_value=[("buy", "MINTX", 200.0)]), \
+                patch.object(c, "_open") as op:
+            c.cycle()
+        op.assert_not_called()
+        self.assertIn("não copia", c.status_text())
+
+    def test_cloned_holder_opens(self):
+        c.set_mode(True)
+        c.follow(W)
+        d = c._load()
+        d["wallets"][W].update(clone=True, holds=[600, 700, 900])
+        c._save(d)
+        with patch.object(c, "new_signals", return_value=[("buy", "MINTX", 200.0)]), \
+                patch.object(c, "_open", return_value=None) as op:
+            c.cycle()
+        op.assert_called_once()
+
+    def test_total_cap_counts_copy_and_robot(self):
+        import clone_strategy as cs
+        d = cs._load()
+        d["positions"] = {"A": {}, "B": {}}
+        cs._save(d)
+        d = c._load()
+        d["positions"]["C"] = {"wallet": W, "real": False}
+        c._save(d)
+        self.assertEqual(c.open_sim_total(), 3)
+        c.follow(W)
+        with patch.object(c, "safety_reason", return_value=""), patch.object(c, "_sol_usd", return_value=200.0), \
+                patch.object(c, "_order", return_value={"outAmount": "1000"}):
+            self.assertIsNone(c._open("NEWMINT", W, None, None))
+        self.assertNotIn("NEWMINT", c._load()["positions"])

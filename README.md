@@ -84,3 +84,11 @@ python -m unittest discover -p "test_*.py"
 
 O que a carteira usa para decidir entrar (sinais, informações, leitura própria) não fica na
 blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simulação antes.
+
+## Limites de ordens e regra dos 5 minutos
+- **No máximo 3 ordens abertas ao mesmo tempo**, somando copy trade e robô da estratégia
+  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 3 abertas, nada novo abre.
+- **Toda carteira seguida**, inclusive as de `/clonar` e `/seguir`, só tem compras copiadas se
+  segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
+  abre ordem. A compra mínima de US$ 40 vale para todas.
+
