@@ -60,6 +60,7 @@ def keyboard():
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
+  [{"text":"📦 Posições abertas","callback_data":"copy_positions"}],
   [{"text":"🧠 Clonar estratégia de uma carteira","callback_data":"clone_help"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
   [{"text":"🤖 Robô estratégia SIM","callback_data":"strat_sim"},{"text":"🤖 Robô estratégia REAL","callback_data":"strat_real"}],
   [{"text":"⏹️ Parar robô estratégia","callback_data":"strat_off"},{"text":"📊 Status robô","callback_data":"strat_status"}],
@@ -235,6 +236,14 @@ def handle(update):
    send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🧠 Analisando "+parts[1][:6]+"…"+parts[1][-4:]+": lendo até 400 transações. Leva 1–3 minutos…")
   run_async(analyze_wallet_job,chat,parts[1],{"/clonar":"clone","/estrategia":"strategy"}.get(action))
+  return
+ if action in ("copy_positions","/posicoes_copy"):
+  import copy_trader as ct
+  try:
+   ct.adopt_orphans()
+   for part in split_message(ct.positions_text()):send(chat,part)
+   send(chat,"Menu:",keyboard())
+  except Exception as exc:send(chat,"Posições indisponíveis: "+type(exc).__name__,keyboard())
   return
  if action in ("copy_following","/copiadas"):
   import copy_trader as ct
