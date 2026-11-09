@@ -211,3 +211,31 @@ class SelfAnalysisTests(unittest.TestCase):
         better = dict(w, realized_lamports=int(1e9), win_rate=0.9)
         self.assertTrue(c.refresh_stats(better))
         self.assertGreater(c._load()["wallets"][w["wallet"]]["score"], 0.5)
+
+
+class NoticeTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_card_has_link_and_stats(self):
+        w = cand()
+        w.update(win_rate=0.8, average_hold_seconds=1800)
+        c.auto_follow(w)
+        card = c.wallet_card(w["wallet"])
+        for piece in ("solscan.io/account/" + w["wallet"], "acerto 80%", "segura em média 30 min",
+                      "compra média 1.00 sol", "opera há 90+ dias", "ativa 7/7 dias", "saldo US$ 1000"):
+            self.assertIn(piece.lower(), card.lower())
+
+    def test_card_says_which_wallet_was_replaced(self):
+        ws = [cand() for _ in range(c.MAX_AUTO_WALLETS)]
+        for w in ws:
+            c.auto_follow(w)
+        d = c._load()
+        d["wallets"][ws[0]["wallet"]].update(paused=True)
+        c._save(d)
+        new = cand()
+        self.assertTrue(c.replace_worst(new))
+        self.assertIn("Entrou no lugar de " + ws[0]["wallet"][:6], c.wallet_card(new["wallet"]))

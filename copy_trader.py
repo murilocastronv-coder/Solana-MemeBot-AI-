@@ -66,6 +66,7 @@ _LOCK = threading.RLock()
 _safety_cache = {}
 EVENTS = deque(maxlen=50)
 LAST_ERROR = {"text": ""}
+REPLACED = {}   # new wallet -> wallet it replaced (for the Telegram notice)
 
 
 # ---------------------------------------------------------------- storage
@@ -329,6 +330,7 @@ def replace_worst(candidate):
                 return False
         d["wallets"].pop(worst)
         _save(d)
+    REPLACED[address] = worst
     if not auto_follow(candidate):
         return False
     _event("troquei " + worst[:6] + "… por " + address[:6] + "… (melhor nota)")
@@ -346,6 +348,41 @@ def refresh_stats(candidate):
         _record_stats(w, candidate)
         _save(d)
     return True
+
+
+def wallet_card(address):
+    """Full description of a followed wallet, for the 'new wallet' notice."""
+    with _LOCK:
+        w = _load()["wallets"].get(address)
+    if not w:
+        return "solscan.io/account/" + address
+    st = w.get("stats") or {}
+    lines = ["👛 solscan.io/account/" + address,
+             "Nota " + format(w.get("score", 0.0), ".3f")]
+    if st:
+        lines.append("Lucro no histórico: " + format(st.get("realized_lamports", 0) / 1e9, "+.3f") + " SOL · acerto " +
+                     format(st.get("win_rate", 0) * 100, ".0f") + "% · " + str(st.get("closed_trades", 0)) + " operações")
+        hold = st.get("average_hold_seconds")
+        extra = []
+        if hold:
+            extra.append("segura em média " + format(hold / 60, ".0f") + " min")
+        if st.get("average_buy_lamports") is not None:
+            extra.append("compra média " + format(int(st["average_buy_lamports"]) / 1e9, ".2f") + " SOL")
+        if extra:
+            lines.append(" · ".join(extra).capitalize())
+        extra = []
+        if st.get("age_days") is not None:
+            extra.append("opera há " + format(float(st["age_days"]), ".0f") + "+ dias")
+        if st.get("active_days_7") is not None:
+            extra.append("ativa " + str(st["active_days_7"]) + "/7 dias")
+        if w.get("balance_usd") is not None:
+            extra.append("saldo US$ " + format(w["balance_usd"], ".0f"))
+        if extra:
+            lines.append(" · ".join(extra).capitalize())
+    old = REPLACED.pop(address, None)
+    if old:
+        lines.append("↔️ Entrou no lugar de " + old[:6] + "…" + old[-4:] + " (nota menor ou resultado ruim)")
+    return "\n".join(lines)
 
 
 def wallets_text():

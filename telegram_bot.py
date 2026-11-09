@@ -337,9 +337,15 @@ def wallet_discovery_loop():
    removed=copy_trader.prune_low_balance()
    chat=active_chat()
    if chat and removed:
-    send(chat,"🗑️ Removi "+str(len(removed))+" carteira(s) com saldo abaixo de US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+":\n"+"\n".join(x[:6]+"…"+x[-4:] for x in removed))
+    send(chat,"🗑️ Parei de copiar "+str(len(removed))+" carteira(s): saldo < US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+
+     ", compras < US$ "+format(copy_trader.MIN_BUY_USD,".0f")+", idade < "+format(copy_trader.MIN_WALLET_DAYS,".0f")+
+     " dias ou sem operar quase todo dia.\n"+"\n".join("solscan.io/account/"+x for x in removed))
    if chat and added:
-    send(chat,"🔎 Descobri " + str(len(added)) + " carteira(s) lucrativas nas moedas em alta do DexScreener, segurando ≥ 5 min. Vou observar apenas as próximas compras; nenhuma posição antiga foi copiada.\n" + "\n".join(x[:6]+"…"+x[-4:] for x in added))
+    total=sum(1 for w in copy_trader._load()["wallets"].values() if not w.get("paused"))
+    text=("🆕 NOVA CARTEIRA PARA COPIAR" if len(added)==1 else "🆕 "+str(len(added))+" NOVAS CARTEIRAS PARA COPIAR")+\
+     " — agora copiando "+str(total)+".\nSó as próximas compras serão copiadas; nenhuma posição antiga.\n\n"+\
+     "\n\n".join(copy_trader.wallet_card(x) for x in added)
+    for part in split_message(text):send(chat,part)
   except Exception as exc:
    logging.warning("wallet discovery failed: %s: %s",type(exc).__name__,str(exc)[:200])
   time.sleep(interval)
