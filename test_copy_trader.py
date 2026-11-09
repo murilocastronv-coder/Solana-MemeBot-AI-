@@ -21,12 +21,12 @@ def tx(token_change, sol_change, wallet=WALLET, mint=MINT, err=None):
 
 class SignalTests(unittest.TestCase):
     def test_buy_and_sell_detected(self):
-        self.assertEqual(c.signal_from_tx(tx(500, -100_000_000), WALLET), ("buy", MINT))
+        self.assertEqual(c.signal_from_tx(tx(500, -1_000_000_000), WALLET), ("buy", MINT))
         self.assertEqual(c.signal_from_tx(tx(-500, 120_000_000), WALLET), ("sell", MINT))
 
     def test_ignores_failed_and_unrelated(self):
         self.assertIsNone(c.signal_from_tx(tx(500, -100_000_000, err={"x": 1}), WALLET))
-        self.assertIsNone(c.signal_from_tx(tx(500, -100_000_000), str(Keypair().pubkey())))
+        self.assertIsNone(c.signal_from_tx(tx(500, -1_000_000_000), str(Keypair().pubkey())))
         self.assertIsNone(c.signal_from_tx(tx(0, -5000), WALLET))   # just a fee
 
 
@@ -59,7 +59,7 @@ class CopyTests(unittest.TestCase):
 
     def test_first_look_does_not_copy_old_trades(self):
         c.set_mode(True)
-        self.push("old", tx(500, -100_000_000))
+        self.push("old", tx(500, -1_000_000_000))
         self.assertEqual(c.cycle(), [])
         self.assertEqual(c._load()["positions"], {})
 
@@ -67,7 +67,7 @@ class CopyTests(unittest.TestCase):
         self.make_holder()
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()                      # baseline
-        self.push("s1", tx(500, -100_000_000))
+        self.push("s1", tx(500, -1_000_000_000))
         msgs = c.cycle()
         self.assertIn("copiou compra", msgs[0])
         self.assertIn(MINT, c._load()["positions"])
@@ -82,7 +82,7 @@ class CopyTests(unittest.TestCase):
         self.make_holder()
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()
-        self.push("s1", tx(500, -100_000_000)); c.cycle()
+        self.push("s1", tx(500, -1_000_000_000)); c.cycle()
         self.sell_sol = int(8 / 200 * 1e9)                            # -20%
         self.assertTrue(any("stop" in m for m in c.cycle()))
 
@@ -98,7 +98,7 @@ class CopyTests(unittest.TestCase):
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()
         with patch.object(c, "safety_reason", return_value="criador pode congelar carteiras"):
-            self.push("s1", tx(500, -100_000_000)); c.cycle()
+            self.push("s1", tx(500, -1_000_000_000)); c.cycle()
         self.assertEqual(c._load()["positions"], {})
         self.assertIn("congelar", c.status_text())
 
@@ -106,7 +106,7 @@ class CopyTests(unittest.TestCase):
         self.make_holder()
         c.set_mode(True, real=True)
         self.push("s0", tx(0, -5000)); c.cycle(lambda *a: None, "1")
-        self.push("s1", tx(500, -100_000_000))
+        self.push("s1", tx(500, -1_000_000_000))
         with patch("live_engine.ready", return_value=True), \
              patch("live_trade_state.can_open", return_value=(True, "Ready")), \
              patch("live_trade_state.positions_by_mode", return_value=0), \
@@ -120,7 +120,7 @@ class CopyTests(unittest.TestCase):
     def test_fast_flipper_is_not_copied_and_holder_is(self):
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()
-        self.push("s1", tx(500, -100_000_000)); c.cycle()
+        self.push("s1", tx(500, -1_000_000_000)); c.cycle()
         self.assertEqual(c._load()["positions"], {})                  # still watching
         self.assertIn("observando", c.status_text())
         self.make_holder(minutes=1)
@@ -128,8 +128,22 @@ class CopyTests(unittest.TestCase):
         self.assertEqual(c._load()["positions"], {})
         self.assertIn("não copia", c.status_text())
         self.make_holder(minutes=8)
-        self.push("s3", tx(500, -100_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()
+        self.push("s3", tx(500, -1_000_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()
         self.assertEqual(len(c._load()["positions"]), 1)
+
+    def test_small_buy_is_ignored_big_buy_is_copied(self):
+        self.make_holder()
+        c.set_mode(True)
+        self.push("s0", tx(0, -5000)); c.cycle()
+        self.push("s1", tx(500, -400_000_000)); c.cycle()          # 0.4 SOL x $200 = $80 < $100
+        self.assertEqual(c._load()["positions"], {})
+        self.assertIn("compra pequena", c.status_text())
+        self.push("s2", tx(500, -600_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()  # $120
+        self.assertEqual(len(c._load()["positions"]), 1)
+
+    def test_buy_value_counts_sol_spent(self):
+        self.assertAlmostEqual(c.buy_value_usd(tx(500, -1_000_000_000), WALLET), 200.0)
+        self.assertIsNone(c.buy_value_usd(tx(-500, 1_000_000_000), WALLET))
 
     def test_hold_time_is_measured(self):
         c._track_hold(WALLET, "buy", MINT, 1000)

@@ -76,6 +76,7 @@ class DexWalletTests(unittest.TestCase):
         best = wallet_copy.best_wallets()
         self.assertEqual(best[0]["wallet"], TRADER)
         self.assertGreaterEqual(best[0]["average_hold_seconds"], 300)
+        self.assertEqual(best[0]["average_buy_lamports"], 10**8)
         s = wallet_copy.summary()
         self.assertEqual(s["dex_transactions_scanned"], 6)
         self.assertEqual(len(s["dex_tokens"]), 3)

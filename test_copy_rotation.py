@@ -12,14 +12,14 @@ REAL_WALLET_USD = c.wallet_usd
 
 def setUpModule():
     # every wallet in these tests has a big enough balance unless a test says otherwise
-    p = patch.object(c, "wallet_usd", return_value=1000.0)
-    p.start()
-    unittest.addModuleCleanup(p.stop)
+    for p in (patch.object(c, "wallet_usd", return_value=1000.0), patch.object(c, "_sol_usd", return_value=200.0)):
+        p.start()
+        unittest.addModuleCleanup(p.stop)
 
 
 def cand(pnl=10**9, holds=(400, 500, 600), trades=5):
     return {"wallet": str(Keypair().pubkey()), "closed_trades": trades, "realized_lamports": pnl,
-            "hold_samples": list(holds)}
+            "hold_samples": list(holds), "average_buy_lamports": 10**9}   # 1 SOL per buy
 
 
 class RotationTests(unittest.TestCase):
@@ -74,6 +74,15 @@ class MinBalanceTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         c._balance_cache.clear()
+
+    def test_small_average_buy_is_not_followed(self):
+        small = cand()
+        small["average_buy_lamports"] = 10**8          # 0.1 SOL x $200 = $20 per buy
+        self.assertFalse(c.auto_follow(small))
+        unknown = cand()
+        unknown.pop("average_buy_lamports")
+        self.assertFalse(c.auto_follow(unknown))
+        self.assertTrue(c.auto_follow(cand()))           # 1 SOL = $200 per buy
 
     def test_min_is_150_usd(self):
         self.assertEqual(c.MIN_WALLET_USD, 150)
