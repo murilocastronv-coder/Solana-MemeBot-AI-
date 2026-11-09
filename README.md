@@ -125,6 +125,6 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   senão avisa e não muda nada.
 - **Resultado dos últimos 9 dias:** a auditoria (ao iniciar, a cada 6 h, ao seguir uma carteira e
   logo que a busca adiciona uma) lê até 300 transações e calcula o resultado da carteira nos
-  últimos 9 dias. Só copia com lucro, **mais de 15 operações** e acerto ≥ 50% nesse período, e
+  últimos 9 dias. Só copia com lucro, **pelo menos 40 operações** e acerto ≥ 50% nesse período, e
   fica só com as **10 de maior lucro** (`COPY_RESULT_DAYS`, `COPY_RESULT_MIN_TRADES`,
   `COPY_RESULT_MIN_WIN`, `COPY_TOP_WALLETS`). Quem não passa ou fica fora das 10 é removida.
