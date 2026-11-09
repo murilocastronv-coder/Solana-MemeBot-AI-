@@ -1,3 +1,4 @@
+import time
 import os
 import tempfile
 import unittest
@@ -47,6 +48,12 @@ class CopyTests(unittest.TestCase):
 
     def make_holder(self, minutes=10, n=3):
         d = c._load(); d["wallets"][WALLET]["holds"] = [minutes * 60] * n; c._save(d)
+        self.good_results()
+
+    def good_results(self):
+        d = c._load()
+        d["wallets"][WALLET]["audit"] = {"at": time.time(), "pnl_recent": 120.0, "trades_recent": 8, "win_recent": 0.75}
+        c._save(d)
 
     def rpc(self, method, params):
         if method == "getSignaturesForAddress":

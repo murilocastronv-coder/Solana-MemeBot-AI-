@@ -34,9 +34,9 @@ def _env(name, default):
 
 
 ORDER_USD = _env("COPY_ORDER_USD", 32)   # US$ per copied position
-MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 3))
+MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 6))
 # Simulation: copy + strategy robot together never hold more than this many open orders.
-MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 3))
+MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 6))
 STOP_LOSS = _env("COPY_STOP_LOSS", 0.15)
 # "wallet" (default): no fixed TP/SL, exit only when the copied wallet sells (same movement).
 # "tp_sl": also use COPY_TAKE_PROFIT / COPY_STOP_LOSS.
@@ -71,7 +71,14 @@ MIN_HOLD_SECONDS = _env("COPY_MIN_HOLD_MINUTES", 5) * 60
 MIN_ROUND_TRIPS = int(_env("COPY_MIN_ROUND_TRIPS", 3))
 # ... and at least this share of its positions must last 5+ min (blocks frequent 1-minute flippers).
 MIN_LONG_SHARE = _env("COPY_MIN_LONG_HOLD_SHARE", 0.6)
-AUDIT_MAX_TX = int(_env("COPY_AUDIT_MAX_TX", 150))
+AUDIT_MAX_TX = int(_env("COPY_AUDIT_MAX_TX", 300))
+# Recent results: only copy wallets that made money in the last RESULT_DAYS days
+# (>= RESULT_MIN_TRADES closed trades, win rate >= RESULT_MIN_WIN, profit > RESULT_MIN_USD).
+RESULT_DAYS = _env("COPY_RESULT_DAYS", 14)
+RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 3))
+RESULT_MIN_WIN = _env("COPY_RESULT_MIN_WIN", 0.5)
+RESULT_MIN_USD = _env("COPY_RESULT_MIN_USD", 0)
+AUDIT_VALID_S = _env("COPY_AUDIT_VALID_HOURS", 24) * 3600
 
 _LOCK = threading.RLock()
 _safety_cache = {}
@@ -895,11 +902,28 @@ def audit_wallet(address, rpc, sol_usd, max_tx=None):
             return None
         if holds:
             w["holds"] = holds
-        w["audit"] = {"at": int(time.time()), "positions": len(closed), "median_s": int(_median(holds)),
-                      "long_share": round(long_share(holds), 3)}
+        now = time.time()
+        recent = [p for p in closed if p.get("closed", 0) >= now - RESULT_DAYS * 86400]
+        w["audit"] = {"at": int(now), "positions": len(closed), "median_s": int(_median(holds)),
+                      "long_share": round(long_share(holds), 3),
+                      "pnl_recent": round(sum(p.get("pnl_usd", 0.0) for p in recent), 2),
+                      "trades_recent": len(recent),
+                      "win_recent": round(sum(1 for p in recent if p.get("pnl_usd", 0) > 0) / len(recent), 3) if recent else 0.0}
         _save(d)
         status, med = holder_status(w)
     return status, med, long_share(holds), len(closed)
+
+
+def result_status(w, now=None):
+    """'ok' | 'bad' | 'unknown' for the wallet's own results in the last RESULT_DAYS days
+    (from the latest audit; an audit older than AUDIT_VALID_S counts as unknown)."""
+    a = w.get("audit") or {}
+    now = now or time.time()
+    if not a or now - a.get("at", 0) > AUDIT_VALID_S or "pnl_recent" not in a:
+        return "unknown"
+    ok = (a["trades_recent"] >= RESULT_MIN_TRADES and a["win_recent"] >= RESULT_MIN_WIN
+          and a["pnl_recent"] > RESULT_MIN_USD)
+    return "ok" if ok else "bad"
 
 
 def remove_fast_wallets():
@@ -911,14 +935,35 @@ def remove_fast_wallets():
         d = _load()
         busy = {p.get("wallet") for p in d["positions"].values()}
         for a, w in list(d["wallets"].items()):
-            if a not in busy and holder_status(w)[0] == "fast":
+            if a not in busy and (holder_status(w)[0] == "fast" or result_status(w) == "bad"):
                 d["wallets"].pop(a)
                 removed.append(a)
         if removed:
             _save(d)
     for a in removed:
-        _event("removi " + a[:6] + "…: fecha posições em menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min")
+        _event("removi " + a[:6] + "…: fecha rápido demais ou sem bom resultado em " + format(RESULT_DAYS, ".0f") + " dias")
     return removed
+
+
+def audit_line(address, res):
+    """One report line for an audited wallet."""
+    status, med, share, n = res
+    with _LOCK:
+        w = _load()["wallets"].get(address) or {}
+    a = w.get("audit") or {}
+    result = result_status(w) if w else "unknown"
+    if status == "fast":
+        icon = "🗑️ REMOVIDA (rápida demais)"
+    elif result == "bad":
+        icon = "🗑️ REMOVIDA (sem bom resultado em " + format(RESULT_DAYS, ".0f") + " dias)"
+    elif status == "ok" and result == "ok":
+        icon = "✅ COPIA"
+    else:
+        icon = "👀 SEM DADOS"
+    return (icon + " " + address[:6] + "…" + address[-4:] + " · " + format(RESULT_DAYS, ".0f") + " dias: " +
+            format(a.get("pnl_recent", 0.0), "+.0f") + " USD em " + str(a.get("trades_recent", 0)) + " ops, acerto " +
+            format(a.get("win_recent", 0.0) * 100, ".0f") + "% · segura " + format(med / 60, ".1f") + " min · " +
+            format(share * 100, ".0f") + "% ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min")
 
 
 def audit_all(rpc, sol_usd, max_tx=None):
@@ -934,17 +979,15 @@ def audit_all(rpc, sol_usd, max_tx=None):
             continue
         if res is None:
             continue
-        status, med, share, n = res
-        icon = {"ok": "✅ COPIA", "fast": "🗑️ REMOVIDA (rápida demais)", "watching": "👀 SEM DADOS"}[status]
-        rows.append(icon + " " + a[:6] + "…" + a[-4:] + " · segura " + format(med / 60, ".1f") + " min (mediana) · " +
-                    format(share * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min · " +
-                    str(n) + " posições medidas")
+        rows.append(audit_line(a, res))
     remove_fast_wallets()
     ok = sum(1 for r in rows if r.startswith("✅"))
     head = ("🔍 AUDITORIA DAS CARTEIRAS: " + str(ok) + " de " + str(len(rows)) + " liberadas para copiar\n"
-            "Regra: segura ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min (mediana) e ≥ " +
+            "Regras: segura ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min (mediana) e ≥ " +
             format(MIN_LONG_SHARE * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
-            " min. As rápidas demais são removidas e a busca automática coloca outras no lugar.")
+            " min; nos últimos " + format(RESULT_DAYS, ".0f") + " dias: lucro, ≥ " + str(RESULT_MIN_TRADES) +
+            " operações e acerto ≥ " + format(RESULT_MIN_WIN * 100, ".0f") + "%. "
+            "As que não passam são removidas e a busca automática coloca outras no lugar.")
     return head + ("\n\n" + "\n".join(rows) if rows else "\nNenhuma carteira na lista.")
 
 
@@ -1032,6 +1075,12 @@ def cycle(send=None, chat=None):
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
                 if status != "ok":
                     _event(("observando " if status == "watching" else "não copia (vende rápido) ") + wallet[:6] + "…")
+                    continue
+                with _LOCK:
+                    result = result_status(_load()["wallets"].get(wallet, {}))
+                if result != "ok":
+                    _event("não copia " + wallet[:6] + "…: " + ("aguardando auditoria dos últimos " if result == "unknown"
+                           else "sem bom resultado nos últimos ") + format(RESULT_DAYS, ".0f") + " dias")
                     continue
                 if MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
                     _event("ignorou compra pequena de " + wallet[:6] + "…: " +
