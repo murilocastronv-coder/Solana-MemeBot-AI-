@@ -69,3 +69,18 @@ Use uma **carteira dedicada** só para o bot, com pouco dinheiro (ver `DEDICATED
 pip install -r requirements.txt
 python -m unittest discover -p "test_*.py"
 ```
+
+## Robô com a estratégia de uma carteira (sem copiar)
+- `/analisar ENDEREÇO`: lê até 400 transações da carteira e mostra como ela opera. Na entrada:
+  valor por moeda, plataforma, idade e valor de mercado da moeda quando compra, horários e
+  compra em partes. Na saída: take profit e stop loss reais (resultado de cada venda), tempo
+  segurando e venda em partes.
+- `/estrategia ENDEREÇO`: monta um **robô próprio** com esse perfil. Ele procura sozinho, nas
+  moedas em alta e novas do DexScreener, as que batem com a plataforma, a idade e o valor de
+  mercado típicos da carteira; passa no anti-golpe; compra `CLONE_ORDER_USD` (máx.
+  `CLONE_MAX_POSITIONS`) e sai com o TP, o SL e o tempo máximo medidos. Ligue em
+  **🤖 Robô estratégia SIM / REAL**.
+- `/clonar ENDEREÇO`: copia as compras da carteira e sai com o TP/SL dela.
+
+O que a carteira usa para decidir entrar (sinais, informações, leitura própria) não fica na
+blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simulação antes.

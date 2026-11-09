@@ -137,6 +137,38 @@ def follow(address):
         _save(d)
 
 
+def clone(address, summary, closed):
+    """Follow a wallet chosen by the owner and exit like it does: its own measured TP, SL and
+    max hold (from wallet_profile). Its entries are copied even if they are small or quick."""
+    import wallet_profile
+    follow(address)
+    exit_cfg = {
+        "tp": round(min(max(float(summary.get("suggest_tp") or TAKE_PROFIT), 0.05), 10.0), 4),
+        "sl": round(min(max(float(summary.get("suggest_sl") or STOP_LOSS), 0.03), 0.9), 4),
+        "max_hold_s": int(summary["suggest_max_hold_min"] * 60) if summary.get("suggest_max_hold_min") else None,
+    }
+    with _LOCK:
+        d = _load()
+        w = d["wallets"][address]
+        w["clone"] = True
+        w["exit"] = exit_cfg
+        w["holds"] = (wallet_profile.holds_seconds(closed) or w.get("holds") or [])[-30:]
+        w["profile"] = {k: summary.get(k) for k in ("positions", "win_rate", "pnl_usd", "tp_median", "sl_median",
+                                                    "hold_median", "size_median")}
+        _save(d)
+    _event("clonou " + address[:6] + "…: TP +" + format(exit_cfg["tp"] * 100, ".0f") + "% · SL -" +
+           format(exit_cfg["sl"] * 100, ".0f") + "%")
+    return exit_cfg
+
+
+def _exit_for(wallet):
+    with _LOCK:
+        w = _load()["wallets"].get(wallet) or {}
+    e = w.get("exit") or {}
+    return {"tp": float(e.get("tp") or TAKE_PROFIT), "sl": float(e.get("sl") or STOP_LOSS),
+            "max_hold_s": e.get("max_hold_s")}
+
+
 def auto_follow(candidate):
     """Add a discovered wallet only after its observed history passes filters."""
     from solders.pubkey import Pubkey
@@ -418,6 +450,11 @@ def wallets_text():
             if st.get("average_buy_lamports") is not None:
                 hist += ", compra média " + format(int(st["average_buy_lamports"]) / 1e9, ".2f") + " SOL"
         bal = (" · saldo US$ " + format(w["balance_usd"], ".0f")) if w.get("balance_usd") is not None else ""
+        if w.get("clone"):
+            ex = w.get("exit") or {}
+            bal += (" · 🧬 CLONE: TP +" + format(float(ex.get("tp") or TAKE_PROFIT) * 100, ".0f") + "%, SL -" +
+                    format(float(ex.get("sl") or STOP_LOSS) * 100, ".0f") + "%" +
+                    (", máx. " + format(ex["max_hold_s"] / 60, ".0f") + " min" if ex.get("max_hold_s") else ""))
         lines.append(str(i) + ". " + icon + " nota " + format(w.get("score", 0.0), ".3f") + bal + hist +
                      " · segura " + format(med / 60, ".0f") + " min · cópias " + str(w.get("copies", 0)) +
                      " (" + str(w.get("wins", 0)) + " no lucro) · P/L " + format(w.get("pnl_usd", 0.0), "+.2f") +
@@ -604,6 +641,12 @@ def _open(mint, wallet, send, chat):
             d = _load()
             d["positions"][mint] = {"wallet": wallet, "real": True, "opened_at": time.time()}
             _save(d)
+        ex = _exit_for(wallet)
+        try:
+            import live_trade_state as st
+            st.set_position_fields(mint, copy_tp=ex["tp"], copy_sl=ex["sl"], copy_max_hold_s=ex["max_hold_s"])
+        except Exception:
+            pass
         _event("REAL copiou compra de " + wallet[:6] + "… em " + mint[:6])
         return None   # the live engine already reported the buy
     try:
@@ -618,8 +661,10 @@ def _open(mint, wallet, send, chat):
         if d["balance"] < cost:
             return None
         d["balance"] -= cost
+        ex = d["wallets"].get(wallet, {}).get("exit") or {}
         d["positions"][mint] = {"wallet": wallet, "real": False, "tokens": tokens, "cost_usd": cost,
-                                "opened_at": time.time()}
+                                "opened_at": time.time(), "tp": ex.get("tp"), "sl": ex.get("sl"),
+                                "max_hold_s": ex.get("max_hold_s")}
         _save(d)
     _event("SIM copiou compra de " + wallet[:6] + "… em " + mint[:6])
     return "👥 SIM copiou compra de " + wallet[:6] + "…: " + mint + " · US$ " + format(cost, ".2f")
@@ -682,10 +727,14 @@ def sim_exits():
         except Exception:
             continue
         change = (value - NETWORK_FEE_USD) / float(pos["cost_usd"]) - 1
-        if change >= TAKE_PROFIT:
+        tp, sl = float(pos.get("tp") or TAKE_PROFIT), float(pos.get("sl") or STOP_LOSS)
+        max_hold = pos.get("max_hold_s")
+        if change >= tp:
             msgs += _close(mint, "take_profit")
-        elif change <= -STOP_LOSS:
+        elif change <= -sl:
             msgs += _close(mint, "stop_loss")
+        elif max_hold and time.time() - float(pos.get("opened_at", time.time())) > float(max_hold):
+            msgs += _close(mint, "time_stop")
     return msgs
 
 
@@ -771,6 +820,10 @@ def cycle(send=None, chat=None):
             elif not info.get("paused"):
                 with _LOCK:
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
+                if info.get("clone"):
+                    status = "ok"        # chosen by the owner: copy every entry
+                    paid_usd = paid_usd if paid_usd is not None else MIN_BUY_USD
+                    paid_usd = max(paid_usd, MIN_BUY_USD)
                 if status != "ok":
                     _event(("observando " if status == "watching" else "não copia (vende rápido) ") + wallet[:6] + "…")
                     continue

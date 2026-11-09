@@ -60,6 +60,9 @@ def keyboard():
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
+  [{"text":"🧠 Clonar estratégia de uma carteira","callback_data":"clone_help"}],
+  [{"text":"🤖 Robô estratégia SIM","callback_data":"strat_sim"},{"text":"🤖 Robô estratégia REAL","callback_data":"strat_real"}],
+  [{"text":"⏹️ Parar robô estratégia","callback_data":"strat_off"},{"text":"📊 Status robô","callback_data":"strat_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def robot_alive_line():
@@ -147,6 +150,27 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
+ if action in ("strat_sim","strat_real","strat_off","strat_status","/robo"):
+  import clone_strategy as cs
+  try:
+   pre=""
+   if action=="strat_sim":cs.set_mode(True,False);pre="🧪 Robô da estratégia em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
+   elif action=="strat_real":live_engine.start();cs.set_mode(True,True);pre="💵 ROBÔ DA ESTRATÉGIA COM DINHEIRO REAL LIGADO.\n⚠️ Reproduz o perfil da carteira, não garante o resultado dela.\n\n"
+   elif action=="strat_off":cs.set_mode(False);pre="⏹️ Robô da estratégia desligado. Posições abertas continuam com alvo/stop.\n\n"
+   send(chat,pre+cs.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Robô estratégia: "+str(exc)[:200],keyboard())
+  return
+ if action=="clone_help":
+  send(chat,"🧠 CLONAR A ESTRATÉGIA DE UMA CARTEIRA\nEnvie:\n/analisar ENDEREÇO → mostra como ela entra e sai (valor, plataforma, idade da moeda, TP, SL, tempo)\n/clonar ENDEREÇO → analisa e passa a copiar as compras dela, saindo com o TP/SL/tempo dela\n/estrategia ENDEREÇO → monta um ROBÔ PRÓPRIO com a estratégia dela (sem copiar): procura sozinho moedas com o mesmo perfil e sai com o TP/SL/tempo dela. Depois ligue em 🤖 Robô estratégia SIM ou REAL.",keyboard());return
+ if action in ("/analisar","/clonar","/estrategia"):
+  parts=(msg or {}).get("text","").split()
+  if len(parts)!=2 or not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}",parts[1]):
+   send(chat,"Uso: "+action+" ENDERECO_DA_CARTEIRA\n/analisar = só mostra a estratégia · /clonar = copia as entradas dele saindo com o TP/SL dele · /estrategia = robô próprio com a estratégia dele, sem copiar.",keyboard());return
+  if not os.getenv("SOLANA_RPC_URL"):
+   send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
+  send(chat,"🧠 Analisando "+parts[1][:6]+"…"+parts[1][-4:]+": lendo até 400 transações. Leva 1–3 minutos…")
+  run_async(analyze_wallet_job,chat,parts[1],{"/clonar":"clone","/estrategia":"strategy"}.get(action))
+  return
  if action in ("copy_following","/copiadas"):
   import copy_trader as ct
   try:
@@ -295,6 +319,16 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
+def strategy_loop():
+ """Autonomous bot with a wallet's measured strategy: one pass every 20 s."""
+ while True:
+  time.sleep(20)
+  try:
+   import clone_strategy
+   chat=active_chat()
+   if not chat or not clone_strategy.enabled():continue
+   for m in clone_strategy.cycle(send,chat):send(chat,m)
+  except Exception as exc:logging.warning("strategy cycle failed: %s",type(exc).__name__)
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -349,6 +383,32 @@ def wallet_discovery_loop():
   except Exception as exc:
    logging.warning("wallet discovery failed: %s: %s",type(exc).__name__,str(exc)[:200])
   time.sleep(interval)
+def analyze_wallet_job(chat,address,do_clone=None):
+ """Read the wallet history, report its strategy and optionally clone it (runs off the Telegram thread)."""
+ try:
+  import wallet_profile,dex_wallets,copy_trader
+  rpc=dex_wallets._rpc_factory(os.getenv("SOLANA_RPC_URL"))
+  summary,closed,text=wallet_profile.analyze(address,rpc,copy_trader._sol_usd(),get_json=dex_wallets._get_json)
+  for part in split_message(text):send(chat,part)
+  if do_clone=="strategy":
+   if not summary.get("positions"):
+    send(chat,"⛔ Não montei o robô: sem operações fechadas para medir a estratégia.",keyboard());return
+   import clone_strategy
+   clone_strategy.configure(address,summary)
+   send(chat,"🤖 ROBÔ MONTADO com a estratégia de "+address[:6]+"…"+address[-4:]+" (sem copiar a carteira):\n\n"+clone_strategy.status_text()+
+    "\n\nLigue em 🤖 Robô estratégia SIM para testar ou REAL para operar.",keyboard());return
+  if do_clone:
+   if not summary.get("positions"):
+    send(chat,"⛔ Não clonei: sem operações fechadas para medir a estratégia.",keyboard());return
+   ex=copy_trader.clone(address,summary,closed)
+   send(chat,"🧬 CLONADO: vou copiar as próximas compras de "+address[:6]+"…"+address[-4:]+" e sair como ele sai:\n"+
+    "TP +"+format(ex["tp"]*100,".0f")+"% · SL -"+format(ex["sl"]*100,".0f")+"%"+
+    (" · vende em no máximo "+format(ex["max_hold_s"]/60,".0f")+" min" if ex["max_hold_s"] else "")+
+    "\nTambém vendo quando ele vender. Valor por cópia: US$ "+format(copy_trader.ORDER_USD,".0f")+
+    ". Precisa do copy ligado (SIMULAÇÃO ou REAL).",keyboard())
+ except Exception as exc:
+  logging.exception("wallet analysis failed")
+  send(chat,"⛔ Análise falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
 def loop():
@@ -357,6 +417,7 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
+ threading.Thread(target=strategy_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:
