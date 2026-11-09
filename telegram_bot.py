@@ -78,6 +78,15 @@ def status_text():
    "P/L real hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD · total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD · operações: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)\n"+
    robot_alive_line())
  except Exception as exc:return "Status indisponível: "+type(exc).__name__
+def last_cycle_line(c):
+ if not c:return "Última rodada: aguardando a primeira (a cada 2 min)."
+ ago=int(time.time()-c.get("at",0))
+ line=("Última rodada (há "+str(ago//60)+" min): "+str(c.get("tx_read",0))+" negociações lidas, "+
+  str(c.get("buyers",0))+" compradores ("+str(c.get("new_buyers",0))+" novos), "+
+  str(c.get("histories",0))+" históricos analisados ("+str(c.get("histories_with_trades",0))+" com operações fechadas)")
+ if c.get("failed") or c.get("rpc_errors"):
+  line+="\n⚠️ RPC: "+str(c.get("failed",0))+" leituras perdidas, "+str(c.get("rpc_errors",0))+" recusas"+(" ("+c.get("last_error","")+")" if c.get("last_error") else "")
+ return line
 def discovery_text():
  """What the automatic wallet search found so far."""
  import wallet_copy
@@ -89,10 +98,11 @@ def discovery_text():
   "Moedas observadas agora: "+(", ".join(t["symbol"] for t in s["dex_tokens"][:8]) or "aguardando DexScreener"),
   "Negociações analisadas: "+str(s["dex_transactions_scanned"]+s["transactions_scanned"]),
   "Carteiras com histórico analisado: "+str(s["wallets_analyzed"]),
+  last_cycle_line(s.get("last_cycle") or {}),
   "Carteiras com operações fechadas: "+str(s["wallets_seen"])+" · aprovadas: "+str(s["qualified_wallets"]),
   "Aprovada = lucro realizado, acerto ≥ "+format(wallet_copy.MIN_WIN_RATE*100,".0f")+"%, ≥ "+str(wallet_copy.MIN_CLOSED_TRADES)+" operações fechadas e retenção média ≥ "+format(wallet_copy.MIN_HOLD_SECONDS/60,".0f")+" min por moeda."]
  for w in wallet_copy.best_wallets(limit=10) if s["qualified_wallets"] else []:
-  lines.append("• "+w["wallet"][:4]+"…"+w["wallet"][-4:]+" · lucro "+format(w["realized_lamports"]/1e9,"+.3f")+" SOL · acerto "+format(w["win_rate"]*100,".0f")+"% · "+str(w["closed_trades"])+" ops · segura "+format(w["average_hold_seconds"]/60,".0f")+" min")
+  lines.append("• solscan.io/account/"+w["wallet"]+"\n  lucro "+format(w["realized_lamports"]/1e9,"+.3f")+" SOL · acerto "+format(w["win_rate"]*100,".0f")+"% · "+str(w["closed_trades"])+" ops · segura "+format(w["average_hold_seconds"]/60,".0f")+" min")
  if not s["qualified_wallets"]:lines.append("Ainda nenhuma aprovada. A cada 2 min o bot analisa o histórico de novas carteiras que compraram moedas em alta.")
  return "\n".join(lines)
 def menu(chat):
@@ -313,7 +323,7 @@ def wallet_discovery_loop():
    if chat and added:
     send(chat,"🔎 Descobri " + str(len(added)) + " carteira(s) lucrativas nas moedas em alta do DexScreener, segurando ≥ 5 min. Vou observar apenas as próximas compras; nenhuma posição antiga foi copiada.\n" + "\n".join(x[:6]+"…"+x[-4:] for x in added))
   except Exception as exc:
-   logging.warning("wallet discovery failed: %s",type(exc).__name__)
+   logging.warning("wallet discovery failed: %s: %s",type(exc).__name__,str(exc)[:200])
   time.sleep(interval)
 def run_async(fn,*args):
  threading.Thread(target=fn,args=args,daemon=True).start()
