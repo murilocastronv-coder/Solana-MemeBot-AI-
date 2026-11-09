@@ -18,9 +18,9 @@ services:
       - key: DAILY_LOSS_LIMIT_ENABLED
         value: "false"
       - key: MAX_ORDER_USD
-        value: "20"
+        value: "34"
       - key: COPY_ORDER_USD
-        value: "20"
+        value: "34"
       - key: COPY_MAX_POSITIONS
         value: "3"
       - key: COPY_MIN_HOLD_MINUTES
