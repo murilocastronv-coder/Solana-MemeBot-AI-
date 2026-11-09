@@ -373,12 +373,12 @@ def wallet_discovery_loop():
     if candidate["wallet"] in followed:continue
     if copy_trader.auto_follow(candidate):added.append(candidate["wallet"])
     elif copy_trader.replace_worst(candidate):added.append(candidate["wallet"])
-   removed=copy_trader.prune_low_balance()
+   removed=copy_trader.prune_low_balance()+copy_trader.remove_fast_wallets()
    chat=active_chat()
    if chat and removed:
     send(chat,"🗑️ Parei de copiar "+str(len(removed))+" carteira(s): saldo < US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+
      ", compras < US$ "+format(copy_trader.MIN_BUY_USD,".0f")+", idade < "+format(copy_trader.MIN_WALLET_DAYS,".0f")+
-     " dias ou sem operar quase todo dia.\n"+"\n".join("solscan.io/account/"+x for x in removed))
+     " dias, sem operar quase todo dia ou fechando posições em menos de 5 min. A busca coloca outras no lugar.\n"+"\n".join("solscan.io/account/"+x for x in removed))
    if chat and added:
     total=sum(1 for w in copy_trader._load()["wallets"].values() if not w.get("paused"))
     text=("🆕 NOVA CARTEIRA PARA COPIAR" if len(added)==1 else "🆕 "+str(len(added))+" NOVAS CARTEIRAS PARA COPIAR")+\
@@ -399,8 +399,9 @@ def audit_job(chat=None,addresses=None):
     res=copy_trader.audit_wallet(a,rpc,copy_trader._sol_usd())
     if res:
      status,med,share,n=res
-     lines.append(("✅ Liberada para copiar: " if status=="ok" else "⛔ NÃO vai copiar: " if status=="fast" else "👀 Sem dados suficientes ainda: ")+
+     lines.append(("✅ Liberada para copiar: " if status=="ok" else "🗑️ REMOVIDA (fecha rápido demais): " if status=="fast" else "👀 Sem dados suficientes ainda: ")+
       a[:6]+"…"+a[-4:]+" segura "+format(med/60,".1f")+" min (mediana), "+format(share*100,".0f")+"% das posições ≥ 5 min ("+str(n)+" medidas)")
+   copy_trader.remove_fast_wallets()
    text="\n".join(lines)
   else:
    text=copy_trader.audit_all(rpc,copy_trader._sol_usd())
@@ -435,9 +436,11 @@ def analyze_wallet_job(chat,address,do_clone=None):
     send(chat,"⛔ Não clonei: sem operações fechadas para medir a estratégia.",keyboard());return
    ex=copy_trader.clone(address,summary,closed)
    hold_status,med=copy_trader.holder_status(copy_trader._load()["wallets"].get(address,{}))
-   if hold_status!="ok":
-    send(chat,"⚡ ADICIONADA, MAS NÃO VAI ABRIR ORDENS: "+address[:6]+"…"+address[-4:]+" segura as moedas só "+
-     format(med/60,".1f")+" min (mediana). Só copio carteiras que seguram ≥ "+format(copy_trader.MIN_HOLD_SECONDS/60,".0f")+" min.",keyboard());return
+   if hold_status=="fast":
+    copy_trader.remove_fast_wallets()
+    send(chat,"🗑️ NÃO CLONEI: "+address[:6]+"…"+address[-4:]+" fecha as posições rápido demais (mediana "+
+     format(med/60,".1f")+" min). Só copio carteiras que seguram ≥ "+format(copy_trader.MIN_HOLD_SECONDS/60,".0f")+
+     " min na maioria das posições.",keyboard());return
    send(chat,"🧬 CLONADO: vou copiar as próximas compras de "+address[:6]+"…"+address[-4:]+" e sair como ele sai:\n"+
     "TP +"+format(ex["tp"]*100,".0f")+"% · SL -"+format(ex["sl"]*100,".0f")+"%"+
     (" · vende em no máximo "+format(ex["max_hold_s"]/60,".0f")+" min" if ex["max_hold_s"] else "")+
