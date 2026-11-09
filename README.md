@@ -60,7 +60,7 @@ python -m btc_trend_pullback.paper --strategy ambas --profile both --report
 python -m btc_trend_pullback.paper --strategy agressivo --profile spot --unlock
 
 # Testes
-python -m unittest test_btc_trend_pullback
+python -m unittest test_btc_trend_pullback test_btc_mac_7_10
 ```
 
 Os dados históricos vêm de `data.binance.vision` (arquivo público, sem chave): velas de 5m e
@@ -83,6 +83,12 @@ fora da amostra. Com menos de 30 operações o resultado é marcado como inconcl
 - Não ajuste nada olhando o período fora da amostra.
 - Se passar no backtest: paper trading por **pelo menos 30 dias** (o `--report` conta os dias;
   mudar parâmetros exige recomeçar a contagem). Nada aqui ativa dinheiro real.
+
+## MAc(7,10) — análise de estratégia externa
+`btc_mac_7_10/` reproduz e testa a regra MAc(7,10) do projeto
+octopus444/technical-trading-rules-based-strategies-btc. A reprodução bate exatamente com o
+publicado, mas a estratégia **não passou** (sem validação fora da amostra real; nenhuma janela de
+30 dias levou US$ 50 a US$ 500). Detalhes em [`btc_mac_7_10/RESULTADOS.md`](btc_mac_7_10/RESULTADOS.md).
 
 ## Deploy do paper trading (Render)
 `render.yaml` cria um worker que roda as 4 contas simuladas e guarda o estado em `/var/data`.
