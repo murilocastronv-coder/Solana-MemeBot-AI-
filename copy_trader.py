@@ -657,6 +657,11 @@ def _open(mint, wallet, send, chat):
         if (not allowed or open_now >= MAX_OPEN_TOTAL or st.positions_by_mode("copy") >= MAX_POSITIONS
                 or mint in st._load()["positions"]):
             return None
+        import wallet_holdings
+        ok, why = wallet_holdings.can_buy(mint, live_engine.get_address())
+        if not ok:
+            _event("não comprou " + mint[:6] + ": " + why)
+            return None
     with _LOCK:
         d = _load()
         if mint in d["positions"] or (not real and (len(d["positions"]) >= MAX_POSITIONS or

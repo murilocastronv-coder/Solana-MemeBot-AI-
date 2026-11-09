@@ -77,6 +77,7 @@ def status_text():
   return (ct.status_text()+"\n\n"+
    "Robô (dinheiro real): "+("🟢 PRONTO" if live_engine.ready() else "🔴 PARADO — "+str(live_engine.why_stopped() or ""))+"\n"+
    "Posições reais abertas: "+str(st["positions"])+" · ordens pendentes: "+str(st["pending"])+"\n"+
+   (wallet_holdings_line()+"\n" if get_address() else "")+
    "Perda do dia: US$ "+format(st["daily_loss_usd"],".2f")+(" / "+format(trade_state.daily_loss_limit(),".2f") if trade_state.DAILY_LOSS_LIMIT_ENABLED else " (sem limite diário)")+"\n"+
    "P/L real hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD · total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD · operações: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)\n"+
    robot_alive_line())
@@ -94,6 +95,11 @@ def last_cycle_line(c):
  if c.get("failed") or c.get("rpc_errors"):
   line+="\n⚠️ RPC: "+str(c.get("failed",0))+" leituras perdidas, "+str(c.get("rpc_errors",0))+" recusas"+(" ("+c.get("last_error","")+")" if c.get("last_error") else "")
  return line
+def wallet_holdings_line():
+ try:
+  import wallet_holdings
+  return wallet_holdings.status_line(get_address())
+ except Exception as exc:return "Moedas na carteira agora: indisponível ("+type(exc).__name__+")"
 def discovery_text():
  """What the automatic wallet search found so far."""
  import wallet_copy,copy_trader
