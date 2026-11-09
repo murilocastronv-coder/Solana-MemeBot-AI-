@@ -119,3 +119,7 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
 - **Real**: exige backtest feito; se o backtest da alavancagem escolhida perdeu dinheiro, pede
   confirmação. Ordens na Jupiter Perps com a carteira do bot (garantia em USDC, trocada de SOL se
   faltar), cada transação simulada na blockchain antes de enviar. Precisa de `LIVE_TRADING_ENABLED=true`.
+- **🧠 Melhorar estratégia BTC**: testa 16 versões fixas (rompimento de 20 ou 48 velas; alvo/stop
+  1×2, 1,5×1, 2×1 e 3×1 ATR; com e sem filtro de volume). Escolhe a melhor nos primeiros 8 meses
+  e confere nos últimos 4, que ela não viu. Só aplica no robô se der lucro também na conferência;
+  senão avisa e não muda nada.

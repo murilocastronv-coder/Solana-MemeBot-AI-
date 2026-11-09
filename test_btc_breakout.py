@@ -165,3 +165,45 @@ class TelegramTests(unittest.TestCase):
         self.assertFalse(bb._load()["enabled"])
         self.assertIn("REAL LIGADO", self.tap("brk_real_ok")[0][0])
         self.assertEqual(bb._load()["mode"], "real")
+
+
+class OptimizeTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_variants_and_params_change_rules(self):
+        self.assertEqual(len(bb.VARIANTS), 16)
+        tp, sl, _ = bb.levels("long", 60000, 300, 5, {"channel": 20, "tp_atr": 3.0, "sl_atr": 1.0, "vol": False})
+        self.assertAlmostEqual(tp - 60000, 900)
+        self.assertAlmostEqual(60000 - sl, 300)
+
+    def test_volume_filter(self):
+        prices = [60000 + i * 5 for i in range(260)] + [62000]
+        c = series(prices)
+        p = dict(bb.DEFAULT_PARAMS, vol=True)
+        self.assertIsNone(bb.signal_at(bb.Indicators(c), len(c) - 1, p))     # same volume as average
+        c[-1]["v"] = 5
+        self.assertEqual(bb.signal_at(bb.Indicators(c), len(c) - 1, p), "long")
+
+    def test_optimize_applies_only_if_confirmed(self):
+        c = series(walk(36000, 0.00002, 0.003, seed=9))       # random walk: no real edge
+        text, passed, best = bb.optimize(c)
+        self.assertIn("16 versões", text)
+        self.assertIn("Conferência", text)
+        d = bb._load()
+        self.assertEqual(d["optimize"]["passed"], passed)
+        if passed:
+            self.assertEqual(d["params"], best)
+        else:
+            self.assertIsNone(d.get("params"))
+            self.assertIn("NÃO APLICADA", text)
+
+    def test_strong_trend_can_pass(self):
+        c = series(walk(36000, 0.0004, 0.002, seed=2))       # steady uptrend: breakouts work
+        text, passed, best = bb.optimize(c)
+        if passed:
+            self.assertEqual(bb.current_params(), best)
+            self.assertIn("APLICADA", text)

@@ -39,6 +39,12 @@ BORROW_RATE_HOUR = 0.00003
 LIQ_LOSS = 0.90              # liquidated when the loss reaches 90% of the collateral
 STOP_BEFORE_LIQ = 0.70       # stop at most at 70% of the distance to liquidation
 START_USD = float(os.getenv("BRK_SIM_START_USD", "50"))
+VOL_LEN = 20
+# Strategy settings. tp_atr / sl_atr = target / stop distance in ATRs; vol = breakout candle volume
+# must be above the average of the previous VOL_LEN candles. "🧠 Melhorar" may replace them.
+DEFAULT_PARAMS = {"channel": CHANNEL, "tp_atr": TP_ATR, "sl_atr": TP_ATR * SL_MULT, "vol": False}
+VARIANTS = [{"channel": ch, "tp_atr": tp, "sl_atr": sl, "vol": vol}
+            for ch in (20, 48) for tp, sl in ((1.0, 2.0), (1.5, 1.0), (2.0, 1.0), (3.0, 1.0)) for vol in (False, True)]
 MIN_REAL_COLLATERAL = 5.0
 
 _LOCK = threading.RLock()
@@ -79,7 +85,7 @@ def fetch_history(days=365, now=None):
     """Closed 15m BTC candles for the last `days` days (+ indicator warm-up), oldest first."""
     now = int(now or time.time())
     end = now // TF_SECONDS * TF_SECONDS
-    start = end - (days * 96 + TREND_EMA + CHANNEL + 50) * TF_SECONDS
+    start = end - (days * 96 + TREND_EMA + 48 + 50) * TF_SECONDS
     rows = []
     try:
         cursor = start * 1000
@@ -95,7 +101,7 @@ def fetch_history(days=365, now=None):
     return [uniq[t] for t in sorted(uniq)]
 
 
-def fetch_recent(n=TREND_EMA + CHANNEL + 60, now=None):
+def fetch_recent(n=TREND_EMA + 48 + 60, now=None):
     now = int(now or time.time())
     try:
         rows = _binance(limit=min(1000, n + 1))
@@ -145,13 +151,31 @@ class Indicators:
         self.c = candles
         self.ema = ema([x["c"] for x in candles], TREND_EMA)
         self.atr = atr(candles)
+        vols = [x.get("v", 0.0) for x in candles]
+        self.vol_avg = [None] * len(candles)
+        acc = 0.0
+        for i, v in enumerate(vols):
+            if i >= VOL_LEN:
+                self.vol_avg[i] = acc / VOL_LEN
+                acc -= vols[i - VOL_LEN]
+            acc += v
 
 
-def signal_at(ind, i):
+def describe(p):
+    return ("rompe máx./mín. de " + str(p["channel"]) + " velas a favor da média de " + str(TREND_EMA) +
+            " · alvo " + format(p["tp_atr"], "g") + "×ATR · stop " + format(p["sl_atr"], "g") + "×ATR" +
+            (" · só com volume acima da média" if p.get("vol") else ""))
+
+
+def signal_at(ind, i, p=None):
     """'long' | 'short' | None for the CLOSED candle i (uses candles <= i only)."""
-    if i < max(TREND_EMA, CHANNEL + 1) or ind.ema[i] is None or ind.atr[i] is None:
+    p = p or DEFAULT_PARAMS
+    ch = int(p["channel"])
+    if i < max(TREND_EMA, ch + 1) or ind.ema[i] is None or ind.atr[i] is None:
         return None
-    window = ind.c[i - CHANNEL:i]
+    if p.get("vol") and (ind.vol_avg[i] is None or ind.c[i].get("v", 0.0) <= ind.vol_avg[i]):
+        return None
+    window = ind.c[i - ch:i]
     hi, lo = max(x["h"] for x in window), min(x["l"] for x in window)
     close = ind.c[i]["c"]
     if close > hi and close > ind.ema[i]:
@@ -161,10 +185,11 @@ def signal_at(ind, i):
     return None
 
 
-def levels(side, entry, a, leverage):
-    """(take_profit, stop, liquidation) prices. Stop = SL_MULT x TP distance, kept before liquidation."""
-    tp_dist = TP_ATR * a
-    sl_dist = SL_MULT * tp_dist
+def levels(side, entry, a, leverage, p=None):
+    """(take_profit, stop, liquidation) prices; the stop is kept before liquidation."""
+    p = p or DEFAULT_PARAMS
+    tp_dist = p["tp_atr"] * a
+    sl_dist = p["sl_atr"] * a
     liq_move = LIQ_LOSS / leverage
     sl_dist = min(sl_dist, STOP_BEFORE_LIQ * liq_move * entry)
     sign = 1 if side == "long" else -1
@@ -177,10 +202,13 @@ def _pnl(pos, price, hours):
 
 
 # ------------------------------------------------------------------ backtest
-def backtest(candles, leverage, start=START_USD, days=365):
-    """Replay the rules candle by candle. Worst case inside a candle: stop before target."""
-    ind = Indicators(candles)
-    first = max(len(candles) - days * 96, TREND_EMA + CHANNEL + 1)
+def backtest(candles, leverage, start=START_USD, days=365, p=None, first=None, last=None, ind=None):
+    """Replay the rules candle by candle on [first, last). Worst case inside a candle: stop first."""
+    p = p or DEFAULT_PARAMS
+    ind = ind or Indicators(candles)
+    warm = TREND_EMA + max(int(p["channel"]), VOL_LEN) + 1
+    first = max(first if first is not None else len(candles) - days * 96, warm)
+    last = min(last if last is not None else len(candles), len(candles))
     equity = peak = start
     max_dd = 0.0
     pos = None
@@ -210,13 +238,13 @@ def backtest(candles, leverage, start=START_USD, days=365):
         monthly[m] = monthly.get(m, 0.0) + pnl
         pos = None
 
-    for i in range(first, len(candles)):
+    for i in range(first, last):
         c = candles[i]
         if pending and pos is None and equity > 1:
             side, a = pending
             collateral = equity * ORDER_FRACTION
             entry = c["o"]
-            tp, sl, liq = levels(side, entry, a, leverage)
+            tp, sl, liq = levels(side, entry, a, leverage, p)
             pos = {"side": side, "entry": entry, "collateral": collateral, "size": collateral * leverage,
                    "tp": tp, "sl": sl, "liq": liq, "i": i}
         pending = None
@@ -240,7 +268,7 @@ def backtest(candles, leverage, start=START_USD, days=365):
             mtm = equity + _pnl(pos, c["c"], 0)
         else:
             mtm = equity
-            s = signal_at(ind, i)
+            s = signal_at(ind, i, p)
             if s:
                 pending = (s, ind.atr[i])
         peak = max(peak, mtm)
@@ -248,25 +276,31 @@ def backtest(candles, leverage, start=START_USD, days=365):
         if equity <= 1:
             break
     if pos:
-        close(candles[-1]["c"], len(candles) - 1, "fim")
+        close(candles[last - 1]["c"], last - 1, "fim")
     return {"leverage": leverage, "start": start, "final": equity, "return_pct": (equity / start - 1) * 100,
             "max_dd_pct": max_dd * 100, "trades": trades, "win_rate": wins / trades if trades else 0.0,
             "profit_factor": gross_w / gross_l if gross_l else (float("inf") if gross_w else 0.0),
             "liquidations": liqs, "worst_losing_streak": worst_streak, "monthly": monthly,
-            "days": (candles[-1]["t"] - candles[first]["t"]) / 86400 if len(candles) > first else 0}
+            "days": (candles[last - 1]["t"] - candles[first]["t"]) / 86400 if last > first else 0}
 
 
-def backtest_report(candles=None, leverages=LEVERAGES):
+def current_params():
+    with _LOCK:
+        return dict(_load().get("params") or DEFAULT_PARAMS)
+
+
+def backtest_report(candles=None, leverages=LEVERAGES, p=None):
     candles = candles or fetch_history(365)
-    results = [backtest(candles, lev) for lev in leverages]
+    p = p or current_params()
+    ind = Indicators(candles)
+    results = [backtest(candles, lev, p=p, ind=ind) for lev in leverages]
     first, last = candles[max(0, len(candles) - 365 * 96)], candles[-1]
     bh = (last["c"] / first["o"] - 1) * 100
     lines = ["📊 BACKTEST 1 ANO — BTC BREAKOUT 15 MIN",
              time.strftime("%d/%m/%Y", time.gmtime(first["t"])) + " → " + time.strftime("%d/%m/%Y", time.gmtime(last["t"])) +
              " · " + str(len(candles)) + " velas reais de 15 min",
-             "Regras: rompe máx./mín. de " + str(CHANNEL) + " velas a favor da média de " + str(TREND_EMA) +
-             " · alvo " + format(TP_ATR, "g") + "×ATR · stop " + format(SL_MULT, "g") + "× o alvo · " +
-             format(ORDER_FRACTION * 100, ".0f") + "% da conta de garantia · taxas e juros da Jupiter",
+             "Regras: " + describe(p) + " · " + format(ORDER_FRACTION * 100, ".0f") +
+             "% da conta de garantia · taxas e juros da Jupiter",
              "Saldo inicial US$ " + format(START_USD, ".0f") + " · BTC no período: " + format(bh, "+.1f") + "%", ""]
     for r in results:
         pf = "∞" if r["profit_factor"] == float("inf") else format(r["profit_factor"], ".2f")
@@ -274,9 +308,9 @@ def backtest_report(candles=None, leverages=LEVERAGES):
                      "%) · queda máx. " + format(r["max_dd_pct"], ".0f") + "% · " + str(r["trades"]) + " ops · acerto " +
                      format(r["win_rate"] * 100, ".0f") + "% · fator " + pf + " · liquidações " + str(r["liquidations"]) +
                      " · pior seq. " + str(r["worst_losing_streak"]))
-    need = SL_MULT / (1 + SL_MULT) * 100
+    need = p["sl_atr"] / (p["sl_atr"] + p["tp_atr"]) * 100
     best = max(results, key=lambda r: r["final"])
-    lines += ["", "Com stop " + format(SL_MULT, "g") + "× o alvo, é preciso acertar mais de " + format(need, ".0f") +
+    lines += ["", "Com estes alvo e stop, é preciso acertar mais de " + format(need, ".0f") +
               "% (mais as taxas) só para empatar.",
               ("✅ Melhor resultado: " + str(best["leverage"]) + "x." if best["final"] > START_USD else
                "❌ NENHUMA alavancagem deu lucro no último ano com estas regras. Não recomendo dinheiro real."),
@@ -287,6 +321,55 @@ def backtest_report(candles=None, leverages=LEVERAGES):
         d["backtest"] = {"at": time.time(), "results": summary}
         _save(d)
     return "\n".join(lines), results
+
+
+def optimize(candles=None, dev_frac=2 / 3, select_leverage=2, min_trades=30):
+    """Pick the best of the fixed VARIANTS on the first 8 months, then check it on the last 4
+    months it never saw. Applied to the robot only if it also makes money there."""
+    candles = candles or fetch_history(365)
+    ind = Indicators(candles)
+    first = max(len(candles) - 365 * 96, TREND_EMA + 48 + 1)
+    split = first + int((len(candles) - first) * dev_frac)
+    rows = [(v, backtest(candles, select_leverage, p=v, ind=ind, first=first, last=split)) for v in VARIANTS]
+    eligible = [(v, r) for v, r in rows if r["trades"] >= min_trades] or rows
+    eligible.sort(key=lambda vr: vr[1]["final"], reverse=True)
+    best, dev = eligible[0]
+    oos = {lev: backtest(candles, lev, p=best, ind=ind, first=split, last=len(candles)) for lev in LEVERAGES}
+    o2 = oos[select_leverage]
+    passed = dev["final"] > START_USD and o2["final"] > START_USD and o2["profit_factor"] > 1
+    day = lambda i: time.strftime("%d/%m/%Y", time.gmtime(candles[min(i, len(candles) - 1)]["t"]))
+
+    def line(r):
+        pf = "∞" if r["profit_factor"] == float("inf") else format(r["profit_factor"], ".2f")
+        return (format(r["return_pct"], "+.0f") + "% · queda máx. " + format(r["max_dd_pct"], ".0f") + "% · " +
+                str(r["trades"]) + " ops · acerto " + format(r["win_rate"] * 100, ".0f") + "% · fator " + pf)
+    lines = ["🧠 MELHORAR ESTRATÉGIA BTC — " + str(len(VARIANTS)) + " versões testadas",
+             "Escolha: " + day(first) + " → " + day(split) + " (8 meses) · Conferência: " + day(split) + " → " +
+             day(len(candles) - 1) + " (4 meses que a escolha não viu) · comparação em " + str(select_leverage) + "x", "",
+             "Top 5 nos 8 meses de escolha:"]
+    for v, r in eligible[:5]:
+        lines.append("• " + describe(v) + " → " + line(r))
+    lines += ["", "🏆 Escolhida: " + describe(best),
+              "8 meses (escolha): " + line(dev),
+              "4 meses (conferência): " + line(o2), "",
+              "Conferência por alavancagem:"]
+    for lev, r in oos.items():
+        lines.append(str(lev) + "x → US$ " + format(r["final"], ".2f") + " (" + format(r["return_pct"], "+.0f") +
+                     "%) · liquidações " + str(r["liquidations"]))
+    with _LOCK:
+        d = _load()
+        d["optimize"] = {"at": time.time(), "passed": passed, "params": best}
+        if passed:
+            d["params"] = best
+            d["backtest"] = {"at": time.time(), "results": {lev: {k: v for k, v in r.items() if k != "monthly"}
+                                                            for lev, r in oos.items()}, "kind": "conferência 4 meses"}
+        _save(d)
+    lines += ["", ("✅ APLICADA: a escolhida deu lucro também nos 4 meses que não viu. O robô passou a usar estas "
+                   "regras. Teste em ₿ Breakout SIM antes do real." if passed else
+                   "❌ NÃO APLICADA: nenhuma versão deu lucro de forma confiável (a melhor dos 8 meses não "
+                   "se confirmou nos 4 meses seguintes). As regras do robô não mudaram. Não recomendo dinheiro real."),
+              "Simulação histórica com taxas. Não é promessa de lucro."]
+    return "\n".join(lines), passed, best
 
 
 # ------------------------------------------------------------------ state
@@ -386,7 +469,7 @@ def _open(d, side, price, a, send, chat):
         size, collateral = onchain.get("size_usd") or size, onchain.get("collateral_usd") or collateral
     else:
         d["balance"] -= collateral
-    tp, sl, liq = levels(side, entry, a, lev)
+    tp, sl, liq = levels(side, entry, a, lev, d.get("params") or DEFAULT_PARAMS)
     d[_key(d)] = {"side": side, "entry": entry, "collateral": collateral, "size": size, "leverage": lev,
                   "tp": tp, "sl": sl, "liq": liq, "opened_at": time.time()}
     send(chat, ("🟢 LONG" if side == "long" else "🔴 SHORT") + " BTC " + str(lev) + "x " +
@@ -465,7 +548,7 @@ def cycle(send, chat, candles=None, price=None, now=None):
             return
         d["last_bar"] = candles[-1]["t"]
         ind = Indicators(candles)
-        s = signal_at(ind, len(candles) - 1)
+        s = signal_at(ind, len(candles) - 1, d.get("params") or DEFAULT_PARAMS)
         if s:
             _open(d, s, price, ind.atr[-1], send, chat)
         _save(d)
@@ -479,8 +562,7 @@ def status_text(price=None):
     hist = [h for h in d["history"] if h["real"] == (d["mode"] == "real")]
     wins = sum(1 for h in hist if h["pnl"] > 0)
     lines = ["₿ BTC BREAKOUT 15 MIN — " + mode + " · " + str(d["leverage"]) + "x",
-             "Rompe máx./mín. de " + str(CHANNEL) + " velas a favor da média de " + str(TREND_EMA) + " · alvo " +
-             format(TP_ATR, "g") + "×ATR · stop " + format(SL_MULT, "g") + "× o alvo · " +
+             describe(d.get("params") or DEFAULT_PARAMS) + " · " +
              format(ORDER_FRACTION * 100, ".0f") + "% da conta por operação",
              "Operações: " + str(len(hist)) + " (" + str(wins) + " no lucro) · resultado " +
              format(sum(h["pnl"] for h in hist), "+.2f") + " USD" +
