@@ -19,7 +19,10 @@ compras e vendas delas, em simulação ou com dinheiro real.
 3. **Seguir**: o bot passa a seguir até 15 carteiras aprovadas (`COPY_AUTO_MAX_WALLETS`), das
    melhores para as piores pela **nota** (lucro × acerto × experiência). Uma carteira que ainda
    não provou nada nas nossas cópias é trocada por outra com nota 1,5× maior
-   (`COPY_REPLACE_MARGIN`). Ele
+   (`COPY_REPLACE_MARGIN`).
+   Só segue carteiras com **saldo de pelo menos US$ 150 em SOL** (`COPY_MIN_WALLET_USD`); a cada
+   rodada confere o saldo (cache de 10 min) e remove as que caírem abaixo, exceto se houver uma
+   cópia aberta daquela carteira. Ele
    ainda confere a mediana de retenção de pelo menos 3 operações observadas: carteira que vende
    em menos de 5 min não é copiada.
 4. **Copiar**: quando uma carteira seguida compra, o bot checa anti-golpe (mint/freeze revogados,
