@@ -39,7 +39,7 @@ class WalletCopyTests(unittest.TestCase):
         state = {"enabled": False, "real": False, "wallets": {}, "balance": 100.0,
                  "start": 100.0, "positions": {}, "history": []}
         candidate = {"wallet": "11111111111111111111111111111111", "closed_trades": 3,
-            "realized_lamports": 100, "hold_samples": [360, 420, 600], "average_buy_lamports": 10**9, "age_days": 60}
+            "realized_lamports": 100, "hold_samples": [360, 420, 600], "average_buy_lamports": 10**9, "age_days": 60, "active_days_7": 7}
         with patch("copy_trader._load", return_value=state), patch("copy_trader._save"), \
                 patch("copy_trader.wallet_usd", return_value=1000.0), patch("copy_trader._sol_usd", return_value=200.0):
             self.assertTrue(copy_trader.auto_follow(candidate))

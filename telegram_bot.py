@@ -101,7 +101,7 @@ def discovery_text():
   last_cycle_line(s.get("last_cycle") or {}),
   "Carteiras com operações fechadas: "+str(s["wallets_seen"])+" · aprovadas: "+str(s["qualified_wallets"]),
   "Aprovada = lucro realizado, acerto ≥ "+format(wallet_copy.MIN_WIN_RATE*100,".0f")+"%, ≥ "+str(wallet_copy.MIN_CLOSED_TRADES)+" operações fechadas e retenção média ≥ "+format(wallet_copy.MIN_HOLD_SECONDS/60,".0f")+" min por moeda.",
-  "Para copiar também: saldo ≥ US$ 150, compra média ≥ US$ 100 e operando há ≥ 30 dias (veja 👛 Carteiras copiadas)."]
+  "Para copiar também: saldo ≥ US$ 150, compra média ≥ US$ 100, operando há ≥ 30 dias e ativa em ≥ 6 dos últimos 7 dias (veja 👛 Carteiras copiadas)."]
  for w in wallet_copy.best_wallets(limit=10) if s["qualified_wallets"] else []:
   lines.append("• solscan.io/account/"+w["wallet"]+"\n  lucro "+format(w["realized_lamports"]/1e9,"+.3f")+" SOL · acerto "+format(w["win_rate"]*100,".0f")+"% · "+str(w["closed_trades"])+" ops · segura "+format(w["average_hold_seconds"]/60,".0f")+" min")
  if not s["qualified_wallets"]:lines.append("Ainda nenhuma aprovada. A cada 2 min o bot analisa o histórico de novas carteiras que compraram moedas em alta.")

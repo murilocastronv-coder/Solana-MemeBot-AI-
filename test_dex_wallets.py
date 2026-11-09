@@ -190,6 +190,18 @@ class WalletAgeTests(unittest.TestCase):
         self.assertGreaterEqual(age, 30)
         self.assertEqual(len(rpc.calls), 1)
 
+    def test_counts_active_days_in_last_week(self):
+        times = [self.NOW - d * 86400 - 3600 for d in (0, 1, 2, 4, 6, 6, 40)]   # days 0,1,2,4,6 + old
+        rows, rpc = self.pages(times)
+        act = dw.wallet_activity("W", rpc, self.NOW, first_page=rows)
+        self.assertEqual(act["active_days_7"], 5)
+        self.assertGreaterEqual(act["age_days"], 40)
+
+    def test_failed_transactions_do_not_count_as_activity(self):
+        rows, rpc = self.pages([self.NOW - 100, self.NOW - 2 * 86400, self.NOW - 50 * 86400])
+        rows[0]["err"] = {"x": 1}
+        self.assertEqual(dw.wallet_activity("W", rpc, self.NOW, first_page=rows)["active_days_7"], 1)
+
     def test_too_busy_to_prove_is_unknown(self):
         times = [self.NOW - i * 60 for i in range(5000)]     # 5000 txs in 3.5 days
         rows, rpc = self.pages(times)

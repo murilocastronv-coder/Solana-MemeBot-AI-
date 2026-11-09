@@ -139,28 +139,42 @@ def _get_tx(rpc, signature):
                                               "maxSupportedTransactionVersion": 0}])
 
 
-def wallet_age_days(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pages=AGE_PAGES):
-    """Days since the oldest transaction we can reach (a lower bound once >= min_days).
-    Pages back 1000 signatures at a time and stops as soon as min_days is proven.
-    Returns None when the wallet is so active that min_days could not be reached."""
+def wallet_activity(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pages=AGE_PAGES):
+    """{'age_days': days since the oldest reachable transaction (lower bound once >= min_days,
+    None if the wallet is too busy to prove it), 'active_days_7': how many of the last 7 days
+    (24 h windows ending now) had at least one successful transaction}.
+    Pages back 1000 signatures at a time, stopping once min_days (and 7 days) are covered."""
     rows = list(first_page or [])
     oldest = None
+    days = set()
+    age = None
     for page in range(pages + 1):
-        times = [int(r["blockTime"]) for r in rows if r.get("blockTime")]
-        if times:
-            oldest = min(times) if oldest is None else min(oldest, min(times))
-            if now - oldest >= min_days * 86400:
-                return (now - oldest) / 86400
+        for r in rows:
+            t = r.get("blockTime")
+            if not t:
+                continue
+            t = int(t)
+            oldest = t if oldest is None else min(oldest, t)
+            if not r.get("err") and now - t < 7 * 86400:
+                days.add(int((now - t) // 86400))
+        if oldest is not None and now - oldest >= max(min_days, 7) * 86400:
+            age = (now - oldest) / 86400
+            break
         if page == pages:
-            return None
+            break                       # too busy to prove the age within the page budget
         opts = {"limit": 1000}
         if rows:
             opts["before"] = rows[-1]["signature"]
         nxt = rpc("getSignaturesForAddress", [wallet, opts]) or []
         if not nxt:
-            break                       # reached the wallet's first transaction
+            age = (now - oldest) / 86400 if oldest else 0.0   # reached the first transaction
+            break
         rows = nxt
-    return (now - oldest) / 86400 if oldest else 0.0
+    return {"age_days": age, "active_days_7": len(days)}
+
+
+def wallet_age_days(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pages=AGE_PAGES):
+    return wallet_activity(wallet, rpc, now, first_page, min_days, pages)["age_days"]
 
 
 def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None):
@@ -179,11 +193,11 @@ def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None):
             wallet_copy.process_confirmed_block(tmp, {"blockTime": tx.get("blockTime") or s.get("blockTime"),
                                                       "transactions": [tx]}, slot=tx.get("slot"))
     stats = tmp["wallets"].get(wallet)
-    if stats and MIN_AGE_DAYS > 0:
+    if stats:
         try:
-            stats["age_days"] = wallet_age_days(wallet, rpc, int(now or time.time()), first_page=sigs)
+            stats.update(wallet_activity(wallet, rpc, int(now or time.time()), first_page=sigs))
         except Exception:
-            stats["age_days"] = None
+            stats["age_days"], stats["active_days_7"] = None, None
     return stats
 
 
