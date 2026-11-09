@@ -151,7 +151,9 @@ def best_wallets(state=None, limit=10):
             "average_hold_seconds": int(stats["total_hold_seconds"] / trades),
             "long_holds": int(stats.get("long_holds", 0)),
             "hold_samples": list(stats.get("hold_samples", []))})
-    rows.sort(key=lambda x: (x["realized_lamports"], x["win_rate"], x["average_hold_seconds"]), reverse=True)
+    # best first: profit x win rate x experience (same score copy_trader uses)
+    rows.sort(key=lambda x: (max(0, x["realized_lamports"]) / 1e9 * x["win_rate"] * min(x["closed_trades"], 25) ** 0.5,
+                             x["realized_lamports"]), reverse=True)
     return rows[:max(1, min(int(limit), 50))]
 
 

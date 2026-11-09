@@ -42,8 +42,10 @@ MAX_TOP_HOLDERS = 0.25
 MIN_ROUNDTRIP = 0.92
 NETWORK_FEE_USD = 0.003
 START_USD = 100.0
-MAX_WALLETS = 20
-MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 5))
+MAX_WALLETS = int(_env("COPY_MAX_WALLETS", 30))
+MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 15))
+# A new candidate replaces an unproven followed wallet only if its score is clearly better.
+REPLACE_MARGIN = _env("COPY_REPLACE_MARGIN", 1.5)
 # Only copy wallets that HOLD: we first watch each wallet's own buy->sell
 # round trips and copy it only if the median hold is at least this long.
 MIN_HOLD_SECONDS = _env("COPY_MIN_HOLD_MINUTES", 5) * 60
@@ -147,9 +149,29 @@ def auto_follow(candidate):
             "paused": False, "open_buys": {}, "holds": holds[-30:],
             "auto_discovered": True,
         }
+        _record_stats(d["wallets"][address], candidate)
         _save(d)
     _event("descoberta automática: " + address[:6] + "… passou os filtros de retenção e histórico")
     return True
+
+
+def score(stats):
+    """How good a wallet looks from its history: profit (SOL) x win rate x experience."""
+    trades = int(stats.get("closed_trades", 0))
+    if trades <= 0:
+        return 0.0
+    profit = max(0.0, int(stats.get("realized_lamports", 0)) / 1e9)
+    win = float(stats.get("win_rate", 0.0))
+    return round(profit * win * min(trades, 25) ** 0.5, 6)
+
+
+def _record_stats(w, candidate):
+    w["stats"] = {"closed_trades": int(candidate.get("closed_trades", 0)),
+                  "win_rate": float(candidate.get("win_rate", 0.0)),
+                  "realized_lamports": int(candidate.get("realized_lamports", 0)),
+                  "average_hold_seconds": int(candidate.get("average_hold_seconds", 0)),
+                  "updated_at": int(time.time())}
+    w["score"] = score(candidate)
 
 
 def _bad_auto_wallet(w):
@@ -175,15 +197,69 @@ def replace_worst(candidate):
         busy = {p.get("wallet") for p in d["positions"].values()}
         bad = [(w.get("pnl_usd", 0.0), a) for a, w in d["wallets"].items()
                if _bad_auto_wallet(w) and a not in busy]
-        if not bad:
-            return False
-        _, worst = min(bad)
+        if bad:
+            _, worst = min(bad)
+        else:
+            # Self-analysis: a wallet that has not proven itself with our own copies yet
+            # (fewer than MIN_COPIES_TO_JUDGE) gives its place to a clearly better candidate.
+            new_score = score(candidate)
+            weak = [(w.get("score", 0.0), a) for a, w in d["wallets"].items()
+                    if w.get("auto_discovered") and a not in busy and w.get("copies", 0) < MIN_COPIES_TO_JUDGE]
+            if not weak:
+                return False
+            low, worst = min(weak)
+            if new_score <= max(low, 1e-9) * REPLACE_MARGIN:
+                return False
         d["wallets"].pop(worst)
         _save(d)
     if not auto_follow(candidate):
         return False
-    _event("troquei " + worst[:6] + "… (ruim) por " + address[:6] + "…")
+    _event("troquei " + worst[:6] + "… por " + address[:6] + "… (melhor nota)")
     return True
+
+
+def refresh_stats(candidate):
+    """Update the stored history/score of a wallet we already follow."""
+    address = str(candidate.get("wallet") or "")
+    with _LOCK:
+        d = _load()
+        w = d["wallets"].get(address)
+        if not w or not w.get("auto_discovered"):
+            return False
+        _record_stats(w, candidate)
+        _save(d)
+    return True
+
+
+def wallets_text():
+    """Followed wallets ranked by score, with their history and our copy results."""
+    with _LOCK:
+        d = _load()
+    rows = sorted(d["wallets"].items(), key=lambda kv: kv[1].get("score", 0.0), reverse=True)
+    active = sum(1 for _, w in rows if not w.get("paused"))
+    copies = sum(w.get("copies", 0) for _, w in rows)
+    pnl = sum(w.get("pnl_usd", 0.0) for _, w in rows)
+    lines = ["👛 CARTEIRAS COPIADAS: " + str(active) + " ativas de " + str(len(rows)) +
+             " (limite automático " + str(MAX_AUTO_WALLETS) + ")",
+             "Cópias feitas: " + str(copies) + " · resultado das cópias: " + format(pnl, "+.2f") + " USD",
+             "Ordenadas pela nota (lucro × acerto × experiência). Carteira sem resultado é trocada "
+             "por outra com nota " + format(REPLACE_MARGIN, "g") + "× maior; com " + str(MIN_COPIES_TO_JUDGE) +
+             " cópias no prejuízo, é pausada."]
+    for i, (addr, w) in enumerate(rows, 1):
+        st = w.get("stats") or {}
+        status, med = holder_status(w)
+        icon = "⏸️" if w.get("paused") else ("✅" if status == "ok" else ("👀" if status == "watching" else "⚡"))
+        hist = ""
+        if st:
+            hist = (" · histórico " + format(st.get("realized_lamports", 0) / 1e9, "+.3f") + " SOL, acerto " +
+                    format(st.get("win_rate", 0) * 100, ".0f") + "%, " + str(st.get("closed_trades", 0)) + " ops")
+        lines.append(str(i) + ". " + icon + " nota " + format(w.get("score", 0.0), ".3f") + hist +
+                     " · segura " + format(med / 60, ".0f") + " min · cópias " + str(w.get("copies", 0)) +
+                     " (" + str(w.get("wins", 0)) + " no lucro) · P/L " + format(w.get("pnl_usd", 0.0), "+.2f") +
+                     " USD\n   solscan.io/account/" + addr)
+    if not rows:
+        lines.append("Nenhuma carteira ainda. A busca automática adiciona as melhores sozinha.")
+    return "\n".join(lines)
 
 
 def unfollow(address):

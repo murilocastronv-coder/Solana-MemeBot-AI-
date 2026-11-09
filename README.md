@@ -16,7 +16,10 @@ compras e vendas delas, em simulação ou com dinheiro real.
    `COPY_DISCOVERY_SOURCE=blocos` lê blocos inteiros; `ambos` usa as duas fontes.
 2. **Carteira aprovada** quando tem: lucro realizado positivo, acerto ≥ 55%, ≥ 3 operações
    fechadas e retenção média ≥ 5 min por moeda. As mais lucrativas entram primeiro.
-3. **Seguir**: o bot passa a seguir até 5 carteiras aprovadas (`COPY_AUTO_MAX_WALLETS`). Ele
+3. **Seguir**: o bot passa a seguir até 15 carteiras aprovadas (`COPY_AUTO_MAX_WALLETS`), das
+   melhores para as piores pela **nota** (lucro × acerto × experiência). Uma carteira que ainda
+   não provou nada nas nossas cópias é trocada por outra com nota 1,5× maior
+   (`COPY_REPLACE_MARGIN`). Ele
    ainda confere a mediana de retenção de pelo menos 3 operações observadas: carteira que vende
    em menos de 5 min não é copiada.
 4. **Copiar**: quando uma carteira seguida compra, o bot checa anti-golpe (mint/freeze revogados,
@@ -31,9 +34,10 @@ compras e vendas delas, em simulação ou com dinheiro real.
 ## Botões no Telegram
 - **👥 Copiar (SIMULAÇÃO)**: preços reais da Jupiter, dinheiro de mentira (US$ 100).
 - **💵 Copiar (REAL)**: opera com a carteira do bot.
-- **⏹️ Parar cópia** · **📊 Status** · **🔎 Carteiras encontradas**.
+- **⏹️ Parar cópia** · **📊 Status** · **🔎 Carteiras encontradas** · **👛 Carteiras copiadas**
+  (quantas está copiando, nota, histórico e resultado de cada uma).
 - **📥 Depositar SOL** · **💰 Ver saldo** · **💸 Saque manual** · **🔑 Exportar carteira**.
-- Comandos: `/seguir ENDEREÇO`, `/deixar ENDEREÇO`, `/carteiras`, `/status`.
+- Comandos: `/seguir ENDEREÇO`, `/deixar ENDEREÇO`, `/carteiras`, `/copiadas`, `/status`.
 
 ## Configuração no Render
 Variáveis obrigatórias (segredos):

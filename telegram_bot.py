@@ -59,7 +59,7 @@ def split_message(text,limit=3800):
 def keyboard():
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
-  [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"}],
+  [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def robot_alive_line():
@@ -142,6 +142,13 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
+ if action in ("copy_following","/copiadas"):
+  import copy_trader as ct
+  try:
+   for part in split_message(ct.wallets_text()):send(chat,part)
+   send(chat,"Menu:",keyboard())
+  except Exception as exc:send(chat,"Lista indisponível: "+type(exc).__name__,keyboard())
+  return
  if action in ("copy_wallets","/carteiras"):
   try:send(chat,discovery_text(),keyboard())
   except Exception as exc:send(chat,"Busca indisponível: "+type(exc).__name__,keyboard())
@@ -316,7 +323,10 @@ def wallet_discovery_loop():
    if source in ("blocks","blocos","ambos","both"):
     wallet_copy.scan_confirmed(max_blocks=100)
    added=[]
-   for candidate in wallet_copy.best_wallets(limit=50):
+   candidates=wallet_copy.best_wallets(limit=50)
+   followed={c["wallet"] for c in candidates if copy_trader.refresh_stats(c)}
+   for candidate in candidates:
+    if candidate["wallet"] in followed:continue
     if copy_trader.auto_follow(candidate):added.append(candidate["wallet"])
     elif copy_trader.replace_worst(candidate):added.append(candidate["wallet"])
    chat=active_chat()

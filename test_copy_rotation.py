@@ -75,3 +75,58 @@ class TelegramMenuTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SelfAnalysisTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def c(self, sol, win=0.8, trades=5):
+        x = cand(pnl=int(sol * 1e9), trades=trades)
+        x["win_rate"] = win
+        return x
+
+    def test_limit_is_15_by_default(self):
+        self.assertEqual(c.MAX_AUTO_WALLETS, 15)
+        for _ in range(15):
+            self.assertTrue(c.auto_follow(self.c(0.01)))
+        self.assertFalse(c.auto_follow(self.c(0.01)))
+
+    def test_clearly_better_wallet_replaces_weakest_unproven(self):
+        ws = [self.c(0.01) for _ in range(c.MAX_AUTO_WALLETS)]
+        ws[3] = self.c(0.001)
+        for w in ws:
+            c.auto_follow(w)
+        self.assertFalse(c.replace_worst(self.c(0.0012)))   # not 1.5x better
+        strong = self.c(0.5, win=0.9, trades=15)
+        self.assertTrue(c.replace_worst(strong))
+        wallets = c._load()["wallets"]
+        self.assertNotIn(ws[3]["wallet"], wallets)
+        self.assertIn(strong["wallet"], wallets)
+
+    def test_proven_wallet_is_kept(self):
+        ws = [self.c(0.01) for _ in range(c.MAX_AUTO_WALLETS)]
+        for w in ws:
+            c.auto_follow(w)
+        d = c._load()
+        for w in d["wallets"].values():
+            w.update(copies=6, pnl_usd=4.0)       # all proven profitable for us
+        c._save(d)
+        self.assertFalse(c.replace_worst(self.c(5.0)))
+
+    def test_wallets_text_lists_count_and_links(self):
+        w = self.c(0.2)
+        c.auto_follow(w)
+        text = c.wallets_text()
+        self.assertIn("1 ativas de 1", text)
+        self.assertIn("solscan.io/account/" + w["wallet"], text)
+
+    def test_refresh_updates_score(self):
+        w = self.c(0.01)
+        c.auto_follow(w)
+        better = dict(w, realized_lamports=int(1e9), win_rate=0.9)
+        self.assertTrue(c.refresh_stats(better))
+        self.assertGreater(c._load()["wallets"][w["wallet"]]["score"], 0.5)
