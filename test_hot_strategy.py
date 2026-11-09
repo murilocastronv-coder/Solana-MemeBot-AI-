@@ -30,10 +30,11 @@ class HotExitTests(unittest.TestCase):
 
 
 class DailyLimitTests(unittest.TestCase):
-    def test_fixed_50_usd(self):
+    def test_no_daily_limit_by_default(self):
         import live_trade_state as st
-        self.assertEqual(st._loss_limit({"max_daily_loss_usd": 11.46}), 50.0)
-        self.assertEqual(st.set_daily_loss_limit(500), 50.0)
+        self.assertFalse(st.DAILY_LOSS_LIMIT_ENABLED)
+        self.assertEqual(st._loss_limit({"max_daily_loss_usd": 11.46}), float("inf"))
+        self.assertEqual(st.set_daily_loss_limit(500), float("inf"))
 
 
 class SyncTests(unittest.TestCase):

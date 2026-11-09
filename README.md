@@ -19,8 +19,9 @@ compras e vendas delas, em simulação ou com dinheiro real.
 5. **Sair**: vende quando a carteira vender, ou no stop −15% / alvo +50%.
 6. **Trocar**: carteira que dá prejuízo para você (5+ cópias no negativo) é pausada e trocada por
    uma melhor; o mesmo vale para quem passa a vender rápido demais.
-7. **Proteções**: limite de perda diária (`DAILY_LOSS_LIMIT_USD`), máximo de posições, cada
-   ordem real confirmada na blockchain.
+7. **Proteções**: máximo de posições, stop por moeda, anti-golpe, cada ordem real confirmada na
+   blockchain. **Sem limite de perda diária** (para ligar: `DAILY_LOSS_LIMIT_ENABLED=true` e
+   `DAILY_LOSS_LIMIT_USD`).
 
 ## Botões no Telegram
 - **👥 Copiar (SIMULAÇÃO)**: preços reais da Jupiter, dinheiro de mentira (US$ 100).
@@ -36,7 +37,7 @@ Variáveis obrigatórias (segredos):
 - `SOLANA_RPC_URL`: RPC dedicado (ex.: Helius). **Sem ele a busca automática não roda.**
 
 Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=5`, `COPY_MAX_POSITIONS=3`,
-`COPY_MIN_HOLD_MINUTES=5`, `COPY_AUTO_DISCOVERY_ENABLED=true`, `DAILY_LOSS_LIMIT_USD=50`.
+`COPY_MIN_HOLD_MINUTES=5`, `COPY_AUTO_DISCOVERY_ENABLED=true`, `DAILY_LOSS_LIMIT_ENABLED=false`.
 
 Use uma **carteira dedicada** só para o bot, com pouco dinheiro (ver `DEDICATED_WALLET.md` e
 `WALLET_SETUP.md`). Nunca envie frase de recuperação no Telegram.

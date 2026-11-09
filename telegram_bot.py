@@ -74,7 +74,7 @@ def status_text():
   return (ct.status_text()+"\n\n"+
    "Robô (dinheiro real): "+("🟢 PRONTO" if live_engine.ready() else "🔴 PARADO — "+str(live_engine.why_stopped() or ""))+"\n"+
    "Posições reais abertas: "+str(st["positions"])+" · ordens pendentes: "+str(st["pending"])+"\n"+
-   "Perda do dia: US$ "+format(st["daily_loss_usd"],".2f")+" / "+format(trade_state.daily_loss_limit(),".2f")+"\n"+
+   "Perda do dia: US$ "+format(st["daily_loss_usd"],".2f")+(" / "+format(trade_state.daily_loss_limit(),".2f") if trade_state.DAILY_LOSS_LIMIT_ENABLED else " (sem limite diário)")+"\n"+
    "P/L real hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD · total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD · operações: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)\n"+
    robot_alive_line())
  except Exception as exc:return "Status indisponível: "+type(exc).__name__
@@ -148,7 +148,7 @@ def handle(update):
    elif action=="copy_sim":ct.set_mode(True,False);pre="🧪 Copy trade em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
    elif action=="copy_real":
     live_engine.start();ct.set_mode(True,True)
-    pre="💵 COPY TRADE COM DINHEIRO REAL LIGADO — US$ "+format(ct.ORDER_USD,".0f")+" por cópia, anti-golpe e teste de venda antes de cada compra, ordem confirmada na blockchain. Vende quando a carteira vender, ou no stop −"+format(ct.STOP_LOSS*100,".0f")+"% / alvo +"+format(ct.TAKE_PROFIT*100,".0f")+"%. Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia.\n⚠️ Copiar não garante lucro: você entra depois da carteira copiada.\n\n"
+    pre="💵 COPY TRADE COM DINHEIRO REAL LIGADO — US$ "+format(ct.ORDER_USD,".0f")+" por cópia, anti-golpe e teste de venda antes de cada compra, ordem confirmada na blockchain. Vende quando a carteira vender, ou no stop −"+format(ct.STOP_LOSS*100,".0f")+"% / alvo +"+format(ct.TAKE_PROFIT*100,".0f")+"%. "+("Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia." if trade_state.DAILY_LOSS_LIMIT_ENABLED else "Sem limite de perda diária.")+"\n⚠️ Copiar não garante lucro: você entra depois da carteira copiada.\n\n"
    elif action=="copy_off":ct.set_mode(False);pre="⏹️ Copy trade desligado. Posições abertas continuam com stop/alvo até vender.\n\n"
    else:pre=""
    send(chat,pre+status_text(),keyboard())
