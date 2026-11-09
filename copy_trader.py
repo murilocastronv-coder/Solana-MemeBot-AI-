@@ -500,6 +500,73 @@ def wallets_text():
     return "\n".join(lines)
 
 
+def adopt_orphans():
+    """An open copy whose wallet is no longer followed (removed before it sold) would never be sold:
+    put that wallet back as watch-only (no new buys) so we sell together with it; it leaves again
+    when the copy closes. Returns the wallets put back."""
+    back, orphans = [], []
+    with _LOCK:
+        d = _load()
+        for mint, p in d["positions"].items():
+            w = p.get("wallet")
+            if w and w not in d["wallets"]:
+                d["wallets"][w] = {"last_sig": None, "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False,
+                                   "open_buys": {}, "holds": [], "leaving": True}
+                back.append(w)
+                orphans.append((mint, w))
+        if back:
+            _save(d)
+    for w in back:
+        _event("voltei a vigiar " + w[:6] + "… só para vender junto (posição aberta sem dono)")
+    ADOPTED.extend(orphans)
+    return back
+
+
+ADOPTED = []   # (mint, wallet) put back by adopt_orphans: check once whether the wallet already sold
+
+
+def wallet_token_balance(wallet, mint):
+    from solana_settlement import get_token_balance
+    return get_token_balance(wallet, mint)
+
+
+def sell_if_already_sold(send=None, chat=None):
+    """For positions whose wallet was just put back: if that wallet holds none of the coin anymore,
+    it sold while we were not watching, so sell now."""
+    msgs = []
+    while ADOPTED:
+        mint, w = ADOPTED.pop()
+        try:
+            held = wallet_token_balance(w, mint)
+        except Exception:
+            continue
+        if held == 0:
+            _event(w[:6] + "… já tinha vendido " + mint[:6] + ": vendi também")
+            msgs += _close(mint, "copy_follow", send, chat)
+    return msgs
+
+
+def positions_text():
+    """Open copies, where each came from and whether that wallet is being watched."""
+    with _LOCK:
+        d = _load()
+    if not d["positions"]:
+        return "📦 Nenhuma posição copiada aberta."
+    lines = ["📦 POSIÇÕES COPIADAS ABERTAS: " + str(len(d["positions"]))]
+    for mint, p in d["positions"].items():
+        w = p.get("wallet") or "?"
+        info = d["wallets"].get(w)
+        watch = ("👀 vigiando a carteira — vende quando ela vender" if info else
+                 "⚠️ carteira fora da lista — volta a ser vigiada na próxima rodada")
+        if info and info.get("leaving"):
+            watch += " (só até esta venda)"
+        held = (time.time() - float(p.get("opened_at") or time.time())) / 60
+        lines.append("• " + mint[:6] + "… " + ("💵 REAL" if p.get("real") else "🧪 SIM") + " · aberta há " +
+                     (format(held, ".0f") + " min" if held < 120 else format(held / 60, ".1f") + " h") +
+                     " · de " + w[:6] + "…" + w[-4:] + "\n  " + watch + "\n  solscan.io/token/" + mint)
+    return "\n".join(lines)
+
+
 def unfollow(address):
     """Stop following. With an open copy, the wallet stays only to sell together with it
     (no new buys) and leaves when that copy closes. Returns True if removed now."""
@@ -1062,6 +1129,8 @@ def cycle(send=None, chat=None):
     sell together with them (there is no fixed TP/SL)."""
     active = enabled()
     msgs = []
+    adopt_orphans()
+    msgs += sell_if_already_sold(send, chat)
     with _LOCK:
         d = _load()
         busy = {p.get("wallet") for p in d["positions"].values()}

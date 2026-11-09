@@ -234,3 +234,47 @@ class CopyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OrphanTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start(); self.addCleanup(p.stop)
+        c.EVENTS.clear()
+
+    def test_open_copy_without_wallet_gets_watched_again_and_sold(self):
+        d = c._load()
+        d["positions"][MINT] = {"wallet": WALLET, "real": False, "tokens": 1000, "cost_usd": 32.0, "opened_at": 0}
+        c._save(d)                                         # wallet was removed before the fix
+        self.assertIn("fora da lista", c.positions_text())
+        self.assertEqual(c.adopt_orphans(), [WALLET])
+        c.ADOPTED.clear()                                  # the wallet still holds the coin
+        w = c._load()["wallets"][WALLET]
+        self.assertTrue(w["leaving"])
+        self.assertIn("vigiando a carteira", c.positions_text())
+        sigs = []
+        txs = {}
+
+        def rpc(method, params):
+            if method == "getSignaturesForAddress":
+                return [{"signature": s, "err": None} for s in reversed(sigs)]
+            return txs[params[0]]
+        with patch.object(c, "_rpc", side_effect=rpc), patch.object(c, "_sol_usd", return_value=200.0), \
+                patch.object(c, "_order", return_value={"outAmount": str(int(0.2 * 1e9))}):
+            sigs.append("a"); txs["a"] = tx(0, -5000); c.cycle()          # first look: baseline
+            sigs.append("b"); txs["b"] = tx(-1000, 300_000_000); c.cycle()  # the wallet sells everything
+        self.assertEqual(c._load()["positions"], {})
+        self.assertNotIn(WALLET, c._load()["wallets"])     # watch-only wallet leaves after the sale
+
+    def test_wallet_that_already_sold_is_followed_by_an_immediate_sale(self):
+        d = c._load()
+        d["positions"][MINT] = {"wallet": WALLET, "real": False, "tokens": 1000, "cost_usd": 32.0, "opened_at": 0}
+        c._save(d)
+        with patch.object(c, "wallet_token_balance", return_value=0), patch.object(c, "_sol_usd", return_value=200.0), \
+                patch.object(c, "_order", return_value={"outAmount": str(int(0.1 * 1e9))}), \
+                patch.object(c, "_rpc", return_value=[]):
+            msgs = c.cycle()
+        self.assertEqual(c._load()["positions"], {})
+        self.assertTrue(any("a carteira vendeu" in m for m in msgs))
+
