@@ -52,6 +52,8 @@ BALANCE_MAX_AGE = 600
 # Only copy buys where the wallet put at least this much in the coin (and only follow
 # wallets whose average buy is at least this much).
 MIN_BUY_USD = _env("COPY_MIN_BUY_USD", 100)
+# Only follow wallets that have been trading for at least this many days.
+MIN_WALLET_DAYS = _env("COPY_MIN_WALLET_DAYS", 30)
 _balance_cache = {}
 # Only copy wallets that HOLD: we first watch each wallet's own buy->sell
 # round trips and copy it only if the median hold is at least this long.
@@ -151,7 +153,7 @@ def auto_follow(candidate):
         auto_count = sum(bool(w.get("auto_discovered")) for w in d["wallets"].values())
         if auto_count >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS:
             return False
-    if not big_enough_buyer(candidate) or not has_min_balance(address):
+    if not old_enough(candidate) or not big_enough_buyer(candidate) or not has_min_balance(address):
         return False
     with _LOCK:
         d = _load()
@@ -203,6 +205,14 @@ def big_enough_buyer(stats):
         return False
 
 
+def old_enough(stats):
+    """Wallet active for >= MIN_WALLET_DAYS (unknown age counts as no)."""
+    if MIN_WALLET_DAYS <= 0:
+        return True
+    age = stats.get("age_days")
+    return age is not None and float(age) >= MIN_WALLET_DAYS
+
+
 def has_min_balance(address):
     if MIN_WALLET_USD <= 0:
         return True
@@ -232,13 +242,14 @@ def prune_low_balance():
             w["balance_usd"] = round(usd, 2)
             st = w.get("stats") or {}
             small = st.get("average_buy_lamports") is not None and not big_enough_buyer(st)
+            small = small or (st.get("age_days") is not None and not old_enough(st))
             if (usd < MIN_WALLET_USD or small) and a not in {p.get("wallet") for p in d["positions"].values()}:
                 d["wallets"].pop(a)
                 removed.append(a)
             _save(d)
     for a in removed:
-        _event("removi " + a[:6] + "…: saldo abaixo de US$ " + format(MIN_WALLET_USD, ".0f") +
-               " ou compras menores que US$ " + format(MIN_BUY_USD, ".0f"))
+        _event("removi " + a[:6] + "…: saldo < US$ " + format(MIN_WALLET_USD, ".0f") +
+               ", compras < US$ " + format(MIN_BUY_USD, ".0f") + " ou menos de " + format(MIN_WALLET_DAYS, ".0f") + " dias")
     return removed
 
 
@@ -258,6 +269,7 @@ def _record_stats(w, candidate):
                   "realized_lamports": int(candidate.get("realized_lamports", 0)),
                   "average_hold_seconds": int(candidate.get("average_hold_seconds", 0)),
                   "average_buy_lamports": candidate.get("average_buy_lamports"),
+                  "age_days": candidate.get("age_days"),
                   "updated_at": int(time.time())}
     w["score"] = score(candidate)
 
@@ -278,7 +290,7 @@ def replace_worst(candidate):
             or int(candidate.get("closed_trades", 0)) < MIN_ROUND_TRIPS
             or int(candidate.get("realized_lamports", 0)) <= 0):
         return False
-    if not big_enough_buyer(candidate) or not has_min_balance(address):
+    if not old_enough(candidate) or not big_enough_buyer(candidate) or not has_min_balance(address):
         return False
     with _LOCK:
         d = _load()
@@ -336,7 +348,8 @@ def wallets_text():
              "por outra com nota " + format(REPLACE_MARGIN, "g") + "× maior; com " + str(MIN_COPIES_TO_JUDGE) +
              " cópias no prejuízo, é pausada.",
              "Saldo mínimo da carteira copiada: US$ " + format(MIN_WALLET_USD, ".0f") + " em SOL (abaixo disso é removida).",
-             "Compra mínima: só copia quando a carteira coloca ≥ US$ " + format(MIN_BUY_USD, ".0f") + " na moeda."]
+             "Compra mínima: só copia quando a carteira coloca ≥ US$ " + format(MIN_BUY_USD, ".0f") + " na moeda.",
+             "Idade mínima: carteira operando há ≥ " + format(MIN_WALLET_DAYS, ".0f") + " dias."]
     for i, (addr, w) in enumerate(rows, 1):
         st = w.get("stats") or {}
         status, med = holder_status(w)
@@ -345,6 +358,8 @@ def wallets_text():
         if st:
             hist = (" · histórico " + format(st.get("realized_lamports", 0) / 1e9, "+.3f") + " SOL, acerto " +
                     format(st.get("win_rate", 0) * 100, ".0f") + "%, " + str(st.get("closed_trades", 0)) + " ops")
+            if st.get("age_days") is not None:
+                hist += ", ativa há " + format(float(st["age_days"]), ".0f") + "+ dias"
             if st.get("average_buy_lamports") is not None:
                 hist += ", compra média " + format(int(st["average_buy_lamports"]) / 1e9, ".2f") + " SOL"
         bal = (" · saldo US$ " + format(w["balance_usd"], ".0f")) if w.get("balance_usd") is not None else ""

@@ -150,6 +150,7 @@ def best_wallets(state=None, limit=10):
             "win_rate": float(stats["wins"]) / trades,
             "realized_lamports": int(stats["realized_lamports"]),
             "average_buy_lamports": int(stats.get("cost_lamports_closed", 0) / trades),
+            "age_days": stats.get("age_days"),
             "average_hold_seconds": int(stats["total_hold_seconds"] / trades),
             "long_holds": int(stats.get("long_holds", 0)),
             "hold_samples": list(stats.get("hold_samples", []))})

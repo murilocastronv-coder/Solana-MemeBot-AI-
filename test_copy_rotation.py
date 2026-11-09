@@ -19,7 +19,8 @@ def setUpModule():
 
 def cand(pnl=10**9, holds=(400, 500, 600), trades=5):
     return {"wallet": str(Keypair().pubkey()), "closed_trades": trades, "realized_lamports": pnl,
-            "hold_samples": list(holds), "average_buy_lamports": 10**9}   # 1 SOL per buy
+            "hold_samples": list(holds), "average_buy_lamports": 10**9,   # 1 SOL per buy
+            "age_days": 90}
 
 
 class RotationTests(unittest.TestCase):
@@ -83,6 +84,16 @@ class MinBalanceTests(unittest.TestCase):
         unknown.pop("average_buy_lamports")
         self.assertFalse(c.auto_follow(unknown))
         self.assertTrue(c.auto_follow(cand()))           # 1 SOL = $200 per buy
+
+    def test_young_or_unknown_age_wallet_is_not_followed(self):
+        young = cand()
+        young["age_days"] = 12
+        self.assertFalse(c.auto_follow(young))
+        unknown = cand()
+        unknown["age_days"] = None
+        self.assertFalse(c.auto_follow(unknown))
+        self.assertTrue(c.auto_follow(cand()))
+        self.assertIn("ativa há 90+ dias", c.wallets_text())
 
     def test_min_is_150_usd(self):
         self.assertEqual(c.MIN_WALLET_USD, 150)
