@@ -7,8 +7,13 @@ compras e vendas delas, em simulação ou com dinheiro real.
 > podem virar golpe e carteiras boas no passado podem parar de ganhar. Comece pela simulação.
 
 ## Como funciona
-1. **Busca automática** (a cada 30 s): lê os blocos confirmados da Solana e registra, para cada
-   carteira, cada compra e venda de cada moeda (lucro em SOL e tempo que segurou).
+1. **Busca automática** (a cada 2 min): pega as memecoins em alta no **DexScreener** (API pública:
+   boosts e perfis novos, liquidez ≥ US$ 10 mil, volume 24h ≥ US$ 50 mil) e lê na blockchain as
+   negociações do par de cada uma. Quem acabou de comprar tem o **histórico recente analisado na
+   hora** (últimas 50 transações, até 4 carteiras por rodada, reanálise a cada 12 h): lucro em
+   SOL e tempo que segurou cada moeda. Ajustes de consumo do RPC: `COPY_DEX_MAX_TOKENS` (8),
+   `COPY_DEX_TX_PER_TOKEN` (15), `COPY_DEX_WALLETS_PER_CYCLE` (4), `COPY_DEX_WALLET_HISTORY` (50).
+   `COPY_DISCOVERY_SOURCE=blocos` lê blocos inteiros; `ambos` usa as duas fontes.
 2. **Carteira aprovada** quando tem: lucro realizado positivo, acerto ≥ 55%, ≥ 3 operações
    fechadas e retenção média ≥ 5 min por moeda. As mais lucrativas entram primeiro.
 3. **Seguir**: o bot passa a seguir até 5 carteiras aprovadas (`COPY_AUTO_MAX_WALLETS`). Ele

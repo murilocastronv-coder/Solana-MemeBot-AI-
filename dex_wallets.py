@@ -30,6 +30,10 @@ MIN_LIQUIDITY = _env("COPY_DEX_MIN_LIQUIDITY_USD", 10000)
 MIN_VOLUME_24H = _env("COPY_DEX_MIN_VOLUME_24H_USD", 50000)
 MAX_TOKENS = int(_env("COPY_DEX_MAX_TOKENS", 8))
 TX_PER_TOKEN = int(_env("COPY_DEX_TX_PER_TOKEN", 15))
+# Speed-up: wallets seen buying a hot coin get their own recent history read right away.
+WALLETS_PER_CYCLE = int(_env("COPY_DEX_WALLETS_PER_CYCLE", 4))
+WALLET_HISTORY = int(_env("COPY_DEX_WALLET_HISTORY", 50))
+REANALYZE_SECONDS = _env("COPY_DEX_REANALYZE_HOURS", 12) * 3600
 
 _http = requests.Session()
 
@@ -87,7 +91,42 @@ def _rpc_factory(rpc_url):
     return rpc
 
 
-def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token=TX_PER_TOKEN):
+def _buyers(tx):
+    """Wallets that paid SOL for a token in this transaction."""
+    tokens, sol = wallet_copy._tx_deltas(tx)
+    out = []
+    for owners in tokens.values():
+        for owner, (delta, _) in owners.items():
+            if delta > 0 and int(sol.get(owner, 0)) < 0:
+                out.append(owner)
+    return out
+
+
+def _get_tx(rpc, signature):
+    return rpc("getTransaction", [signature, {"encoding": "json", "commitment": "confirmed",
+                                              "maxSupportedTransactionVersion": 0}])
+
+
+def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY):
+    """Replay the wallet's latest transactions (oldest first) on a clean state.
+    Returns its stats (closed trades, wins, profit, hold time per coin) or None."""
+    sigs = rpc("getSignaturesForAddress", [wallet, {"limit": limit}]) or []
+    tmp = wallet_copy.empty_state()
+    for s in reversed(sigs):
+        if s.get("err"):
+            continue
+        try:
+            tx = _get_tx(rpc, s["signature"])
+        except Exception:
+            continue
+        if isinstance(tx, dict):
+            wallet_copy.process_confirmed_block(tmp, {"blockTime": tx.get("blockTime") or s.get("blockTime"),
+                                                      "transactions": [tx]}, slot=tx.get("slot"))
+    return tmp["wallets"].get(wallet)
+
+
+def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token=TX_PER_TOKEN,
+         wallets_per_cycle=WALLETS_PER_CYCLE, history=WALLET_HISTORY, now=None):
     """Read the newest trades of each hot pair and update wallet history. Returns tx count."""
     if rpc is None:
         rpc_url = (rpc_url or os.getenv("SOLANA_RPC_URL", "")).strip()
@@ -99,6 +138,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         path = wallet_copy._state_path()
         state = wallet_copy._load_state(path)
         cursors = state.setdefault("dex_cursors", {})
+        seen = set(state.get("dex_seen_sigs", []))
+        buyers = []
         scanned = 0
         for p in pairs:
             params = {"limit": per_token}
@@ -111,15 +152,16 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
             if not sigs:
                 continue
             for s in reversed(sigs):          # oldest first, so buy comes before sell
-                if s.get("err"):
+                if s.get("err") or s["signature"] in seen:
                     continue
                 try:
-                    tx = rpc("getTransaction", [s["signature"], {"encoding": "json", "commitment": "confirmed",
-                                                                 "maxSupportedTransactionVersion": 0}])
+                    tx = _get_tx(rpc, s["signature"])
                 except Exception:
                     continue
                 if not isinstance(tx, dict):
                     continue
+                seen.add(s["signature"])
+                buyers += _buyers(tx)
                 block = {"blockTime": tx.get("blockTime") or s.get("blockTime"), "transactions": [tx]}
                 wallet_copy.process_confirmed_block(state, block, slot=tx.get("slot"))
                 scanned += 1
@@ -128,6 +170,21 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
             keep = {p["pair"] for p in pairs}
             state["dex_cursors"] = {k: v for k, v in list(cursors.items())[-200:]} | \
                 {k: cursors[k] for k in keep if k in cursors}
+        # Speed-up: read the recent history of new buyers instead of waiting to see them sell.
+        analyzed = state.setdefault("dex_analyzed", {})
+        now = int(now or time.time())
+        fresh = [w for w in dict.fromkeys(buyers) if now - int(analyzed.get(w, 0)) >= REANALYZE_SECONDS]
+        for w in fresh[:max(0, wallets_per_cycle)]:
+            try:
+                stats = analyze_wallet(w, rpc, history)
+            except Exception:
+                continue
+            analyzed[w] = now
+            if stats:
+                state["wallets"][w] = stats
+        if len(analyzed) > 5000:
+            state["dex_analyzed"] = dict(sorted(analyzed.items(), key=lambda kv: kv[1])[-3000:])
+        state["dex_seen_sigs"] = list(seen)[-20000:]
         state["dex_tokens"] = [{"symbol": p["symbol"], "mint": p["mint"], "volume24h": p["volume24h"]} for p in pairs]
         state["dex_transactions_scanned"] = int(state.get("dex_transactions_scanned", 0)) + scanned
         state["updated_at"] = int(time.time())

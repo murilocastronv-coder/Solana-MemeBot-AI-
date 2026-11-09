@@ -99,3 +99,57 @@ class DexWalletTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WalletHistoryTests(unittest.TestCase):
+    """The pair scan only catches the BUY; the wallet's own history proves it holds and profits."""
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def rpc(self, hold=600):
+        txs = {}
+        pair_rows = {}
+        history = []
+        for k, m in enumerate(MINTS):
+            t0 = 1_700_000_000 + k * 5000
+            txs["hb-" + m] = swap_tx(m, 500_000, -10**8, t0)
+            txs["hs-" + m] = swap_tx(m, -500_000, 2 * 10**8, t0 + hold)
+            history = [("hs-" + m), ("hb-" + m)] + history          # newest first
+            txs["pb-" + m] = swap_tx(m, 500_000, -10**8, t0 + 9000)  # fresh buy on the hot pair
+            pair_rows[PAIRS[m]] = ["pb-" + m]
+        calls = []
+
+        def rpc(method, params):
+            calls.append((method, params[0]))
+            if method == "getSignaturesForAddress":
+                addr, opts = params
+                if "until" in opts:
+                    return []
+                rows = history if addr == TRADER else pair_rows.get(addr, [])
+                return [{"signature": s, "err": None} for s in rows[:opts["limit"]]]
+            return txs.get(params[0])
+        rpc.calls = calls
+        return rpc
+
+    def test_holder_approved_from_history_in_one_cycle(self):
+        rpc = self.rpc()
+        dw.scan(get=fake_dex(), rpc=rpc, now=1_800_000_000)
+        best = wallet_copy.best_wallets()
+        self.assertEqual(best[0]["wallet"], TRADER)
+        self.assertEqual(best[0]["closed_trades"], 3)
+        self.assertEqual(wallet_copy.summary()["wallets_analyzed"], 1)
+
+    def test_history_not_reread_within_12h(self):
+        rpc = self.rpc()
+        dw.scan(get=fake_dex(), rpc=rpc, now=1_800_000_000)
+        rpc.calls.clear()
+        dw.scan(get=fake_dex(), rpc=rpc, now=1_800_000_000 + 600)
+        self.assertNotIn(("getSignaturesForAddress", TRADER), rpc.calls)
+
+    def test_fast_flipper_history_is_rejected(self):
+        dw.scan(get=fake_dex(), rpc=self.rpc(hold=40), now=1_800_000_000)
+        self.assertEqual(wallet_copy.best_wallets(), [])
