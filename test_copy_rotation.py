@@ -13,7 +13,8 @@ REAL_SOL_USD = c._sol_usd
 
 def setUpModule():
     # every wallet in these tests has a big enough balance unless a test says otherwise
-    for p in (patch.object(c, "wallet_usd", return_value=1000.0), patch.object(c, "_sol_usd", return_value=200.0)):
+    for p in (patch.object(c, "wallet_usd", return_value=1000.0), patch.object(c, "_sol_usd", return_value=200.0),
+              patch.object(c, "TEST_DAYS", 0)):   # these tests check removals right away
         p.start()
         unittest.addModuleCleanup(p.stop)
 
@@ -325,3 +326,49 @@ class PreAuditTests(unittest.TestCase):
     def test_prefilter_is_cheap_and_strict(self):
         self.assertTrue(c.prefilter(cand()))
         self.assertFalse(c.prefilter(cand(holds=(30, 60, 90))))
+
+
+class TestPeriodTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        q = patch.object(c, "TEST_DAYS", 3)
+        q.start()
+        self.addCleanup(q.stop)
+
+    def test_new_wallet_is_protected_for_three_days(self):
+        import time as _t
+        w = cand()
+        c.auto_follow(w)
+        d = c._load()
+        d["wallets"][w["wallet"]].update(holds=[60] * 5, audit={"at": _t.time(), "pnl_recent": -40, "trades_recent": 50,
+                                                                 "win_recent": 0.2})
+        c._save(d)
+        self.assertEqual(c.remove_fast_wallets(), [])                  # bad, but still in its test
+        self.assertIn("em teste", c.wallets_text())
+        d = c._load()
+        d["wallets"][w["wallet"]]["followed_at"] = _t.time() - 4 * 86400
+        c._save(d)
+        self.assertEqual(c.remove_fast_wallets(), [w["wallet"]])       # after 3 days the rules apply
+
+    def test_old_wallets_start_their_test_now(self):
+        w = cand()
+        c.auto_follow(w)
+        d = c._load()
+        d["wallets"][w["wallet"]].pop("followed_at")
+        c._save(d)
+        c.ensure_test_start()
+        self.assertTrue(c.in_test(c._load()["wallets"][w["wallet"]]))
+
+    def test_wallet_in_test_is_not_swapped_for_a_better_one(self):
+        import time as _t
+        audit = lambda pnl: ([900] * 10, {"at": _t.time(), "positions": 50, "median_s": 900, "long_share": 1.0,
+                                          "pnl_recent": pnl, "trades_recent": 50, "win_recent": 0.7})
+        with patch.object(c, "measure", return_value=audit(100.0)):
+            for _ in range(c.MAX_AUTO_WALLETS):
+                c.preaudit_and_follow(cand(), None, 200.0)
+        with patch.object(c, "measure", return_value=audit(5000.0)):
+            self.assertEqual(c.preaudit_and_follow(cand(), None, 200.0), "full")
+

@@ -87,6 +87,25 @@ AUDIT_VALID_S = _env("COPY_AUDIT_VALID_HOURS", 24) * 3600
 PREAUDIT_PER_CYCLE = int(_env("COPY_PREAUDIT_PER_CYCLE", 1))
 REJECT_DAYS = _env("COPY_REJECT_DAYS", 3)
 REPLACE_PNL_MARGIN = _env("COPY_REPLACE_PNL_MARGIN", 1.2)
+# Test period: a wallet that enters is copied for at least TEST_DAYS before any automatic removal
+# or replacement (only /deixar removes it earlier), so its real copy results can be seen.
+TEST_DAYS = _env("COPY_TEST_DAYS", 3)
+
+
+def in_test(w, now=None):
+    fa = w.get("followed_at")
+    return fa is None or (now or time.time()) - float(fa) < TEST_DAYS * 86400
+
+
+def ensure_test_start():
+    """Wallets followed before the test period existed start their 3-day test now."""
+    with _LOCK:
+        d = _load()
+        missing = [a for a, w in d["wallets"].items() if w.get("followed_at") is None]
+        for a in missing:
+            d["wallets"][a]["followed_at"] = time.time()
+        if missing:
+            _save(d)
 
 _LOCK = threading.RLock()
 _safety_cache = {}
@@ -157,7 +176,8 @@ def follow(address):
         d = _load()
         if address not in d["wallets"] and len(d["wallets"]) >= MAX_WALLETS:
             raise ValueError("máximo de " + str(MAX_WALLETS) + " carteiras")
-        d["wallets"].setdefault(address, {"last_sig": None, "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False,
+        d["wallets"].setdefault(address, {"followed_at": time.time(),
+                                          "last_sig": None, "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False,
                                           "open_buys": {}, "holds": []})
         d["wallets"][address]["paused"] = False
         _save(d)
@@ -238,6 +258,7 @@ def auto_follow(candidate):
         if auto_count >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS:
             return False
         d["wallets"][address] = {
+            "followed_at": time.time(),
             "last_sig": None, "copies": 0, "wins": 0, "pnl_usd": 0.0,
             "paused": False, "open_buys": {}, "holds": holds[-30:],
             "auto_discovered": True,
@@ -311,7 +332,7 @@ def prune_low_balance():
     with _LOCK:
         d = _load()
         busy = {p.get("wallet") for p in d["positions"].values()}
-        auto = [a for a, w in d["wallets"].items() if w.get("auto_discovered") and a not in busy]
+        auto = [a for a, w in d["wallets"].items() if w.get("auto_discovered") and a not in busy and not in_test(w)]
     removed = []
     for a in auto:
         usd = wallet_usd(a)
@@ -386,7 +407,7 @@ def replace_worst(candidate):
             return False
         busy = {p.get("wallet") for p in d["positions"].values()}
         bad = [(w.get("pnl_usd", 0.0), a) for a, w in d["wallets"].items()
-               if _bad_auto_wallet(w) and a not in busy]
+               if _bad_auto_wallet(w) and a not in busy and not in_test(w)]
         if bad:
             _, worst = min(bad)
         else:
@@ -394,7 +415,8 @@ def replace_worst(candidate):
             # (fewer than MIN_COPIES_TO_JUDGE) gives its place to a clearly better candidate.
             new_score = score(candidate)
             weak = [(w.get("score", 0.0), a) for a, w in d["wallets"].items()
-                    if w.get("auto_discovered") and a not in busy and w.get("copies", 0) < MIN_COPIES_TO_JUDGE]
+                    if w.get("auto_discovered") and a not in busy and w.get("copies", 0) < MIN_COPIES_TO_JUDGE
+                    and not in_test(w)]
             if not weak:
                 return False
             low, worst = min(weak)
@@ -499,6 +521,10 @@ def wallets_text():
         typical = typical_buy_usd(w, offline=True)   # panel: never wait on the network
         if typical:
             bal += " · costuma colocar US$ " + format(typical, ".0f")
+        if in_test(w) and w.get("followed_at"):
+            left = TEST_DAYS * 86400 - (time.time() - float(w["followed_at"]))
+            bal += " · 🧪 em teste (faltam " + (format(left / 3600, ".0f") + " h" if left < 2 * 86400 else
+                                              format(left / 86400, ".1f") + " dias") + ")"
         if w.get("clone"):
             ex = w.get("exit") or {}
             bal += (" · 🧬 CLONE: TP +" + format(float(ex.get("tp") or TAKE_PROFIT) * 100, ".0f") + "%, SL -" +
@@ -1147,7 +1173,7 @@ def preaudit_and_follow(candidate, rpc, sol_usd):
         busy = {p.get("wallet") for p in d["positions"].values()}
         full = len(auto) >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS
         if full:
-            free = sorted((pnl, a) for pnl, a in auto if a not in busy)
+            free = sorted((pnl, a) for pnl, a in auto if a not in busy and not in_test(d["wallets"][a]))
             if not free or audit["pnl_recent"] < REPLACE_PNL_MARGIN * max(free[0][0], 0.01):
                 return "full"            # good, but not clearly better than the weakest approved wallet
             d["wallets"].pop(free[0][1])
@@ -1184,19 +1210,20 @@ def remove_fast_wallets():
     """Remove every followed wallet that fails the 5-minute rule (it would never be copied),
     so the automatic search can fill the slot. A wallet with an open copy stays until it closes.
     Returns removed addresses."""
+    ensure_test_start()
     removed = []
     with _LOCK:
         d = _load()
         busy = {p.get("wallet") for p in d["positions"].values()}
         for a, w in list(d["wallets"].items()):
-            if a not in busy and (holder_status(w)[0] == "fast" or result_status(w) == "bad"):
+            if a not in busy and not in_test(w) and (holder_status(w)[0] == "fast" or result_status(w) == "bad"):
                 d["wallets"].pop(a)
                 removed.append(a)
         # only the best: rank approved wallets by profit in the period, drop the ones below the top
         approved = sorted(((w.get("audit") or {}).get("pnl_recent", 0.0), a) for a, w in d["wallets"].items()
                           if result_status(w) == "ok")
         for _, a in approved[:max(0, len(approved) - TOP_WALLETS)]:
-            if a not in busy:
+            if a not in busy and not in_test(d["wallets"][a]):
                 d["wallets"].pop(a)
                 removed.append(a)
         if removed:
@@ -1305,6 +1332,7 @@ def cycle(send=None, chat=None):
     sell together with them (there is no fixed TP/SL)."""
     active = enabled()
     msgs = []
+    ensure_test_start()
     adopt_orphans()
     msgs += sell_if_already_sold(send, chat)
     try:
@@ -1352,7 +1380,8 @@ def cycle(send=None, chat=None):
                     _event(("observando " if status == "watching" else "não copia (vende rápido) ") + wallet[:6] + "…")
                     continue
                 with _LOCK:
-                    result = result_status(_load()["wallets"].get(wallet, {}))
+                    wi = _load()["wallets"].get(wallet, {})
+                    result = "ok" if in_test(wi) else result_status(wi)      # test period: keep copying
                 if result != "ok":
                     _event("não copia " + wallet[:6] + "…: " + ("aguardando auditoria dos últimos " if result == "unknown"
                            else "sem bom resultado nos últimos ") + format(RESULT_DAYS, ".0f") + " dias")

@@ -132,4 +132,8 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   `COPY_PREAUDIT_PER_CYCLE`), então só entram carteiras já aprovadas. Reprovadas e removidas não
   voltam por 3 dias (`COPY_REJECT_DAYS`). Com a lista cheia, uma aprovada só é trocada por outra
   com lucro nos 9 dias pelo menos 20% maior (`COPY_REPLACE_PNL_MARGIN`) e sem posição aberta.
+- **Período de teste:** toda carteira que entra é copiada por pelo menos 3 dias (`COPY_TEST_DAYS`)
+  antes de qualquer remoção ou troca automática (auditoria, top 10, saldo, carteira melhor). Durante
+  o teste ela continua sendo copiada mesmo que a auditoria mude; só `/deixar` tira antes, e o prejuízo
+  em 5 cópias continua pausando. Carteiras antigas começam o teste quando o bot reinicia.
 
