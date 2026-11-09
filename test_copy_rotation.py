@@ -239,3 +239,8 @@ class NoticeTests(unittest.TestCase):
         new = cand()
         self.assertTrue(c.replace_worst(new))
         self.assertIn("Entrou no lugar de " + ws[0]["wallet"][:6], c.wallet_card(new["wallet"]))
+
+
+class OrderSizeTests(unittest.TestCase):
+    def test_twenty_dollars_per_copy(self):
+        self.assertEqual(c.ORDER_USD, 20)

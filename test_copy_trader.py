@@ -43,7 +43,7 @@ class CopyTests(unittest.TestCase):
                   patch.object(c, "_rpc", side_effect=self.rpc)]:
             x.start(); self.addCleanup(x.stop)
         c.follow(WALLET)
-        self.sell_sol = int(10 / 200 * 1e9)      # flat price by default
+        self.sell_sol = int(c.ORDER_USD / 200 * 1e9)      # flat price by default
 
     def make_holder(self, minutes=10, n=3):
         d = c._load(); d["wallets"][WALLET]["holds"] = [minutes * 60] * n; c._save(d)
@@ -71,7 +71,7 @@ class CopyTests(unittest.TestCase):
         msgs = c.cycle()
         self.assertIn("copiou compra", msgs[0])
         self.assertIn(MINT, c._load()["positions"])
-        self.sell_sol = int(11 / 200 * 1e9)
+        self.sell_sol = int(c.ORDER_USD * 1.1 / 200 * 1e9)
         self.push("s2", tx(-1000, 120_000_000))            # sold everything
         msgs = c.cycle()
         self.assertTrue(any("a carteira vendeu" in m for m in msgs))
@@ -97,7 +97,7 @@ class CopyTests(unittest.TestCase):
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()
         self.push("s1", tx(500, -1_000_000_000)); c.cycle()
-        self.sell_sol = int(5 / 200 * 1e9)                 # -50%: no stop, keeps holding
+        self.sell_sol = int(c.ORDER_USD * 0.5 / 200 * 1e9)                 # -50%: no stop, keeps holding
         c.cycle()
         self.assertIn(MINT, c._load()["positions"])
 
@@ -107,7 +107,7 @@ class CopyTests(unittest.TestCase):
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()
         self.push("s1", tx(500, -1_000_000_000)); c.cycle()
-        self.sell_sol = int(8 / 200 * 1e9)                            # -20%
+        self.sell_sol = int(c.ORDER_USD * 0.8 / 200 * 1e9)                            # -20%
         self.assertTrue(any("stop" in m for m in c.cycle()))
 
     def test_losing_wallet_is_paused(self):
