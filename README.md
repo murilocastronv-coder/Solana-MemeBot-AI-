@@ -28,7 +28,7 @@ compras e vendas delas, em simulação ou com dinheiro real.
    rodada confere o saldo (cache de 10 min) e remove as que caírem abaixo, exceto se houver uma
    cópia aberta daquela carteira.
    Também exige **compra média ≥ US$ 100 por moeda** no histórico (`COPY_MIN_BUY_USD`).
-   E que a carteira **opere há pelo menos 30 dias** (`COPY_MIN_WALLET_DAYS`): o bot procura a
+   E que a carteira **opere há pelo menos 7 semanas (49 dias)** (`COPY_MIN_WALLET_DAYS`): o bot procura a
    transação mais antiga, voltando até 8 blocos de 1.000 transações (`COPY_AGE_MAX_PAGES`).
    E que seja **ativa todo dia**: transações em pelo menos 6 dos últimos 7 dias
    (`COPY_MIN_ACTIVE_DAYS`; use `7` para exigir todos os dias). Ele
