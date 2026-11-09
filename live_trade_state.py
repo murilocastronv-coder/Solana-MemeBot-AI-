@@ -343,6 +343,17 @@ def daily_loss_limit():
     with _LOCK:
         return _loss_limit(_load())
 
+def set_position_fields(mint, **fields):
+    """Attach extra settings to an open position (e.g. a cloned wallet's own TP/SL)."""
+    with _LOCK:
+        state = _load()
+        position = state["positions"].get(mint)
+        if position is None:
+            return False
+        position.update(fields)
+        _save(state)
+        return True
+
 def update_peak(mint, ratio):
     with _LOCK:
         state = _load()
