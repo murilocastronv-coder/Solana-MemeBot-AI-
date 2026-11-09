@@ -85,7 +85,9 @@ def discovery_text():
   return "🔎 Busca automática PARADA: configure SOLANA_RPC_URL (RPC dedicado, ex.: Helius) no Render."
  s=wallet_copy.summary()
  lines=["🔎 BUSCA AUTOMÁTICA DE CARTEIRAS",
-  "Blocos analisados: "+str(s["blocks_scanned"])+" · transações: "+str(s["transactions_scanned"]),
+  "Fonte: moedas em alta no DexScreener → negociações delas na blockchain",
+  "Moedas observadas agora: "+(", ".join(t["symbol"] for t in s["dex_tokens"][:8]) or "aguardando DexScreener"),
+  "Negociações analisadas: "+str(s["dex_transactions_scanned"]+s["transactions_scanned"]),
   "Carteiras vistas: "+str(s["wallets_seen"])+" · aprovadas: "+str(s["qualified_wallets"]),
   "Aprovada = lucro realizado, acerto ≥ "+format(wallet_copy.MIN_WIN_RATE*100,".0f")+"%, ≥ "+str(wallet_copy.MIN_CLOSED_TRADES)+" operações fechadas e retenção média ≥ "+format(wallet_copy.MIN_HOLD_SECONDS/60,".0f")+" min por moeda."]
  for w in wallet_copy.best_wallets(limit=10) if s["qualified_wallets"] else []:
@@ -284,7 +286,8 @@ def copy_loop():
 
 def wallet_discovery_loop():
  """Analyze confirmed blocks and enroll qualifying wallets for future signals."""
- interval=max(20,int(os.getenv("COPY_DISCOVERY_INTERVAL_SECONDS","30")))
+ source=os.getenv("COPY_DISCOVERY_SOURCE","dexscreener").strip().lower()
+ interval=max(20,int(os.getenv("COPY_DISCOVERY_INTERVAL_SECONDS","120" if source=="dexscreener" else "30")))
  if os.getenv("COPY_AUTO_DISCOVERY_ENABLED","true").strip().lower()=="false":return
  warned=False
  while True:
@@ -296,14 +299,18 @@ def wallet_discovery_loop():
      warned=True
      send(active_chat(),"⚠️ A busca automática de carteiras precisa de um RPC Solana dedicado. Configure SOLANA_RPC_URL no Render (ex.: Helius, plano grátis).")
     time.sleep(interval);continue
-   wallet_copy.scan_confirmed(max_blocks=100)
+   if source in ("dexscreener","ambos","both"):
+    import dex_wallets
+    dex_wallets.scan()
+   if source in ("blocks","blocos","ambos","both"):
+    wallet_copy.scan_confirmed(max_blocks=100)
    added=[]
    for candidate in wallet_copy.best_wallets(limit=50):
     if copy_trader.auto_follow(candidate):added.append(candidate["wallet"])
     elif copy_trader.replace_worst(candidate):added.append(candidate["wallet"])
    chat=active_chat()
    if chat and added:
-    send(chat,"🔎 Descobri " + str(len(added)) + " carteira(s) Solana com histórico lucrativo e retenção mediana ≥ 5 min. Vou observar apenas as próximas compras; nenhuma posição antiga foi copiada.\n" + "\n".join(x[:6]+"…"+x[-4:] for x in added))
+    send(chat,"🔎 Descobri " + str(len(added)) + " carteira(s) lucrativas nas moedas em alta do DexScreener, segurando ≥ 5 min. Vou observar apenas as próximas compras; nenhuma posição antiga foi copiada.\n" + "\n".join(x[:6]+"…"+x[-4:] for x in added))
   except Exception as exc:
    logging.warning("wallet discovery failed: %s",type(exc).__name__)
   time.sleep(interval)
