@@ -127,7 +127,7 @@ def _write_off(send, chat, mint, symbol, no_route):
 EXIT_TEXT = {
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
     "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
-    "copy": "👥 Vende quando a carteira copiada vender | 🎯 alvo +50% | 🛑 stop −15%",
+    "copy": "👥 Vende quando a carteira copiada vender (sem alvo/stop fixo)",
     "clone": "🤖 Sai com o alvo, o stop e o tempo máximo medidos na carteira de referência",
     "launch": "🆕 Lançamento: vende TUDO assim que der +3% de lucro líquido, na hora se o criador vender, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
     "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",

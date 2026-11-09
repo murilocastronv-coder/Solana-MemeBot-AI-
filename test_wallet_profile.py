@@ -110,6 +110,7 @@ class CloneTests(unittest.TestCase):
         self.assertIn("CLONE: TP +80%", c.wallets_text())
 
     def test_sim_position_uses_clone_exit_and_time_stop(self):
+        q = patch.object(c, "EXIT_MODE", "tp_sl"); q.start(); self.addCleanup(q.stop)
         c.follow(W)
         d = c._load()
         d["wallets"][W].update(clone=True, exit={"tp": 0.3, "sl": 0.1, "max_hold_s": 60})
@@ -125,6 +126,7 @@ class CloneTests(unittest.TestCase):
     def test_real_exit_monitor_uses_position_tp_sl(self):
         import time
         import live_exit_monitor as m
+        q = patch.dict(os.environ, {"COPY_EXIT_MODE": "tp_sl"}); q.start(); self.addCleanup(q.stop)
         pos = {"mode": "copy", "copy_tp": 0.3, "copy_sl": 0.1, "opened_at": time.time()}
         self.assertEqual(m.position_signal(pos, 10, 13.1)["action"], "sell")     # +31% >= TP 30%
         self.assertEqual(m.position_signal(pos, 10, 11.0)["action"], "hold")
@@ -135,6 +137,17 @@ class CloneTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FollowWalletExitTests(unittest.TestCase):
+    def test_real_copy_holds_until_wallet_sells(self):
+        import time
+        import live_exit_monitor as m
+        pos = {"mode": "copy", "copy_tp": 0.3, "copy_sl": 0.1, "opened_at": time.time()}
+        self.assertEqual(m.position_signal(pos, 10, 30.0)["action"], "hold")    # +200%: still holds
+        self.assertEqual(m.position_signal(pos, 10, 2.0)["action"], "hold")     # -80%: still holds
+        robot = dict(pos, mode="clone")
+        self.assertEqual(m.position_signal(robot, 10, 13.1)["action"], "sell")  # strategy robot keeps TP/SL
 
 
 class NewRulesTests(unittest.TestCase):
