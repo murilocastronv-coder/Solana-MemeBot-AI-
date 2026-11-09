@@ -1,40 +1,20 @@
 services:
   - type: worker
-    name: solana-memebot-monitor
+    name: btc-paper-trading
     runtime: python
     plan: starter
     region: frankfurt
     buildCommand: pip install -r requirements.txt
-    startCommand: python telegram_bot.py
+    # 4 contas simuladas: conservador/agressivo x futures/spot. Só paper trading.
+    startCommand: python -m btc_trend_pullback.paper --strategy ambas --profile both
     autoDeployTrigger: off
     disk:
-      name: solana-memebot-data
+      name: btc-paper-data
       mountPath: /var/data
       sizeGB: 1
     envVars:
-      - key: BOT_WALLET_FILE
-        value: /var/data/wallet.json
-      - key: DAILY_LOSS_LIMIT_USD
-        value: "50"
-      - key: MAX_ORDER_USD
-        value: "5"
-      - key: COPY_ORDER_USD
-        value: "5"
-      - key: COPY_MAX_POSITIONS
-        value: "3"
-      - key: COPY_MIN_HOLD_MINUTES
-        value: "5"
-      - key: COPY_MIN_ROUND_TRIPS
-        value: "3"
-      - key: COPY_AUTO_DISCOVERY_ENABLED
-        value: "true"
-      - key: COPY_AUTO_MAX_WALLETS
-        value: "5"
-      - key: COPY_DISCOVERY_INTERVAL_SECONDS
-        value: "30"
-      - key: SCAN_INTERVAL_SECONDS
-        value: "180"
-      - key: MIN_LIQUIDITY_USD
-        value: "25000"
-      - key: MIN_PAIR_AGE_HOURS
-        value: "24"
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      - key: BTC_PAPER_DIR
+        value: /var/data
+      # opcional, só para alertas: TELEGRAM_BOT_TOKEN e PAPER_ALERT_CHAT_ID (definir no painel do Render)

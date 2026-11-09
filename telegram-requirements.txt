@@ -1,5 +1,0 @@
-flask>=3.0,<4
-requests>=2.32,<3
-solders>=0.21,<1
-cryptography>=43,<47
-websocket-client>=1.8,<2
