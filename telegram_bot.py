@@ -66,6 +66,7 @@ def keyboard():
   [{"text":"₿ Breakout SIM","callback_data":"brk_sim"},{"text":"₿ Breakout REAL","callback_data":"brk_real"}],
   [{"text":"⏹️ Parar BTC","callback_data":"brk_off"},{"text":"📊 Status BTC","callback_data":"brk_status"}],
   [{"text":"⚙️ Alavancagem BTC","callback_data":"brk_lev"},{"text":"📈 Backtest BTC 1 ano","callback_data":"brk_bt"}],
+  [{"text":"🧠 Melhorar estratégia BTC","callback_data":"brk_opt"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def robot_alive_line():
@@ -205,6 +206,14 @@ def handle(update):
       for part in split_message(text):send(chat,part,keyboard())
      except Exception as exc:send(chat,"⛔ Backtest falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
     run_async(run_bt);return
+   if action=="brk_opt":
+    send(chat,"🧠 Testando "+str(len(bb.VARIANTS))+" versões da estratégia em 1 ano de velas de 15 min (escolhe em 8 meses, confere em 4). Leva 2–5 minutos…")
+    def run_opt():
+     try:
+      text,_,_=bb.optimize()
+      for part in split_message(text):send(chat,part,keyboard())
+     except Exception as exc:send(chat,"⛔ Melhoria falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
+    run_async(run_opt);return
    if action in ("brk_real","brk_real_ok"):
     d=bb._load();bt=bb.backtest_for(d["leverage"])
     if not bt:send(chat,"⛔ Rode primeiro o 📈 Backtest BTC 1 ano: ele mostra se a estratégia teria dado lucro antes de usar dinheiro real.",keyboard());return
