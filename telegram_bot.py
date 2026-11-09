@@ -88,11 +88,12 @@ def discovery_text():
   "Fonte: moedas em alta no DexScreener → negociações delas na blockchain",
   "Moedas observadas agora: "+(", ".join(t["symbol"] for t in s["dex_tokens"][:8]) or "aguardando DexScreener"),
   "Negociações analisadas: "+str(s["dex_transactions_scanned"]+s["transactions_scanned"]),
-  "Carteiras vistas: "+str(s["wallets_seen"])+" · aprovadas: "+str(s["qualified_wallets"]),
+  "Carteiras com histórico analisado: "+str(s["wallets_analyzed"]),
+  "Carteiras com operações fechadas: "+str(s["wallets_seen"])+" · aprovadas: "+str(s["qualified_wallets"]),
   "Aprovada = lucro realizado, acerto ≥ "+format(wallet_copy.MIN_WIN_RATE*100,".0f")+"%, ≥ "+str(wallet_copy.MIN_CLOSED_TRADES)+" operações fechadas e retenção média ≥ "+format(wallet_copy.MIN_HOLD_SECONDS/60,".0f")+" min por moeda."]
  for w in wallet_copy.best_wallets(limit=10) if s["qualified_wallets"] else []:
   lines.append("• "+w["wallet"][:4]+"…"+w["wallet"][-4:]+" · lucro "+format(w["realized_lamports"]/1e9,"+.3f")+" SOL · acerto "+format(w["win_rate"]*100,".0f")+"% · "+str(w["closed_trades"])+" ops · segura "+format(w["average_hold_seconds"]/60,".0f")+" min")
- if not s["qualified_wallets"]:lines.append("Ainda nenhuma aprovada. A análise leva tempo: cada carteira precisa fechar operações enquanto o bot observa.")
+ if not s["qualified_wallets"]:lines.append("Ainda nenhuma aprovada. A cada 2 min o bot analisa o histórico de novas carteiras que compraram moedas em alta.")
  return "\n".join(lines)
 def menu(chat):
  send(chat,status_text(),keyboard())
