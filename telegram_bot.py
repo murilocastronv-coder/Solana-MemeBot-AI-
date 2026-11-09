@@ -427,6 +427,9 @@ def copy_loop():
    for m in copy_trader.cycle(send,chat):send(chat,m)   # also runs with copy off: sells open copies with the wallet
   except Exception as exc:logging.warning("copy cycle failed: %s",type(exc).__name__)
 
+def dex_rpc():
+ import dex_wallets
+ return dex_wallets._rpc_factory(os.getenv("SOLANA_RPC_URL"))
 def wallet_discovery_loop():
  """Analyze confirmed blocks and enroll qualifying wallets for future signals."""
  source=os.getenv("COPY_DISCOVERY_SOURCE","dexscreener").strip().lower()
@@ -450,22 +453,29 @@ def wallet_discovery_loop():
    added=[]
    candidates=wallet_copy.best_wallets(limit=50)
    followed={c["wallet"] for c in candidates if copy_trader.refresh_stats(c)}
+   # audit BEFORE following (a few per round): only approved wallets enter the list
+   rpc=dex_rpc()
+   checked=0
    for candidate in candidates:
-    if candidate["wallet"] in followed:continue
-    if copy_trader.auto_follow(candidate):added.append(candidate["wallet"])
-    elif copy_trader.replace_worst(candidate):added.append(candidate["wallet"])
+    if checked>=copy_trader.PREAUDIT_PER_CYCLE:break
+    a=candidate["wallet"]
+    if a in followed or copy_trader.is_rejected(a) or not copy_trader.prefilter(candidate):continue
+    checked+=1
+    try:outcome=copy_trader.preaudit_and_follow(candidate,rpc,copy_trader._sol_usd())
+    except Exception as exc:
+     logging.warning("pre-audit failed: %s",type(exc).__name__);continue
+    if outcome in ("added","replaced"):added.append(a)
    removed=copy_trader.prune_low_balance()+copy_trader.remove_fast_wallets()
    chat=active_chat()
    if chat and removed:
     send(chat,"🗑️ Parei de copiar "+str(len(removed))+" carteira(s): saldo < US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+
      ", compras < US$ "+format(copy_trader.MIN_BUY_USD,".0f")+", idade < "+format(copy_trader.MIN_WALLET_DAYS,".0f")+
      " dias, sem operar quase todo dia ou fechando posições em menos de 5 min. A busca coloca outras no lugar.\n"+"\n".join("solscan.io/account/"+x for x in removed))
-   if added:run_async(audit_job,None,list(added))   # new wallets are copied only after the 14-day check
    if chat and added:
     total=sum(1 for w in copy_trader._load()["wallets"].values() if not w.get("paused"))
     text=("🆕 NOVA CARTEIRA PARA COPIAR" if len(added)==1 else "🆕 "+str(len(added))+" NOVAS CARTEIRAS PARA COPIAR")+\
      " — agora copiando "+str(total)+".\nSó as próximas compras serão copiadas; nenhuma posição antiga.\n\n"+\
-     "\n\n".join(copy_trader.wallet_card(x) for x in added)+"\n\n🔍 Auditando os últimos "+format(copy_trader.RESULT_DAYS,".0f")+" dias de cada uma: só copio se tiver bom resultado."
+     "\n\n".join(copy_trader.wallet_card(x) for x in added)+"\n\n✅ Já auditada: passou nos últimos "+format(copy_trader.RESULT_DAYS,".0f")+" dias (lucro, ≥ "+str(copy_trader.RESULT_MIN_TRADES)+" operações, acerto)."
     for part in split_message(text):send(chat,part)
   except Exception as exc:
    logging.warning("wallet discovery failed: %s: %s",type(exc).__name__,str(exc)[:200])

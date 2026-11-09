@@ -81,6 +81,12 @@ TOP_WALLETS = int(_env("COPY_TOP_WALLETS", 10))
 RESULT_MIN_WIN = _env("COPY_RESULT_MIN_WIN", 0.5)
 RESULT_MIN_USD = _env("COPY_RESULT_MIN_USD", 0)
 AUDIT_VALID_S = _env("COPY_AUDIT_VALID_HOURS", 24) * 3600
+# Stable list: candidates are audited BEFORE being followed (a few per round), rejected wallets
+# can't come back for REJECT_DAYS, and an approved wallet is only replaced by one whose profit in
+# the period is REPLACE_PNL_MARGIN x higher.
+PREAUDIT_PER_CYCLE = int(_env("COPY_PREAUDIT_PER_CYCLE", 1))
+REJECT_DAYS = _env("COPY_REJECT_DAYS", 3)
+REPLACE_PNL_MARGIN = _env("COPY_REPLACE_PNL_MARGIN", 1.2)
 
 _LOCK = threading.RLock()
 _safety_cache = {}
@@ -212,6 +218,8 @@ def auto_follow(candidate):
         return False
     if int(candidate.get("realized_lamports", 0)) <= 0:
         return False
+    if is_rejected(address):
+        return False
     with _LOCK:
         d = _load()
         if address in d["wallets"]:
@@ -323,6 +331,7 @@ def prune_low_balance():
                 d["wallets"].pop(a)
                 removed.append(a)
             _save(d)
+    _reject(removed)
     for a in removed:
         _event("removi " + a[:6] + "…: saldo < US$ " + format(MIN_WALLET_USD, ".0f") +
                ", compras < US$ " + format(MIN_BUY_USD, ".0f") + ", menos de " + format(MIN_WALLET_DAYS, ".0f") +
@@ -442,6 +451,10 @@ def wallet_card(address):
             extra.append("saldo US$ " + format(w["balance_usd"], ".0f"))
         if extra:
             lines.append(" · ".join(extra).capitalize())
+    au = w.get("audit") or {}
+    if "pnl_recent" in au:
+        lines.append("Últimos " + format(RESULT_DAYS, ".0f") + " dias: " + format(au["pnl_recent"], "+.0f") + " USD em " +
+                     str(au["trades_recent"]) + " operações · acerto " + format(au["win_recent"] * 100, ".0f") + "%")
     old = REPLACED.pop(address, None)
     if old:
         lines.append("↔️ Entrou no lugar de " + old[:6] + "…" + old[-4:] + " (nota menor ou resultado ruim)")
@@ -1054,13 +1067,25 @@ def holder_status(w):
     return ("ok" if ok else "fast"), med
 
 
-def audit_wallet(address, rpc, sol_usd, max_tx=None):
-    """Measure the wallet's real hold time per coin from its history and store it.
-    Returns (status, median_seconds, share_long, positions)."""
+def measure(address, rpc, sol_usd, max_tx=None):
+    """Read the wallet's history: (hold seconds per closed position, audit dict)."""
     import wallet_profile
-    max_tx = max_tx or AUDIT_MAX_TX
-    _, closed, _ = wallet_profile.analyze(address, rpc, sol_usd, max_tx=max_tx)
+    _, closed, _ = wallet_profile.analyze(address, rpc, sol_usd, max_tx=max_tx or AUDIT_MAX_TX)
     holds = wallet_profile.holds_seconds(closed)
+    now = time.time()
+    recent = [p for p in closed if p.get("closed", 0) >= now - RESULT_DAYS * 86400]
+    audit = {"at": int(now), "positions": len(closed), "median_s": int(_median(holds)),
+             "long_share": round(long_share(holds), 3),
+             "pnl_recent": round(sum(p.get("pnl_usd", 0.0) for p in recent), 2),
+             "trades_recent": len(recent),
+             "win_recent": round(sum(1 for p in recent if p.get("pnl_usd", 0) > 0) / len(recent), 3) if recent else 0.0}
+    return holds, audit
+
+
+def audit_wallet(address, rpc, sol_usd, max_tx=None):
+    """Measure the wallet's real hold time per coin and recent results, and store them.
+    Returns (status, median_seconds, share_long, positions)."""
+    holds, audit = measure(address, rpc, sol_usd, max_tx)
     with _LOCK:
         d = _load()
         w = d["wallets"].get(address)
@@ -1068,16 +1093,79 @@ def audit_wallet(address, rpc, sol_usd, max_tx=None):
             return None
         if holds:
             w["holds"] = holds
-        now = time.time()
-        recent = [p for p in closed if p.get("closed", 0) >= now - RESULT_DAYS * 86400]
-        w["audit"] = {"at": int(now), "positions": len(closed), "median_s": int(_median(holds)),
-                      "long_share": round(long_share(holds), 3),
-                      "pnl_recent": round(sum(p.get("pnl_usd", 0.0) for p in recent), 2),
-                      "trades_recent": len(recent),
-                      "win_recent": round(sum(1 for p in recent if p.get("pnl_usd", 0) > 0) / len(recent), 3) if recent else 0.0}
+        w["audit"] = audit
         _save(d)
         status, med = holder_status(w)
-    return status, med, long_share(holds), len(closed)
+    return status, med, long_share(holds), audit["positions"]
+
+
+def _reject(addresses, now=None):
+    if not addresses:
+        return
+    until = (now or time.time()) + REJECT_DAYS * 86400
+    with _LOCK:
+        d = _load()
+        rej = {a: t for a, t in (d.get("rejected") or {}).items() if t > time.time()}
+        for a in addresses:
+            rej[a] = until
+        d["rejected"] = dict(list(rej.items())[-3000:])
+        _save(d)
+
+
+def is_rejected(address, now=None):
+    with _LOCK:
+        return (_load().get("rejected") or {}).get(address, 0) > (now or time.time())
+
+
+def prefilter(candidate):
+    """Cheap checks from the discovery data (no network)."""
+    holds = [max(0, int(x)) for x in candidate.get("hold_samples", [])]
+    return (len(holds) >= MIN_ROUND_TRIPS and _median(holds) >= MIN_HOLD_SECONDS and
+            long_share(holds) >= MIN_LONG_SHARE and int(candidate.get("closed_trades", 0)) >= MIN_ROUND_TRIPS and
+            int(candidate.get("realized_lamports", 0)) > 0 and old_enough(candidate) and
+            active_daily(candidate) and big_enough_buyer(candidate))
+
+
+def preaudit_and_follow(candidate, rpc, sol_usd):
+    """Audit a discovered wallet BEFORE following it. Returns 'added', 'replaced', 'rejected' or 'full'.
+    Rejected wallets cannot come back for REJECT_DAYS."""
+    address = str(candidate.get("wallet") or "")
+    if not has_min_balance(address):
+        _reject([address])
+        return "rejected"
+    holds, audit = measure(address, rpc, sol_usd)
+    probe = {"holds": holds, "audit": audit}
+    if holder_status(probe)[0] != "ok" or result_status(probe) != "ok":
+        _reject([address])
+        return "rejected"
+    cand = dict(candidate, hold_samples=holds or candidate.get("hold_samples", []))
+    outcome = "added"
+    with _LOCK:
+        d = _load()
+        auto = [(((w.get("audit") or {}).get("pnl_recent", 0.0)), a) for a, w in d["wallets"].items()
+                if w.get("auto_discovered")]
+        busy = {p.get("wallet") for p in d["positions"].values()}
+        full = len(auto) >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS
+        if full:
+            free = sorted((pnl, a) for pnl, a in auto if a not in busy)
+            if not free or audit["pnl_recent"] < REPLACE_PNL_MARGIN * max(free[0][0], 0.01):
+                return "full"            # good, but not clearly better than the weakest approved wallet
+            d["wallets"].pop(free[0][1])
+            REPLACED[address] = free[0][1]
+            _save(d)
+            outcome = "replaced"
+    if not auto_follow(cand):
+        return "full"
+    with _LOCK:
+        d = _load()
+        w = d["wallets"].get(address)
+        if w is not None:
+            w["holds"] = holds or w.get("holds", [])
+            w["audit"] = audit
+            _save(d)
+    if outcome == "replaced":
+        _reject([REPLACED[address]])
+    return outcome
 
 
 def result_status(w, now=None):
@@ -1113,6 +1201,7 @@ def remove_fast_wallets():
                 removed.append(a)
         if removed:
             _save(d)
+    _reject(removed)
     for a in removed:
         _event("removi " + a[:6] + "…: fecha rápido demais, sem bom resultado em " + format(RESULT_DAYS, ".0f") +
                " dias ou fora das " + str(TOP_WALLETS) + " de maior lucro")
