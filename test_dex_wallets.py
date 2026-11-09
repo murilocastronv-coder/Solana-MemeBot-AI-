@@ -156,6 +156,46 @@ class WalletHistoryTests(unittest.TestCase):
         self.assertEqual(wallet_copy.best_wallets(), [])
 
 
+class WalletAgeTests(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def pages(self, times):
+        """Fake RPC with signatures at the given times (newest first), 1000 per page."""
+        rows = [{"signature": "s%d" % i, "blockTime": t} for i, t in enumerate(times)]
+        calls = []
+
+        def rpc(method, params):
+            calls.append(params[1])
+            opts = params[1]
+            start = 0
+            if "before" in opts:
+                start = next(i for i, r in enumerate(rows) if r["signature"] == opts["before"]) + 1
+            return rows[start:start + opts["limit"]]
+        rpc.calls = calls
+        return rows, rpc
+
+    def test_old_wallet_proven_from_first_page(self):
+        rows, rpc = self.pages([self.NOW - d * 86400 for d in (1, 5, 40)])
+        self.assertGreaterEqual(dw.wallet_age_days("W", rpc, self.NOW, first_page=rows), 40)
+        self.assertEqual(rpc.calls, [])               # no extra RPC call needed
+
+    def test_young_wallet(self):
+        rows, rpc = self.pages([self.NOW - d * 86400 for d in (1, 3, 9)])
+        self.assertLess(dw.wallet_age_days("W", rpc, self.NOW, first_page=rows[:2]), 30)
+
+    def test_pages_back_for_busy_wallet(self):
+        times = [self.NOW - i * 3000 for i in range(2500)]   # ~87 days over 2500 txs
+        rows, rpc = self.pages(times)
+        age = dw.wallet_age_days("W", rpc, self.NOW, first_page=rows[:50])
+        self.assertGreaterEqual(age, 30)
+        self.assertEqual(len(rpc.calls), 1)
+
+    def test_too_busy_to_prove_is_unknown(self):
+        times = [self.NOW - i * 60 for i in range(5000)]     # 5000 txs in 3.5 days
+        rows, rpc = self.pages(times)
+        self.assertIsNone(dw.wallet_age_days("W", rpc, self.NOW, first_page=rows[:50], pages=2))
+
+
 class FakeResp:
     def __init__(self, status, payload=None):
         self.status_code, self._payload = status, payload or {}

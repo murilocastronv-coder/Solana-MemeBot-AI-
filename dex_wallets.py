@@ -34,6 +34,9 @@ TX_PER_TOKEN = int(_env("COPY_DEX_TX_PER_TOKEN", 15))
 WALLETS_PER_CYCLE = int(_env("COPY_DEX_WALLETS_PER_CYCLE", 4))
 WALLET_HISTORY = int(_env("COPY_DEX_WALLET_HISTORY", 50))
 REANALYZE_SECONDS = _env("COPY_DEX_REANALYZE_HOURS", 12) * 3600
+# Wallet age: how far back we page (1000 signatures per call) to find activity >= 30 days ago.
+MIN_AGE_DAYS = _env("COPY_MIN_WALLET_DAYS", 30)
+AGE_PAGES = int(_env("COPY_AGE_MAX_PAGES", 8))
 # Free RPC plans refuse bursts (HTTP 429). Stay under the limit and retry refused calls.
 MAX_RPS = max(0.5, _env("COPY_RPC_MAX_RPS", 6))
 RPC_ERRORS = {"count": 0, "last": ""}
@@ -136,9 +139,33 @@ def _get_tx(rpc, signature):
                                               "maxSupportedTransactionVersion": 0}])
 
 
-def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY):
+def wallet_age_days(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pages=AGE_PAGES):
+    """Days since the oldest transaction we can reach (a lower bound once >= min_days).
+    Pages back 1000 signatures at a time and stops as soon as min_days is proven.
+    Returns None when the wallet is so active that min_days could not be reached."""
+    rows = list(first_page or [])
+    oldest = None
+    for page in range(pages + 1):
+        times = [int(r["blockTime"]) for r in rows if r.get("blockTime")]
+        if times:
+            oldest = min(times) if oldest is None else min(oldest, min(times))
+            if now - oldest >= min_days * 86400:
+                return (now - oldest) / 86400
+        if page == pages:
+            return None
+        opts = {"limit": 1000}
+        if rows:
+            opts["before"] = rows[-1]["signature"]
+        nxt = rpc("getSignaturesForAddress", [wallet, opts]) or []
+        if not nxt:
+            break                       # reached the wallet's first transaction
+        rows = nxt
+    return (now - oldest) / 86400 if oldest else 0.0
+
+
+def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None):
     """Replay the wallet's latest transactions (oldest first) on a clean state.
-    Returns its stats (closed trades, wins, profit, hold time per coin) or None."""
+    Returns its stats (closed trades, wins, profit, hold time per coin, age in days) or None."""
     sigs = rpc("getSignaturesForAddress", [wallet, {"limit": limit}]) or []
     tmp = wallet_copy.empty_state()
     for s in reversed(sigs):
@@ -151,7 +178,13 @@ def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY):
         if isinstance(tx, dict):
             wallet_copy.process_confirmed_block(tmp, {"blockTime": tx.get("blockTime") or s.get("blockTime"),
                                                       "transactions": [tx]}, slot=tx.get("slot"))
-    return tmp["wallets"].get(wallet)
+    stats = tmp["wallets"].get(wallet)
+    if stats and MIN_AGE_DAYS > 0:
+        try:
+            stats["age_days"] = wallet_age_days(wallet, rpc, int(now or time.time()), first_page=sigs)
+        except Exception:
+            stats["age_days"] = None
+    return stats
 
 
 def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token=TX_PER_TOKEN,
@@ -209,7 +242,7 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         done = with_trades = 0
         for w in fresh[:max(0, wallets_per_cycle)]:
             try:
-                stats = analyze_wallet(w, rpc, history)
+                stats = analyze_wallet(w, rpc, history, now=now)
             except Exception:
                 failed += 1
                 continue
