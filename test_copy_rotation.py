@@ -104,15 +104,15 @@ class MinBalanceTests(unittest.TestCase):
         self.assertTrue(c.auto_follow(ok))
         self.assertIn("operou 6/7 dias", c.wallets_text())
 
-    def test_min_is_150_usd(self):
-        self.assertEqual(c.MIN_WALLET_USD, 150)
+    def test_min_is_40_usd(self):
+        self.assertEqual(c.MIN_WALLET_USD, 40)
 
     def test_poor_wallet_is_not_followed(self):
-        with patch.object(c, "wallet_usd", return_value=90.0):
+        with patch.object(c, "wallet_usd", return_value=30.0):
             self.assertFalse(c.auto_follow(cand()))
         with patch.object(c, "wallet_usd", return_value=None):   # balance unknown: wait
             self.assertFalse(c.auto_follow(cand()))
-        with patch.object(c, "wallet_usd", return_value=151.0):
+        with patch.object(c, "wallet_usd", return_value=41.0):
             self.assertTrue(c.auto_follow(cand()))
 
     def test_wallet_below_min_is_removed_unless_copy_open(self):
@@ -122,7 +122,7 @@ class MinBalanceTests(unittest.TestCase):
         d = c._load()
         d["positions"]["MINT"] = {"wallet": busy["wallet"], "real": False}
         c._save(d)
-        bal = {rich["wallet"]: 500.0, poor["wallet"]: 40.0, busy["wallet"]: 10.0}
+        bal = {rich["wallet"]: 500.0, poor["wallet"]: 30.0, busy["wallet"]: 10.0}
         with patch.object(c, "wallet_usd", side_effect=lambda a: bal[a]):
             removed = c.prune_low_balance()
         self.assertEqual(removed, [poor["wallet"]])

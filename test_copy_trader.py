@@ -72,13 +72,37 @@ class CopyTests(unittest.TestCase):
         self.assertIn("copiou compra", msgs[0])
         self.assertIn(MINT, c._load()["positions"])
         self.sell_sol = int(11 / 200 * 1e9)
-        self.push("s2", tx(-500, 120_000_000))
+        self.push("s2", tx(-1000, 120_000_000))            # sold everything
         msgs = c.cycle()
         self.assertTrue(any("a carteira vendeu" in m for m in msgs))
         w = c._load()["wallets"][WALLET]
         self.assertEqual((w["copies"], w["wins"]), (1, 1))
 
+    def test_partial_sell_is_mirrored(self):
+        self.make_holder()
+        c.set_mode(True)
+        self.push("s0", tx(0, -5000)); c.cycle()
+        self.push("s1", tx(500, -1_000_000_000)); c.cycle()
+        self.push("s2", tx(-500, 300_000_000))              # wallet sells 500 of its 1000 tokens = 50%
+        msgs = c.cycle()
+        self.assertTrue(any("vendeu 50%" in m for m in msgs))
+        pos = c._load()["positions"][MINT]
+        self.assertEqual(pos["tokens"], 500)               # our 1000 tokens -> 500 left
+        self.push("s3", tx(-1000, 300_000_000))             # sells everything left
+        msgs = c.cycle()
+        self.assertNotIn(MINT, c._load()["positions"])
+
+    def test_no_fixed_tp_sl_by_default(self):
+        self.make_holder()
+        c.set_mode(True)
+        self.push("s0", tx(0, -5000)); c.cycle()
+        self.push("s1", tx(500, -1_000_000_000)); c.cycle()
+        self.sell_sol = int(5 / 200 * 1e9)                 # -50%: no stop, keeps holding
+        c.cycle()
+        self.assertIn(MINT, c._load()["positions"])
+
     def test_stop_and_target(self):
+        p = patch.object(c, "EXIT_MODE", "tp_sl"); p.start(); self.addCleanup(p.stop)
         self.make_holder()
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()

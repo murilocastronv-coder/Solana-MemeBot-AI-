@@ -38,6 +38,9 @@ MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 3))
 # Simulation: copy + strategy robot together never hold more than this many open orders.
 MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 3))
 STOP_LOSS = _env("COPY_STOP_LOSS", 0.15)
+# "wallet" (default): no fixed TP/SL, exit only when the copied wallet sells (same movement).
+# "tp_sl": also use COPY_TAKE_PROFIT / COPY_STOP_LOSS.
+EXIT_MODE = os.getenv("COPY_EXIT_MODE", "wallet").strip().lower()
 TAKE_PROFIT = _env("COPY_TAKE_PROFIT", 0.50)
 MIN_COPIES_TO_JUDGE = int(_env("COPY_MIN_TRADES_TO_JUDGE", 5))
 MAX_TOP_HOLDERS = 0.25
@@ -49,7 +52,7 @@ MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 15))
 # A new candidate replaces an unproven followed wallet only if its score is clearly better.
 REPLACE_MARGIN = _env("COPY_REPLACE_MARGIN", 1.5)
 # Only follow wallets holding at least this much (SOL balance in USD); remove them below it.
-MIN_WALLET_USD = _env("COPY_MIN_WALLET_USD", 150)
+MIN_WALLET_USD = _env("COPY_MIN_WALLET_USD", 40)
 BALANCE_MAX_AGE = 600
 # Only copy buys where the wallet put at least this much in the coin (and only follow
 # wallets whose average buy is at least this much).
@@ -509,12 +512,22 @@ def signal_from_tx(tx, wallet):
     return parsed[:2] if parsed else None
 
 
+def sell_fraction(tx, wallet):
+    """Share of its holding that the wallet sold in this transaction (1.0 = everything)."""
+    parsed = _parse_tx(tx, wallet)
+    if not parsed or parsed[0] != "sell":
+        return None
+    pre = getattr(_parse_tx, "last_pre", 0)
+    sold = -parsed[4] if len(parsed) > 4 else 0
+    return 1.0 if pre <= 0 else max(0.0, min(1.0, sold / pre))
+
+
 def buy_value_usd(tx, wallet):
     """USD the wallet paid for the token in a buy transaction (SOL/WSOL + USDC), or None."""
     parsed = _parse_tx(tx, wallet)
     if not parsed or parsed[0] != "buy":
         return None
-    _, _, sol_change, usdc_change = parsed
+    _, _, sol_change, usdc_change, _ = parsed
     try:
         price = _sol_usd()
     except Exception:
@@ -528,12 +541,15 @@ def _parse_tx(tx, wallet):
     if meta.get("err") is not None:
         return None
     deltas = {}
+    pre_amounts = {}
     for side, sign in (("preTokenBalances", -1), ("postTokenBalances", 1)):
         for b in meta.get(side) or []:
             if b.get("owner") != wallet:
                 continue
             amount = int(((b.get("uiTokenAmount") or {}).get("amount")) or 0)
             deltas[b.get("mint")] = deltas.get(b.get("mint"), 0) + sign * amount
+            if sign < 0:
+                pre_amounts[b.get("mint")] = pre_amounts.get(b.get("mint"), 0) + amount
     keys = [k.get("pubkey") if isinstance(k, dict) else k
             for k in ((tx.get("transaction") or {}).get("message") or {}).get("accountKeys") or []]
     sol_delta = 0
@@ -547,12 +563,13 @@ def _parse_tx(tx, wallet):
     if len(tokens) != 1:
         return None
     mint, change = next(iter(tokens.items()))
+    _parse_tx.last_pre = pre_amounts.get(mint, 0)
     sol_change = sol_delta + deltas.get(SOL_MINT, 0)
     usdc_change = deltas.get(USDC_MINT, 0)
     if change > 0 and quote_change < 0:
-        return "buy", mint, sol_change, usdc_change
+        return "buy", mint, sol_change, usdc_change, change
     if change < 0 and quote_change > 0:
-        return "sell", mint, sol_change, usdc_change
+        return "sell", mint, sol_change, usdc_change, change
     return None
 
 
@@ -578,7 +595,7 @@ def new_signals(wallet, info):
                                            "commitment": "confirmed"}])
         signal = signal_from_tx(tx, wallet)
         if signal:
-            out.append(signal + (buy_value_usd(tx, wallet) if signal[0] == "buy" else None,))
+            out.append(signal + (buy_value_usd(tx, wallet) if signal[0] == "buy" else sell_fraction(tx, wallet),))
     return out
 
 
@@ -713,14 +730,14 @@ def _close(mint, reason, send=None, chat=None):
         except Exception as exc:
             LAST_ERROR["text"] = "cotação de venda falhou: " + type(exc).__name__
             return msgs
-        pnl = net - float(pos["cost_usd"])
+        pnl = net - float(pos["cost_usd"]) + float(pos.get("realized_usd", 0.0))
     with _LOCK:
         d = _load()
         if mint not in d["positions"]:
             return msgs
         d["positions"].pop(mint)
         if not pos.get("real"):
-            d["balance"] += pnl + float(pos["cost_usd"])
+            d["balance"] += pnl + float(pos["cost_usd"]) - float(pos.get("realized_usd", 0.0))
         d["history"] = (d["history"] + [{"mint": mint, "wallet": pos["wallet"], "reason": reason,
                                          "pnl_usd": round(pnl, 4), "real": bool(pos.get("real")),
                                          "closed_at": time.time()}])[-300:]
@@ -735,9 +752,40 @@ def _close(mint, reason, send=None, chat=None):
     return msgs
 
 
+def _sell_part(mint, fraction):
+    """Simulation: sell the same share the copied wallet sold."""
+    with _LOCK:
+        pos = _load()["positions"].get(mint)
+    if not pos or fraction <= 0:
+        return []
+    part = int(int(pos["tokens"]) * fraction)
+    if part <= 0:
+        return []
+    try:
+        net = int(_order(mint, SOL_MINT, part)["outAmount"]) / 1e9 * _sol_usd() - NETWORK_FEE_USD
+    except Exception as exc:
+        LAST_ERROR["text"] = "cotação de venda falhou: " + type(exc).__name__
+        return []
+    with _LOCK:
+        d = _load()
+        p = d["positions"].get(mint)
+        if not p:
+            return []
+        cost_part = float(p["cost_usd"]) * fraction
+        p["tokens"] = int(p["tokens"]) - part
+        p["cost_usd"] = float(p["cost_usd"]) - cost_part
+        p["realized_usd"] = float(p.get("realized_usd", 0.0)) + net - cost_part
+        d["balance"] += net
+        _save(d)
+    return ["👥 SIM vendeu " + format(fraction * 100, ".0f") + "% de " + mint[:6] + " junto com a carteira: " +
+            format(net - cost_part, "+.2f") + " USD"]
+
+
 def sim_exits():
     """Stop / target for simulated copies (real ones use the live exit monitor)."""
     msgs = []
+    if EXIT_MODE == "wallet":
+        return msgs           # exit only when the copied wallet sells
     with _LOCK:
         positions = {m: p for m, p in _load()["positions"].items() if not p.get("real")}
     for mint, pos in positions.items():
@@ -903,13 +951,18 @@ def cycle(send=None, chat=None):
             if wallet in d["wallets"]:
                 d["wallets"][wallet]["last_sig"] = info.get("last_sig")
                 _save(d)
-        for side, mint, paid_usd in signals:
+        for side, mint, extra in signals:
+            paid_usd = extra if side == "buy" else None
             _track_hold(wallet, side, mint, time.time())
             if side == "sell":
                 with _LOCK:
                     pos = _load()["positions"].get(mint)
                 if pos and pos["wallet"] == wallet:
-                    msgs += _close(mint, "copy_follow", send, chat)
+                    frac = 1.0 if extra is None else float(extra)
+                    if not pos.get("real") and frac < 0.95:
+                        msgs += _sell_part(mint, frac)        # same movement: sold part -> sell the same part
+                    else:
+                        msgs += _close(mint, "copy_follow", send, chat)
             elif not info.get("paused"):
                 with _LOCK:
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
@@ -939,8 +992,10 @@ def status_text():
         d = _load()
     mode = "REAL" if d["enabled"] and d["real"] else ("SIMULAÇÃO" if d["enabled"] else "DESLIGADO")
     lines = ["👥 COPY TRADE — " + mode,
-             "US$ " + format(ORDER_USD, ".0f") + " por cópia · máx. " + str(MAX_POSITIONS) + " posições · vende quando a carteira vender, stop −" +
-             format(STOP_LOSS * 100, ".0f") + "%, alvo +" + format(TAKE_PROFIT * 100, ".0f") + "%",
+             "US$ " + format(ORDER_USD, ".0f") + " por cópia · máx. " + str(MAX_POSITIONS) + " posições · " +
+             ("sai só quando a carteira vender (mesmo movimento, sem TP/SL fixo)" if EXIT_MODE == "wallet" else
+              "vende quando a carteira vender, stop −" + format(STOP_LOSS * 100, ".0f") + "%, alvo +" +
+              format(TAKE_PROFIT * 100, ".0f") + "%"),
              "Só copia carteiras que seguram as moedas ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
              " min (mediana de " + str(MIN_ROUND_TRIPS) + "+ operações observadas)",
              "Simulação: saldo US$ " + format(d["balance"], ".2f") + " · posições abertas: " + str(len(d["positions"]))]

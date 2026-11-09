@@ -24,7 +24,7 @@ compras e vendas delas, em simulação ou com dinheiro real.
    melhores para as piores pela **nota** (lucro × acerto × experiência). Uma carteira que ainda
    não provou nada nas nossas cópias é trocada por outra com nota 1,5× maior
    (`COPY_REPLACE_MARGIN`).
-   Só segue carteiras com **saldo de pelo menos US$ 150 em SOL** (`COPY_MIN_WALLET_USD`); a cada
+   Só segue carteiras com **saldo de pelo menos US$ 40 em SOL** (`COPY_MIN_WALLET_USD`); a cada
    rodada confere o saldo (cache de 10 min) e remove as que caírem abaixo, exceto se houver uma
    cópia aberta daquela carteira.
    Também exige **compra média ≥ US$ 40 por moeda** no histórico (`COPY_MIN_BUY_USD`).
@@ -37,7 +37,9 @@ compras e vendas delas, em simulação ou com dinheiro real.
 4. **Copiar**: quando uma carteira seguida compra **US$ 40 ou mais** numa moeda (compras menores
    são ignoradas), o bot checa anti-golpe (mint/freeze revogados,
    10 maiores donos < 25%, teste de venda ≥ 92%) e compra US$ 5–10 por cópia (`COPY_ORDER_USD`).
-5. **Sair**: vende quando a carteira vender, ou no stop −15% / alvo +50%.
+5. **Sair**: só quando a carteira vender, com o mesmo movimento: se ela vende uma parte, a
+   simulação vende a mesma parte; no real, vende a posição inteira. Sem TP/SL fixo
+   (`COPY_EXIT_MODE=tp_sl` liga de novo o stop −15% / alvo +50%).
 6. **Trocar**: carteira que dá prejuízo para você (5+ cópias no negativo) é pausada e trocada por
    uma melhor; o mesmo vale para quem passa a vender rápido demais.
 7. **Proteções**: máximo de posições, stop por moeda, anti-golpe, cada ordem real confirmada na

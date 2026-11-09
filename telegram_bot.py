@@ -108,7 +108,7 @@ def discovery_text():
   last_cycle_line(s.get("last_cycle") or {}),
   "Carteiras com operações fechadas: "+str(s["wallets_seen"])+" · aprovadas: "+str(s["qualified_wallets"]),
   "Aprovada = lucro realizado, acerto ≥ "+format(wallet_copy.MIN_WIN_RATE*100,".0f")+"%, ≥ "+str(wallet_copy.MIN_CLOSED_TRADES)+" operações fechadas e retenção média ≥ "+format(wallet_copy.MIN_HOLD_SECONDS/60,".0f")+" min por moeda.",
-  "Para copiar também: saldo ≥ US$ 150, compra média ≥ US$ "+format(copy_trader.MIN_BUY_USD,".0f")+", criada há ≥ 7 dias e ativa em ≥ 6 dos últimos 7 dias (veja 👛 Carteiras copiadas)."]
+  "Para copiar também: saldo ≥ US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+", compra média ≥ US$ "+format(copy_trader.MIN_BUY_USD,".0f")+", criada há ≥ 7 dias e ativa em ≥ 6 dos últimos 7 dias (veja 👛 Carteiras copiadas)."]
  for w in wallet_copy.best_wallets(limit=10) if s["qualified_wallets"] else []:
   lines.append("• solscan.io/account/"+w["wallet"]+"\n  lucro "+format(w["realized_lamports"]/1e9,"+.3f")+" SOL · acerto "+format(w["win_rate"]*100,".0f")+"% · "+str(w["closed_trades"])+" ops · segura "+format(w["average_hold_seconds"]/60,".0f")+" min")
  if not s["qualified_wallets"]:lines.append("Ainda nenhuma aprovada. A cada 2 min o bot analisa o histórico de novas carteiras que compraram moedas em alta.")
@@ -200,7 +200,7 @@ def handle(update):
    elif action=="copy_sim":ct.set_mode(True,False);pre="🧪 Copy trade em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
    elif action=="copy_real":
     live_engine.start();ct.set_mode(True,True)
-    pre="💵 COPY TRADE COM DINHEIRO REAL LIGADO — US$ "+format(ct.ORDER_USD,".0f")+" por cópia, anti-golpe e teste de venda antes de cada compra, ordem confirmada na blockchain. Vende quando a carteira vender, ou no stop −"+format(ct.STOP_LOSS*100,".0f")+"% / alvo +"+format(ct.TAKE_PROFIT*100,".0f")+"%. "+("Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia." if trade_state.DAILY_LOSS_LIMIT_ENABLED else "Sem limite de perda diária.")+"\n⚠️ Copiar não garante lucro: você entra depois da carteira copiada.\n\n"
+    pre="💵 COPY TRADE COM DINHEIRO REAL LIGADO — US$ "+format(ct.ORDER_USD,".0f")+" por cópia, anti-golpe e teste de venda antes de cada compra, ordem confirmada na blockchain. "+("Sai só quando a carteira vender (sem alvo/stop fixo). " if ct.EXIT_MODE=="wallet" else "Vende quando a carteira vender, ou no stop −"+format(ct.STOP_LOSS*100,".0f")+"% / alvo +"+format(ct.TAKE_PROFIT*100,".0f")+"%. ")+("Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia." if trade_state.DAILY_LOSS_LIMIT_ENABLED else "Sem limite de perda diária.")+"\n⚠️ Copiar não garante lucro: você entra depois da carteira copiada.\n\n"
    elif action=="copy_off":ct.set_mode(False);pre="⏹️ Copy trade desligado. Posições abertas continuam com stop/alvo até vender.\n\n"
    else:pre=""
    send(chat,pre+status_text(),keyboard())
@@ -444,7 +444,7 @@ def analyze_wallet_job(chat,address,do_clone=None):
    send(chat,"🧬 CLONADO: vou copiar as próximas compras de "+address[:6]+"…"+address[-4:]+" e sair como ele sai:\n"+
     "TP +"+format(ex["tp"]*100,".0f")+"% · SL -"+format(ex["sl"]*100,".0f")+"%"+
     (" · vende em no máximo "+format(ex["max_hold_s"]/60,".0f")+" min" if ex["max_hold_s"] else "")+
-    "\nTambém vendo quando ele vender. Valor por cópia: US$ "+format(copy_trader.ORDER_USD,".0f")+
+    "\n"+("⚠️ COPY_EXIT_MODE=wallet: só saio quando ele vender, o TP/SL acima não é usado. " if copy_trader.EXIT_MODE=="wallet" else "Também vendo quando ele vender. ")+"Valor por cópia: US$ "+format(copy_trader.ORDER_USD,".0f")+
     ". Precisa do copy ligado (SIMULAÇÃO ou REAL).",keyboard())
  except Exception as exc:
   logging.exception("wallet analysis failed")
