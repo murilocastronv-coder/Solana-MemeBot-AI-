@@ -38,7 +38,7 @@ SCREEN_PER_CYCLE = int(_env("COPY_DEX_SCREEN_PER_CYCLE", 25))
 WALLET_HISTORY = int(_env("COPY_DEX_WALLET_HISTORY", 50))
 REANALYZE_SECONDS = _env("COPY_DEX_REANALYZE_HOURS", 12) * 3600
 # Wallet age: how far back we page (1000 signatures per call) to find activity >= 30 days ago.
-MIN_AGE_DAYS = _env("COPY_MIN_WALLET_DAYS", 49)
+MIN_AGE_DAYS = _env("COPY_MIN_WALLET_DAYS", 7)
 AGE_PAGES = int(_env("COPY_AGE_MAX_PAGES", 8))
 # Free RPC plans refuse bursts (HTTP 429). Stay under the limit and retry refused calls.
 MAX_RPS = max(0.5, _env("COPY_RPC_MAX_RPS", 6))
