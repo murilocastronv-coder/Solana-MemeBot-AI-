@@ -42,6 +42,12 @@ def history():
     return txs, mints
 
 
+def setUpModule():
+    q = patch.object(c, "TEST_DAYS", 0)      # these tests check copy/removal rules without the test period
+    q.start()
+    unittest.addModuleCleanup(q.stop)
+
+
 class ParseTests(unittest.TestCase):
     def test_buy_and_sell(self):
         b = wp.parse_swap(swap("M", 100, -0.5, T0), W)
