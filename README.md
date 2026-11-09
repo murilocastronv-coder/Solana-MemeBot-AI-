@@ -27,14 +27,14 @@ compras e vendas delas, em simulação ou com dinheiro real.
    Só segue carteiras com **saldo de pelo menos US$ 150 em SOL** (`COPY_MIN_WALLET_USD`); a cada
    rodada confere o saldo (cache de 10 min) e remove as que caírem abaixo, exceto se houver uma
    cópia aberta daquela carteira.
-   Também exige **compra média ≥ US$ 100 por moeda** no histórico (`COPY_MIN_BUY_USD`).
+   Também exige **compra média ≥ US$ 40 por moeda** no histórico (`COPY_MIN_BUY_USD`).
    E que a carteira **tenha sido criada há pelo menos 7 dias** (`COPY_MIN_WALLET_DAYS`): o bot procura a
    transação mais antiga, voltando até 8 blocos de 1.000 transações (`COPY_AGE_MAX_PAGES`).
    E que seja **ativa todo dia**: transações em pelo menos 6 dos últimos 7 dias
    (`COPY_MIN_ACTIVE_DAYS`; use `7` para exigir todos os dias). Ele
    ainda confere a mediana de retenção de pelo menos 3 operações observadas: carteira que vende
    em menos de 5 min não é copiada.
-4. **Copiar**: quando uma carteira seguida compra **US$ 100 ou mais** numa moeda (compras menores
+4. **Copiar**: quando uma carteira seguida compra **US$ 40 ou mais** numa moeda (compras menores
    são ignoradas), o bot checa anti-golpe (mint/freeze revogados,
    10 maiores donos < 25%, teste de venda ≥ 92%) e compra US$ 5–10 por cópia (`COPY_ORDER_USD`).
 5. **Sair**: vende quando a carteira vender, ou no stop −15% / alvo +50%.

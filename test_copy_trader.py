@@ -135,11 +135,14 @@ class CopyTests(unittest.TestCase):
         self.make_holder()
         c.set_mode(True)
         self.push("s0", tx(0, -5000)); c.cycle()
-        self.push("s1", tx(500, -400_000_000)); c.cycle()          # 0.4 SOL x $200 = $80 < $100
+        self.push("s1", tx(500, -150_000_000)); c.cycle()          # 0.15 SOL x $200 = $30 < $40
         self.assertEqual(c._load()["positions"], {})
         self.assertIn("compra pequena", c.status_text())
-        self.push("s2", tx(500, -600_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()  # $120
+        self.push("s2", tx(500, -250_000_000, mint="7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr")); c.cycle()  # $50
         self.assertEqual(len(c._load()["positions"]), 1)
+
+    def test_min_buy_default_is_40(self):
+        self.assertEqual(c.MIN_BUY_USD, 40)
 
     def test_buy_value_counts_sol_spent(self):
         self.assertAlmostEqual(c.buy_value_usd(tx(500, -1_000_000_000), WALLET), 200.0)
