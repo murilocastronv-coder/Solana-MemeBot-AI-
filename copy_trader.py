@@ -33,7 +33,7 @@ def _env(name, default):
     return float(os.getenv(name, str(default)))
 
 
-ORDER_USD = _env("COPY_ORDER_USD", 10)
+ORDER_USD = _env("COPY_ORDER_USD", 20)   # US$ per copied position
 MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 3))
 # Simulation: copy + strategy robot together never hold more than this many open orders.
 MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 3))
