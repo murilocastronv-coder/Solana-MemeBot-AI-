@@ -129,6 +129,7 @@ EXIT_TEXT = {
     "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
     "copy": "👥 Vende quando a carteira copiada vender | 🎯 alvo +50% | 🛑 stop −15%",
     "clone": "🤖 Sai com o alvo, o stop e o tempo máximo medidos na carteira de referência",
+    "mirror": "🪞 Vende junto com a carteira espelhada (na mesma proporção) | 🛑 stop de segurança",
     "launch": "🆕 Lançamento: vende TUDO assim que der +3% de lucro líquido, na hora se o criador vender, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
     "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
@@ -137,7 +138,8 @@ EXIT_TEXT = {
 }
 
 
-def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
+def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, add=False):
+    """add=True buys more of a coin already held (mirroring a wallet that scales in)."""
     try:
         if usd is not None:   # fixed-size order (Strategy B: US$ 10)
             value = account_value_usd(wallet)
@@ -154,11 +156,12 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ",
+           "mirror": "🪞 ESPELHO "}.get(mode, "") + ("(REFORÇO) " if add else "")
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:
-        result = bridge.submit_swap(mint, "buy", int(round(order_usd * 1_000_000)), wallet)
+        result = bridge.submit_swap(mint, "buy", int(round(order_usd * 1_000_000)), wallet, partial=add)
         settled = _settle(result["order_id"], wallet)
     except Exception as exc:
         _failure(send, chat, "compra", mint, exc)
@@ -179,8 +182,9 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
     return settled
 
 
-def sell_now(mint, reason, send, chat):
-    """Sell one whole position right away (used when the candle closes)."""
+def sell_now(mint, reason, send, chat, fraction=None):
+    """Sell a position right away: all of it, or only `fraction` of it (0-1) to mirror a
+    wallet that sells in parts. Fractions >= 95% sell everything (no dust left behind)."""
     position = state._load()["positions"].get(mint)
     wallet = get_address()
     if not position or not wallet:
@@ -197,12 +201,22 @@ def sell_now(mint, reason, send, chat):
         state.set_position_amount(mint, held)
         amount = held
     symbol = position.get("symbol") or mint[:6]
-    state.mark_exit_reason(mint, reason)
-    result = bridge.submit_swap(mint, "sell", amount, wallet)
+    partial = fraction is not None and 0 < float(fraction) < 0.95
+    if partial:
+        part = int(amount * float(fraction))
+        if part <= 0:
+            return "kept"
+        result = bridge.submit_swap(mint, "sell", part, wallet, partial=True)
+    else:
+        state.mark_exit_reason(mint, reason)
+        result = bridge.submit_swap(mint, "sell", amount, wallet)
     settled = _settle(result["order_id"], wallet)
     if settled.get("status") == "settled_sell":
-        send(chat, sell_message(symbol, {"reason": reason}, settled))
-        return "sold"
+        msg = sell_message(symbol, {"reason": reason}, settled)
+        if partial:
+            msg = "✂️ VENDA PARCIAL (" + format(float(fraction) * 100, ".0f") + "% da posição)\n" + msg
+        send(chat, msg)
+        return "sold_part" if partial else "sold"
     send(chat, "⏳ Venda enviada, conferindo saldo. Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" +
          str(result["signature"]))
     return "pending"
@@ -247,7 +261,8 @@ def sell_message(symbol, signal, settled):
            "launch_flat": "😴 Não subiu rápido",
            "launch_dev_sold": "🚨 Criador vendeu (sinal de rug): saiu na hora",
            "launch_time": "⏱️ Tempo máximo encerrado",
-           "copy_follow": "👥 A carteira copiada vendeu"}.get(signal["reason"], "🛑 Stop loss")
+           "copy_follow": "👥 A carteira copiada vendeu",
+           "mirror_follow": "🪞 A carteira espelhada vendeu"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"

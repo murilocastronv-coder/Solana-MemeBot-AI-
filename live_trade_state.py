@@ -80,7 +80,7 @@ def set_position_label(mint, symbol, mode="normal"):
         if mint in state["positions"]:
             state["positions"][mint]["symbol"] = str(symbol)[:20]
             state["positions"][mint]["mode"] = mode
-            state["positions"][mint]["opened_at"] = _time.time()
+            state["positions"][mint].setdefault("opened_at", _time.time())  # an add-buy keeps the first entry time
             _save(state)
 
 def set_sniper(enabled):
@@ -362,7 +362,8 @@ def update_peak(mint, ratio):
             position["peak_ratio"] = float(ratio)
             _save(state)
 
-def can_open():
+def can_open(adding=False):
+    """adding=True: buying more of a coin already held (does not count against the position limit)."""
     with _LOCK:
         state = _load()
         if state["day"] != datetime.now(timezone.utc).date().isoformat():
@@ -377,18 +378,19 @@ def can_open():
             return False, "Trading disabled"
         if state["pending"]:
             return False, "Unreconciled transaction"
-        if len(state["positions"]) >= MAX_POSITIONS:
+        if not adding and len(state["positions"]) >= MAX_POSITIONS:
             return False, "Position limit"
         if state["daily_loss_usd"] >= _loss_limit(state):
             return False, "Daily loss limit"
         return True, "Ready"
 
-def reserve(order_id, mint, side):
-    """Reserve before signing; pending entries require explicit chain reconciliation."""
+def reserve(order_id, mint, side, partial=False):
+    """Reserve before signing; pending entries require explicit chain reconciliation.
+    partial=True: a buy that adds to an open position, or a sell of only part of it."""
     if side not in ("buy", "sell") or not order_id or not mint:
         raise ValueError("Invalid order")
     with _LOCK:
-        allowed, reason = can_open() if side == "buy" else (True, "")
+        allowed, reason = can_open(adding=partial) if side == "buy" else (True, "")
         if not allowed:
             raise RuntimeError(reason)
         state = _load()
@@ -396,6 +398,8 @@ def reserve(order_id, mint, side):
             raise RuntimeError("Order already pending or duplicated")
         state["pending"][order_id] = {"mint": mint, "side": side,
             "created_at": datetime.now(timezone.utc).isoformat()}
+        if partial:
+            state["pending"][order_id]["partial"] = True
         _save(state)
 
 HISTORY_MAX = 300
@@ -427,8 +431,11 @@ def mark_exit_reason(mint, reason):
             _save(state)
 
 
-def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0, pnl_usd=None):
-    """Call only after independently verifying finalized on-chain outcome."""
+def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0, pnl_usd=None,
+                      remaining=None, sold_cost_usd=None):
+    """Call only after independently verifying finalized on-chain outcome.
+    remaining: what is left of the position after a partial sale (kept open);
+    sold_cost_usd: cost of the part sold, for the history line."""
     with _LOCK:
         state = _load()
         pending = state["pending"].get(order_id)
@@ -438,6 +445,10 @@ def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0,
             state["positions"][pending["mint"]] = position
         if pending["side"] == "sell":
             closed = state["positions"].pop(pending["mint"], None)
+            if remaining is not None:
+                state["positions"][pending["mint"]] = remaining
+                closed = dict(closed or {}, cost_usd=sold_cost_usd if sold_cost_usd is not None
+                              else (closed or {}).get("cost_usd", 0))
             _append_history(state, closed, pending["mint"], pnl_usd)
         state["daily_loss_usd"] += max(0.0, float(realized_loss_usd))
         if pnl_usd is not None:
@@ -505,7 +516,7 @@ def reconcile_known_signature(order_id, owner):
             if acquired <= 0 or after_sol >= int(before_sol):
                 return {"status": "manual_review", "reason": "Balance mismatch", "signature": signature}
             cost = float(pending.get("cost_usd", 10.0))
-            position = {"token_amount_raw": acquired, "cost_usd": cost, "buy_signature": signature}
+            position = _merged_buy(data, pending, acquired, cost, signature)
             record_settlement(order_id, signature, position=position)
             return {"status": "settled_buy", "signature": signature, "token_amount_raw": acquired}
         sold = int(before_token) - after_token
@@ -524,11 +535,30 @@ def reconcile_known_signature(order_id, owner):
             data["halted"] = True
             _save(data)
             return {"status": "settled_sell_review_pnl", "reason": "PnL not valued", "signature": signature}
-        pnl = proceeds_usd - cost
-        record_settlement(order_id, signature, realized_loss_usd=max(0.0, -pnl), pnl_usd=pnl)
+        remaining, sold_cost = None, cost
+        held = int(data["positions"].get(mint, {}).get("token_amount_raw") or 0)
+        if pending.get("partial") and held > sold > 0:
+            sold_cost = cost * sold / held
+            remaining = dict(data["positions"][mint], token_amount_raw=held - sold, cost_usd=cost - sold_cost)
+            remaining.pop("exit_reason", None)
+        pnl = proceeds_usd - sold_cost
+        record_settlement(order_id, signature, realized_loss_usd=max(0.0, -pnl), pnl_usd=pnl,
+                          remaining=remaining, sold_cost_usd=sold_cost)
         return {"status": "settled_sell", "signature": signature, "pnl_usd": pnl,
-                "cost_usd": cost, "proceeds_usd": proceeds_usd,
+                "cost_usd": sold_cost, "proceeds_usd": proceeds_usd, "partial": remaining is not None,
                 "sol_received": (after_sol - int(before_sol)) / 1_000_000_000}
+
+def _merged_buy(data, pending, acquired, cost, signature):
+    """New position from a buy, or the open one grown by it when the buy added to it."""
+    current = data["positions"].get(pending["mint"]) if pending.get("partial") else None
+    if not current:
+        return {"token_amount_raw": acquired, "cost_usd": cost, "buy_signature": signature}
+    merged = dict(current)
+    merged["token_amount_raw"] = int(current.get("token_amount_raw") or 0) + int(acquired)
+    merged["cost_usd"] = float(current.get("cost_usd") or 0) + float(cost)
+    merged["buy_signature"] = signature
+    return merged
+
 
 def _sol_to_usd(lamports):
     """Value SOL received from a sale with an executable Jupiter SOL->USDC quote."""
@@ -606,8 +636,9 @@ def _reconcile_by_balance(order_id, pending, owner):
         if acquired <= 0:
             discard_pending(order_id)
             return {"status": "discarded", "mint": mint, "side": "buy"}
-        position = {"token_amount_raw": acquired, "cost_usd": float(pending.get("cost_usd") or 0) or 10.0,
-                    "buy_signature": signature}
+        with _LOCK:
+            data = _load()
+        position = _merged_buy(data, pending, acquired, float(pending.get("cost_usd") or 0) or 10.0, signature)
         record_settlement(order_id, signature, position=position)
         return {"status": "settled_buy", "mint": mint, "signature": signature, "token_amount_raw": acquired}
     sold = int(before_token) - token_now

@@ -18,7 +18,7 @@ services:
       - key: DAILY_LOSS_LIMIT_ENABLED
         value: "false"
       - key: MAX_ORDER_USD
-        value: "5"
+        value: "10"
       - key: COPY_ORDER_USD
         value: "5"
       - key: COPY_MAX_POSITIONS
@@ -33,6 +33,17 @@ services:
         value: "5"
       - key: COPY_DISCOVERY_INTERVAL_SECONDS
         value: "30"
+      # Espelho da carteira EHg5…uMyaf: entra, reforça e vende junto com ela
+      - key: MIRROR_WALLET
+        value: EHg5YkU2SZBTvuT87rUsvxArGp3HLeye1fXaSDfuMyaf
+      - key: MIRROR_ORDER_USD
+        value: "5"
+      - key: MIRROR_SIZE_MODE
+        value: proporcional
+      - key: MIRROR_MAX_POSITIONS
+        value: "5"
+      - key: MIRROR_AUTOSTART
+        value: sim
       # Defina no painel (segredos): TELEGRAM_BOT_TOKEN, BOT_WALLET_ENCRYPTION_PASSPHRASE e
       # SOLANA_RPC_URL (RPC dedicado, necessário para a busca automática de carteiras)
       - key: SOLANA_RPC_URL

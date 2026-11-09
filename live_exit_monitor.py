@@ -36,6 +36,18 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
+    if position.get("mode") == "mirror":
+        # Mirror: the exit is the mirrored wallet's own sale (mirror_wallet sells with it).
+        # Here only the safety stop, an optional target and the max hold, all measured on that wallet.
+        tp = position.get("copy_tp")
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0),
+                                      stop_loss=str(position.get("copy_sl") or "0.5"),
+                                      arm=str(1 + float(tp)) if tp else "1000", drop="0")
+        max_hold = position.get("copy_max_hold_s")
+        held = time.time() - float(position.get("opened_at") or time.time())
+        if signal["action"] == "hold" and max_hold and held > float(max_hold):
+            signal.update(action="sell", reason="time_stop")
+        return signal
     if position.get("mode") in ("copy", "clone"):
         # Copy trade: target +50% / stop -15% (selling with the copied wallet is done by copy_trader).
         # A cloned wallet carries its own measured TP / SL / max hold on the position.

@@ -70,8 +70,11 @@ def preflight():
         raise TradingNotReady("Unreconciled transaction: trading paused")
     return True
 
-def submit_swap(mint, side, amount_raw, wallet_address):
+def submit_swap(mint, side, amount_raw, wallet_address, partial=False):
     """Persist intent before network call; leave pending on any uncertainty.
+
+    partial=True: a buy that adds to a coin already held, or a sell of only part of
+    the position (both used to mirror a wallet that scales in / out).
 
     Does NOT settle position or PnL: actual on-chain balance differences and
     fees must be reconciled by a separate validated settlement step.
@@ -88,21 +91,26 @@ def submit_swap(mint, side, amount_raw, wallet_address):
     if side == "buy" and not MIN_ORDER_USD * 1_000_000 <= int(amount_raw) <= MAX_ORDER_USD * 1_000_000:
         raise TradingNotReady("Buy size must be between USD 1 and MAX_ORDER_USD (" + format(MAX_ORDER_USD, ".0f") + ")")
     if side == "buy":
-        allowed, reason = state.can_open()
+        allowed, reason = state.can_open(adding=partial)
         if not allowed:
             raise TradingNotReady(reason)
-        if mint in state._load()["positions"]:
+        held = mint in state._load()["positions"]
+        if held and not partial:
             raise TradingNotReady("Position already open")
+        if partial and not held:
+            raise TradingNotReady("Cannot add to a position that is not open")
     else:
         if mint not in state._load()["positions"]:
             raise TradingNotReady("Cannot sell an untracked position")
         tracked = int(state._load()["positions"][mint]["token_amount_raw"])
-        if int(amount_raw) != tracked:
+        if partial and not 0 < int(amount_raw) < tracked:
+            raise TradingNotReady("Partial sell must be less than the tracked position")
+        if not partial and int(amount_raw) != tracked:
             raise TradingNotReady("Sell amount must equal tracked position")
     order_usd = int(amount_raw) / 1_000_000 if side == "buy" else 0.0
     swap_amount = sol_for_usd(wallet_address, order_usd) if side == 'buy' else int(amount_raw)
     order_id = uuid.uuid4().hex
-    state.reserve(order_id, mint, side)
+    state.reserve(order_id, mint, side, partial=partial)
     # From this point, failures require explicit reconciliation; do not
     # automatically delete the pending order or resend the transaction.
     input_mint, output_mint = (SOL_MINT, mint) if side == "buy" else (mint, SOL_MINT)

@@ -70,6 +70,29 @@ pip install -r requirements.txt
 python -m unittest discover -p "test_*.py"
 ```
 
+## 🪞 Espelho de carteira (mesma entrada, mesma saída)
+Robô dedicado a **uma carteira** (padrão: `EHg5YkU2SZBTvuT87rUsvxArGp3HLeye1fXaSDfuMyaf`, troque com
+`/espelho ENDEREÇO` ou `MIRROR_WALLET`). Ele vigia a carteira **em tempo real** (WebSocket do RPC
+dedicado; sem WebSocket, lê a cada 3 s) e faz o mesmo que ela, no mesmo momento:
+- **ela compra uma moeda** → o robô compra a mesma moeda (as moedas são as dela, então o tipo é igual);
+- **ela compra mais** → o robô reforça na mesma proporção (até `MIRROR_MAX_ADDS`, 3);
+- **ela vende uma parte** → o robô vende a mesma % da posição;
+- **ela vende tudo** → o robô vende tudo. Se a venda dela escapar (bot fora do ar), a cada 1 min ele
+  confere se ela ainda tem a moeda e vende se não tiver.
+- **Tamanho:** `MIRROR_ORDER_USD` (5) ajustado ao tamanho da compra dela (`MIRROR_SIZE_MODE=proporcional`:
+  compra 2x maior que o normal dela = 2x a sua, de 0,5x a 2x). `fixo` usa sempre o mesmo valor.
+- **Estratégia medida:** ao ligar e a cada 12 h ele lê o histórico dela (TP, SL, tempo segurando, valor por
+  moeda, plataforma). O **stop de segurança** fica um pouco além das piores perdas dela e o **tempo máximo**
+  em 2x o que ela costuma segurar: só disparam se a venda dela não for vista. Sem alvo de lucro próprio
+  (sai junto com ela); `MIRROR_STOP_LOSS`, `MIRROR_TAKE_PROFIT`, `MIRROR_MAX_HOLD_MIN` forçam valores.
+- Não copia compra com mais de 90 s de atraso (`MIRROR_MAX_DELAY_SECONDS`), máx. `MIRROR_MAX_POSITIONS`
+  (5) posições, anti-golpe ligado (`MIRROR_ANTI_GOLPE=false` desliga).
+- Botões **🪞 Espelhar carteira SIM / REAL**, **⏹️ Parar espelho**, **📊 Status espelho**.
+  `MIRROR_AUTOSTART=sim` liga em simulação sozinho no deploy; o REAL só liga pelo botão.
+- Ordens reais acima de US$ 10 são cortadas por `MAX_ORDER_USD` (10 no `render.yaml`).
+
+Você sempre entra alguns segundos depois dela e paga taxa: o resultado não sai idêntico ao dela.
+
 ## Robô com a estratégia de uma carteira (sem copiar)
 - `/analisar ENDEREÇO`: lê até 400 transações da carteira e mostra como ela opera. Na entrada:
   valor por moeda, plataforma, idade e valor de mercado da moeda quando compra, horários e

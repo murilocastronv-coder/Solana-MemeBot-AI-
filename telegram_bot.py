@@ -57,7 +57,9 @@ def split_message(text,limit=3800):
  if cur:parts.append(cur)
  return parts
 def keyboard():
- return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
+ return [[{"text":"🪞 Espelhar carteira SIM","callback_data":"mirror_sim"},{"text":"🪞 Espelhar REAL","callback_data":"mirror_real"}],
+  [{"text":"⏹️ Parar espelho","callback_data":"mirror_off"},{"text":"📊 Status espelho","callback_data":"mirror_status"}],
+  [{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"🧠 Clonar estratégia de uma carteira","callback_data":"clone_help"}],
@@ -150,6 +152,28 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
+ if action in ("mirror_sim","mirror_real","mirror_off","mirror_status","/espelho"):
+  import mirror_wallet as mw
+  try:
+   pre=""
+   if action=="/espelho":
+    parts=(msg or {}).get("text","").split()
+    if len(parts)==2:
+     if not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}",parts[1]):
+      send(chat,"Uso: /espelho ENDERECO_DA_CARTEIRA (sem endereço mostra o status)",keyboard());return
+     mw.set_target(parts[1]);pre="🎯 Carteira do espelho: "+parts[1]+"\nMedindo a estratégia dela em segundo plano (1–3 min)…\n\n"
+     run_async(mirror_measure_job,chat)
+   elif action=="mirror_sim":
+    mw.set_mode(True,False);pre="🧪 ESPELHO em SIMULAÇÃO: preço real, dinheiro de mentira (US$ 100). Só as PRÓXIMAS operações da carteira são copiadas.\n\n"
+    if mw.needs_profile():run_async(mirror_measure_job,chat)
+   elif action=="mirror_real":
+    live_engine.start();mw.set_mode(True,True)
+    pre="💵 ESPELHO COM DINHEIRO REAL LIGADO: compra quando ela compra, reforça quando ela reforça e vende a mesma parte quando ela vende. Só as PRÓXIMAS operações são copiadas.\n⚠️ Você entra segundos depois dela: o resultado não é igual ao dela.\n\n"
+    if mw.needs_profile():run_async(mirror_measure_job,chat)
+   elif action=="mirror_off":mw.set_mode(False);pre="⏹️ Espelho desligado. Posições reais abertas continuam com o stop de segurança.\n\n"
+   send(chat,pre+mw.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Espelho: "+str(exc)[:200],keyboard())
+  return
  if action in ("strat_sim","strat_real","strat_off","strat_status","/robo"):
   import clone_strategy as cs
   try:
@@ -383,6 +407,39 @@ def wallet_discovery_loop():
   except Exception as exc:
    logging.warning("wallet discovery failed: %s: %s",type(exc).__name__,str(exc)[:200])
   time.sleep(interval)
+def mirror_measure_job(chat=None):
+ """Measure the mirrored wallet's strategy (TP, SL, hold, size) for the safety exits."""
+ try:
+  import mirror_wallet as mw
+  if not os.getenv("SOLANA_RPC_URL"):
+   if chat:send(chat,"⚠️ Preciso do SOLANA_RPC_URL (RPC dedicado) para ler a carteira em tempo real.")
+   return
+  _,text=mw.measure()
+  if chat:
+   for part in split_message(text):send(chat,part)
+   send(chat,mw.status_text(),keyboard())
+ except Exception as exc:
+  logging.warning("mirror measure failed: %s",type(exc).__name__)
+  if chat:send(chat,"⚠️ Não consegui medir a estratégia agora ("+type(exc).__name__+"). O espelho segue copiando; tento de novo depois.")
+def mirror_loop():
+ """Mirror robot: reacts as soon as the WebSocket sees the wallet sign, polling as fallback."""
+ import mirror_wallet as mw
+ auto=os.getenv("MIRROR_AUTOSTART","").strip().lower()
+ if auto in ("sim","simulacao","simulação") and not mw.enabled():
+  try:mw.set_mode(True,False)
+  except Exception:logging.exception("mirror autostart failed")
+ threading.Thread(target=mw.ws_listener,daemon=True).start()
+ next_profile=time.monotonic()+30
+ while True:
+  mw.wait_next()
+  try:
+   chat=active_chat()
+   if not chat or not mw.enabled():continue
+   if time.monotonic()>=next_profile:
+    next_profile=time.monotonic()+600
+    if mw.needs_profile():run_async(mirror_measure_job,None)
+   for m in mw.cycle(send,chat):send(chat,m)
+  except Exception as exc:logging.warning("mirror cycle failed: %s: %s",type(exc).__name__,str(exc)[:150])
 def analyze_wallet_job(chat,address,do_clone=None):
  """Read the wallet history, report its strategy and optionally clone it (runs off the Telegram thread)."""
  try:
@@ -418,6 +475,7 @@ def loop():
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
  threading.Thread(target=strategy_loop,daemon=True).start()
+ threading.Thread(target=mirror_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:
