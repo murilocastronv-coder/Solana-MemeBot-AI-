@@ -106,3 +106,16 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   `COPY_CONVICTION_MULT=1.0`, use `1.5` para exigir 50% acima do normal ou `0` para desligar).
   Compras bem abaixo do normal dela, que costumam ser apostas pequenas ou testes, não são copiadas.
 
+
+## ₿ BTC breakout 15 min (alavancado, Jupiter Perps)
+- **Regras** (`btc_breakout.py`): LONG quando a vela de 15 min fecha acima da máxima das últimas
+  20 velas e acima da média de 200; SHORT no inverso. Alvo 1×ATR(14), stop 2× o alvo
+  (`BRK_TP_ATR`, `BRK_SL_MULT`), saída por tempo após 8 h. Uma posição por vez, 20% da conta de
+  garantia (`BRK_ORDER_FRACTION`), alavancagem 2x a 20x (máx. 20x). O stop fica sempre antes da
+  liquidação.
+- **📈 Backtest BTC 1 ano**: baixa 1 ano de velas de 15 min (Binance, Coinbase de reserva) e simula
+  2x, 3x, 5x, 10x e 20x com taxas, juros e liquidação. Com stop 2× o alvo, a estratégia precisa
+  acertar mais de 67% (mais as taxas) para empatar.
+- **Real**: exige backtest feito; se o backtest da alavancagem escolhida perdeu dinheiro, pede
+  confirmação. Ordens na Jupiter Perps com a carteira do bot (garantia em USDC, trocada de SOL se
+  faltar), cada transação simulada na blockchain antes de enviar. Precisa de `LIVE_TRADING_ENABLED=true`.

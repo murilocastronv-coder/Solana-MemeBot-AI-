@@ -63,6 +63,9 @@ def keyboard():
   [{"text":"🧠 Clonar estratégia de uma carteira","callback_data":"clone_help"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
   [{"text":"🤖 Robô estratégia SIM","callback_data":"strat_sim"},{"text":"🤖 Robô estratégia REAL","callback_data":"strat_real"}],
   [{"text":"⏹️ Parar robô estratégia","callback_data":"strat_off"},{"text":"📊 Status robô","callback_data":"strat_status"}],
+  [{"text":"₿ Breakout SIM","callback_data":"brk_sim"},{"text":"₿ Breakout REAL","callback_data":"brk_real"}],
+  [{"text":"⏹️ Parar BTC","callback_data":"brk_off"},{"text":"📊 Status BTC","callback_data":"brk_status"}],
+  [{"text":"⚙️ Alavancagem BTC","callback_data":"brk_lev"},{"text":"📈 Backtest BTC 1 ano","callback_data":"brk_bt"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def robot_alive_line():
@@ -182,6 +185,37 @@ def handle(update):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
   run_async(audit_job,chat);return
+ if action.startswith("brk_"):
+  import btc_breakout as bb
+  try:
+   if action=="brk_sim":bb.set_mode(True,False);send(chat,"🧪 BTC breakout em SIMULAÇÃO (preço real, dinheiro de mentira).\n\n"+bb.status_text(),keyboard());return
+   if action=="brk_off":bb.set_mode(False);send(chat,"⏹️ BTC breakout desligado: não abre novas posições. Posição aberta continua com alvo/stop.\n\n"+bb.status_text(),keyboard());return
+   if action=="brk_status":send(chat,bb.status_text(),keyboard());return
+   if action=="brk_lev":
+    send(chat,"⚙️ Alavancagem do BTC (máx. 20x). Quanto maior, mais rápido ganha E mais rápido perde:",
+     [[{"text":str(x)+"x","callback_data":"brk_lev_"+str(x)} for x in bb.LEVERAGES],[{"text":"⬅️ Voltar","callback_data":"/menu"}]]);return
+   if action.startswith("brk_lev_"):
+    lev=bb.set_leverage(int(action.split("_")[-1]))
+    send(chat,"⚙️ Alavancagem BTC: "+str(lev)+"x. Em "+str(lev)+"x, ~"+format(90/lev,".1f")+"% contra a posição liquida a garantia (o stop fica antes).\n\n"+bb.status_text(),keyboard());return
+   if action=="brk_bt":
+    send(chat,"⏳ Baixando 1 ano de velas de 15 min do BTC e simulando 2x, 3x, 5x, 10x e 20x… leva 1–2 minutos.")
+    def run_bt():
+     try:
+      text,_=bb.backtest_report()
+      for part in split_message(text):send(chat,part,keyboard())
+     except Exception as exc:send(chat,"⛔ Backtest falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
+    run_async(run_bt);return
+   if action in ("brk_real","brk_real_ok"):
+    d=bb._load();bt=bb.backtest_for(d["leverage"])
+    if not bt:send(chat,"⛔ Rode primeiro o 📈 Backtest BTC 1 ano: ele mostra se a estratégia teria dado lucro antes de usar dinheiro real.",keyboard());return
+    if action=="brk_real" and bt["final"]<=bt["start"]:
+     send(chat,"⚠️ ATENÇÃO: no backtest de 1 ano em "+str(d["leverage"])+"x esta estratégia PERDEU dinheiro ("+format(bt["return_pct"],"+.0f")+"%, queda máx. "+
+      format(bt["max_dd_pct"],".0f")+"%, "+str(bt["liquidations"])+" liquidações).\nLigar com dinheiro real mesmo assim?",
+      [[{"text":"💵 Ligar REAL mesmo assim","callback_data":"brk_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]]);return
+    bb.set_mode(True,True)
+    send(chat,"💵 BTC BREAKOUT COM DINHEIRO REAL LIGADO — "+str(d["leverage"])+"x na Jupiter Perps, "+format(bb.ORDER_FRACTION*100,".0f")+
+     "% da conta por operação. Cada ordem é simulada na blockchain antes de enviar.\n⚠️ Alavancagem pode zerar a garantia rápido.\n\n"+bb.status_text(),keyboard());return
+  except Exception as exc:send(chat,"⛔ BTC: "+str(exc)[:200],keyboard());return
  if action=="clone_help":
   send(chat,"🧠 CLONAR A ESTRATÉGIA DE UMA CARTEIRA\nEnvie:\n/analisar ENDEREÇO → mostra como ela entra e sai (valor, plataforma, idade da moeda, TP, SL, tempo)\n/clonar ENDEREÇO → analisa e passa a copiar as compras dela, saindo com o TP/SL/tempo dela\n/estrategia ENDEREÇO → monta um ROBÔ PRÓPRIO com a estratégia dela (sem copiar): procura sozinho moedas com o mesmo perfil e sai com o TP/SL/tempo dela. Depois ligue em 🤖 Robô estratégia SIM ou REAL.",keyboard());return
  if action in ("/analisar","/clonar","/estrategia"):
@@ -235,7 +269,7 @@ def handle(update):
   "launch_on","launch_off","launch_status","vol_sim","vol_real","vol_off","vol_status","/volume",
   "btcx_sim","btcx_real","btcx_off","btcx_status","btcx_lev","btcx_test","btcx_bt",
   "mev_on","mev_off","mev_status","/mev","mev_config","mev_amount","mev_min","mev_tip","mev_mode_sim","mev_mode_real","mev_scan","mev_history"}
- if action in legacy or action.startswith("lev_"):
+ if action in legacy or action.startswith("lev_"):  # old leverage buttons (BTC now uses brk_lev_)
   send(chat,"Esse controle foi removido. Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("wallet_export","/exportar_chave"):
@@ -342,6 +376,15 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
+def btc_loop():
+ """BTC breakout: manage the position and look for breakouts every 10 s."""
+ while True:
+  time.sleep(10)
+  try:
+   import btc_breakout
+   chat=active_chat()
+   if chat:btc_breakout.cycle(send,chat)
+  except Exception as exc:logging.warning("btc breakout cycle failed: %s",type(exc).__name__)
 def strategy_loop():
  """Autonomous bot with a wallet's measured strategy: one pass every 20 s."""
  while True:
@@ -478,6 +521,7 @@ def loop():
  threading.Thread(target=strategy_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
+ threading.Thread(target=btc_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:
