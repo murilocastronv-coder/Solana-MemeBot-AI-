@@ -75,11 +75,19 @@ def can_buy(mint, wallet, limit=None, rpc=None, valuer=value_usd):
     return True, len(coins)
 
 
+def refresh(wallet):
+    """Background refresh (never call from the Telegram thread)."""
+    coins_held(wallet, fresh=True)
+
+
 def status_line(wallet):
+    """Last known holdings, without touching the network (buttons must answer at once)."""
     import copy_trader as ct
-    try:
-        coins = coins_held(wallet)
-    except Exception:
-        return "Moedas na carteira agora: não consegui ler"
+    if _cache["wallet"] != wallet or _cache["coins"] is None:
+        return "Moedas na carteira agora: conferindo…"
+    coins = dict(_cache["coins"])
+    age = int(time.monotonic() - _cache["at"])
+    if age > 120:
+        return "Moedas na carteira agora: " + str(len(coins)) + "/" + str(ct.MAX_OPEN_TOTAL) + " (há " + str(age // 60) + " min)"
     return ("Moedas na carteira agora: " + str(len(coins)) + "/" + str(ct.MAX_OPEN_TOTAL) +
             (" (" + ", ".join(m[:4] + "… US$ " + format(v, ".0f") for m, v in coins.items()) + ")" if coins else ""))

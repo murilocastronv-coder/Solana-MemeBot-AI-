@@ -95,6 +95,18 @@ def last_cycle_line(c):
  if c.get("failed") or c.get("rpc_errors"):
   line+="\n⚠️ RPC: "+str(c.get("failed",0))+" leituras perdidas, "+str(c.get("rpc_errors",0))+" recusas"+(" ("+c.get("last_error","")+")" if c.get("last_error") else "")
  return line
+def handle_safe(update):
+ try:handle(update)
+ except Exception:logging.exception("update failed")
+def holdings_loop():
+ """Keep the wallet's real coin count fresh for the status, off the Telegram thread."""
+ while True:
+  try:
+   import wallet_holdings
+   address=get_address()
+   if address:wallet_holdings.refresh(address)
+  except Exception as exc:logging.warning("holdings refresh failed: %s",type(exc).__name__)
+  time.sleep(30)
 def wallet_holdings_line():
  try:
   import wallet_holdings
@@ -465,6 +477,7 @@ def loop():
  threading.Thread(target=copy_loop,daemon=True).start()
  threading.Thread(target=strategy_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
+ threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:
@@ -472,8 +485,7 @@ def loop():
     data=request_api("getUpdates",offset=offset,timeout=8,allowed_updates=["message","callback_query"])
     for u in data.get("result",[]):
      offset=u["update_id"]+1
-     try:handle(u)
-     except Exception:logging.exception("update failed")
+     run_async(handle_safe,u)   # each tap answers on its own: a slow one never blocks the others
    else:time.sleep(10)
   except requests.HTTPError as exc:
    if exc.response is not None and exc.response.status_code==409:
