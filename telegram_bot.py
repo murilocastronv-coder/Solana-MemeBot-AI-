@@ -60,7 +60,7 @@ def keyboard():
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
-  [{"text":"🧠 Clonar estratégia de uma carteira","callback_data":"clone_help"}],
+  [{"text":"🧠 Clonar estratégia de uma carteira","callback_data":"clone_help"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
   [{"text":"🤖 Robô estratégia SIM","callback_data":"strat_sim"},{"text":"🤖 Robô estratégia REAL","callback_data":"strat_real"}],
   [{"text":"⏹️ Parar robô estratégia","callback_data":"strat_off"},{"text":"📊 Status robô","callback_data":"strat_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -160,6 +160,10 @@ def handle(update):
    send(chat,pre+cs.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Robô estratégia: "+str(exc)[:200],keyboard())
   return
+ if action in ("audit","/auditar"):
+  if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
+  send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
+  run_async(audit_job,chat);return
  if action=="clone_help":
   send(chat,"🧠 CLONAR A ESTRATÉGIA DE UMA CARTEIRA\nEnvie:\n/analisar ENDEREÇO → mostra como ela entra e sai (valor, plataforma, idade da moeda, TP, SL, tempo)\n/clonar ENDEREÇO → analisa e passa a copiar as compras dela, saindo com o TP/SL/tempo dela\n/estrategia ENDEREÇO → monta um ROBÔ PRÓPRIO com a estratégia dela (sem copiar): procura sozinho moedas com o mesmo perfil e sai com o TP/SL/tempo dela. Depois ligue em 🤖 Robô estratégia SIM ou REAL.",keyboard());return
  if action in ("/analisar","/clonar","/estrategia"):
@@ -188,7 +192,8 @@ def handle(update):
    parts=(msg or {}).get("text","").split()
    if action=="/seguir":
     if len(parts)!=2:send(chat,"Uso: /seguir ENDERECO_DA_CARTEIRA. Não precisa: o bot acha carteiras sozinho.",keyboard());return
-    ct.follow(parts[1]);pre="✅ Seguindo "+parts[1]+". Compras antigas não são copiadas, só as próximas.\n\n"
+    ct.follow(parts[1]);pre="✅ Seguindo "+parts[1]+". Compras antigas não são copiadas, só as próximas. Vou medir quanto tempo ela segura as moedas antes de copiar.\n\n"
+    run_async(audit_job,chat,[parts[1]])
    elif action=="/deixar":
     if len(parts)!=2:send(chat,"Uso: /deixar ENDERECO_DA_CARTEIRA",keyboard());return
     ct.unfollow(parts[1]);pre="🗑️ Parei de seguir "+parts[1]+".\n\n"
@@ -383,6 +388,34 @@ def wallet_discovery_loop():
   except Exception as exc:
    logging.warning("wallet discovery failed: %s: %s",type(exc).__name__,str(exc)[:200])
   time.sleep(interval)
+def audit_job(chat=None,addresses=None):
+ """Measure how long each followed wallet holds its coins; block the fast ones."""
+ try:
+  import copy_trader,dex_wallets
+  rpc=dex_wallets._rpc_factory(os.getenv("SOLANA_RPC_URL"))
+  if addresses:
+   lines=[]
+   for a in addresses:
+    res=copy_trader.audit_wallet(a,rpc,copy_trader._sol_usd())
+    if res:
+     status,med,share,n=res
+     lines.append(("✅ Liberada para copiar: " if status=="ok" else "⛔ NÃO vai copiar: " if status=="fast" else "👀 Sem dados suficientes ainda: ")+
+      a[:6]+"…"+a[-4:]+" segura "+format(med/60,".1f")+" min (mediana), "+format(share*100,".0f")+"% das posições ≥ 5 min ("+str(n)+" medidas)")
+   text="\n".join(lines)
+  else:
+   text=copy_trader.audit_all(rpc,copy_trader._sol_usd())
+  chat=chat or active_chat()
+  if chat and text:
+   for part in split_message(text):send(chat,part)
+ except Exception as exc:
+  logging.warning("audit failed: %s: %s",type(exc).__name__,str(exc)[:200])
+  if chat:send(chat,"⛔ Auditoria falhou: "+type(exc).__name__)
+def audit_loop():
+ """Audit every followed wallet at start and every 6 h."""
+ time.sleep(60)
+ while True:
+  if os.getenv("SOLANA_RPC_URL") and active_chat():audit_job()
+  time.sleep(int(os.getenv("COPY_AUDIT_EVERY_HOURS","6"))*3600)
 def analyze_wallet_job(chat,address,do_clone=None):
  """Read the wallet history, report its strategy and optionally clone it (runs off the Telegram thread)."""
  try:
@@ -422,6 +455,7 @@ def loop():
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
  threading.Thread(target=strategy_loop,daemon=True).start()
+ threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:

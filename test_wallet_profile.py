@@ -13,13 +13,14 @@ PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 T0 = 1_760_000_000
 
 
-def swap(mint, token_delta, sol_delta, t, program=PUMP, decimals=6):
+def swap(mint, token_delta, sol_delta, t, program=PUMP, decimals=6, owner=None):
+    owner = owner or W
     pre = 10**12
     raw = int(token_delta * 10**decimals)
     return {"blockTime": t, "meta": {"err": None, "preBalances": [10**11, 0], "postBalances": [10**11 + int(sol_delta * 1e9), 0],
-            "preTokenBalances": [{"owner": W, "mint": mint, "uiTokenAmount": {"amount": str(pre), "decimals": decimals}}],
-            "postTokenBalances": [{"owner": W, "mint": mint, "uiTokenAmount": {"amount": str(pre + raw), "decimals": decimals}}]},
-            "transaction": {"message": {"accountKeys": [W, program]}}}
+            "preTokenBalances": [{"owner": owner, "mint": mint, "uiTokenAmount": {"amount": str(pre), "decimals": decimals}}],
+            "postTokenBalances": [{"owner": owner, "mint": mint, "uiTokenAmount": {"amount": str(pre + raw), "decimals": decimals}}]},
+            "transaction": {"message": {"accountKeys": [owner, program]}}}
 
 
 def history():
@@ -185,3 +186,59 @@ class NewRulesTests(unittest.TestCase):
                 patch.object(c, "_order", return_value={"outAmount": "1000"}):
             self.assertIsNone(c._open("NEWMINT", W, None, None))
         self.assertNotIn("NEWMINT", c._load()["positions"])
+
+
+class AuditTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_one_minute_flippers_are_blocked_even_with_some_long_holds(self):
+        self.assertEqual(c.holder_status({"holds": [600, 600, 600]})[0], "ok")
+        # median 5 min but only half of the positions last 5+ min
+        self.assertEqual(c.holder_status({"holds": [60, 60, 300, 600]})[0], "fast")
+        self.assertEqual(c.holder_status({"holds": [60, 60, 60, 60]})[0], "fast")
+
+    def rpc_for(self, hold_s, owner):
+        txs, t = [], T0
+        for k in range(4):
+            m = str(Keypair().pubkey())
+            txs += [swap(m, 1000, -1.0, t, owner=owner), swap(m, -1000, 1.5, t + hold_s, owner=owner)]
+            t += 3600
+        sigs = [{"signature": "s%d" % i, "err": None} for i in range(len(txs))][::-1]
+        by_sig = {"s%d" % i: x for i, x in enumerate(txs)}
+
+        def rpc(method, params):
+            if method == "getSignaturesForAddress":
+                return [] if "before" in params[1] else sigs
+            if method == "getTokenSupply":
+                return {"value": {"uiAmount": 1e9}}
+            return by_sig[params[0]]
+        return rpc
+
+    def test_audit_blocks_one_minute_wallet_and_allows_holder(self):
+        fast, slow = str(Keypair().pubkey()), str(Keypair().pubkey())
+        c.follow(fast)
+        c.follow(slow)
+        with patch.object(c, "_order"):
+            self.assertEqual(c.audit_wallet(fast, self.rpc_for(60, fast), 100.0)[0], "fast")
+            self.assertEqual(c.audit_wallet(slow, self.rpc_for(900, slow), 100.0)[0], "ok")
+        w = c._load()["wallets"]
+        self.assertEqual(w[fast]["holds"], [60] * 4)
+        self.assertEqual(w[slow]["audit"]["positions"], 4)
+
+    def test_audit_all_report(self):
+        a = str(Keypair().pubkey())
+        c.follow(a)
+        text = c.audit_all(self.rpc_for(60, a), 100.0)
+        self.assertIn("0 de 1 liberadas", text)
+        self.assertIn("⛔ NÃO COPIA", text)
+
+    def test_auto_follow_rejects_mostly_fast_wallet(self):
+        cand = {"wallet": str(Keypair().pubkey()), "closed_trades": 5, "realized_lamports": 10**9,
+                "hold_samples": [60, 60, 300, 600],   # median 5 min, but only 50% last 5+ min "average_buy_lamports": 10**9, "age_days": 30,
+                "active_days_7": 7}
+        with patch.object(c, "wallet_usd", return_value=1000.0), patch.object(c, "_sol_usd", return_value=200.0):
+            self.assertFalse(c.auto_follow(cand))
