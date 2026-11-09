@@ -136,6 +136,7 @@ class CopyTests(unittest.TestCase):
              patch("live_trade_state.positions_by_mode", return_value=0), \
              patch("live_trade_state._load", return_value={"positions": {}}), \
              patch("live_engine.get_address", return_value="W"), \
+             patch("wallet_holdings.can_buy", return_value=(True, 0)), \
              patch("live_engine._execute_buy", return_value={"status": "settled_buy"}) as buy:
             c.cycle(lambda *a: None, "1")
         self.assertEqual(buy.call_args[0][-1], "copy")

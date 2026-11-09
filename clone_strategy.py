@@ -189,6 +189,11 @@ def _open(pair, cfg, real, send, chat):
         if (not allowed or len(st._load()["positions"]) >= ct.MAX_OPEN_TOTAL
                 or st.positions_by_mode("clone") >= MAX_POSITIONS or mint in st._load()["positions"]):
             return None
+        import wallet_holdings
+        ok, why = wallet_holdings.can_buy(mint, live_engine.get_address())
+        if not ok:
+            _event("não comprou " + symbol + ": " + why)
+            return None
         settled = live_engine._execute_buy(pair, mint, symbol, send, chat, live_engine.get_address(), None, "clone",
                                            usd=ORDER_USD)
         if not settled or settled.get("status") != "settled_buy":

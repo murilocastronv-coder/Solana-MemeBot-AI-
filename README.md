@@ -97,4 +97,8 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   usar `/seguir`): lê o histórico de cada carteira seguida e mede quanto tempo ela segura cada moeda.
   Só copia se a mediana for ≥ 5 min **e** pelo menos 60% das posições durarem ≥ 5 min
   (`COPY_MIN_LONG_HOLD_SHARE`). Carteira que fecha rápido é **removida** (com cópia aberta, sai quando ela fechar) e a busca automática coloca outra no lugar.
+- **Conferência da carteira antes de comprar** (dinheiro real): o bot lê na blockchain as moedas que
+  a carteira dele tem de verdade (SPL Token e Token-2022, sem SOL/USDC/USDT e sem sobras de menos de
+  US$ 1 ou que não dá para vender, `HOLDINGS_DUST_USD`). Se já houver 3 moedas, ou se já tiver a
+  moeda, não compra. O 📊 Status mostra "Moedas na carteira agora: N/3".
 
