@@ -14,8 +14,9 @@ services:
     envVars:
       - key: BOT_WALLET_FILE
         value: /var/data/wallet.json
-      - key: DAILY_LOSS_LIMIT_USD
-        value: "50"
+      # Sem limite de perda diária (DAILY_LOSS_LIMIT_ENABLED=true liga de novo)
+      - key: DAILY_LOSS_LIMIT_ENABLED
+        value: "false"
       - key: MAX_ORDER_USD
         value: "5"
       - key: COPY_ORDER_USD
