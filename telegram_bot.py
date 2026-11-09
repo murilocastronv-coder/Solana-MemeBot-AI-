@@ -80,7 +80,7 @@ def status_text():
   st=trade_state.status();pnl=trade_state.pnl_summary()
   return (ct.status_text()+"\n\n"+
    "Robô (dinheiro real): "+("🟢 PRONTO" if live_engine.ready() else "🔴 PARADO — "+str(live_engine.why_stopped() or ""))+"\n"+
-   "Posições reais abertas: "+str(st["positions"])+" · ordens pendentes: "+str(st["pending"])+"\n"+
+   "Posições reais abertas: "+str(st["positions"])+"/"+str(ct.MAX_OPEN_TOTAL)+" (máx.) · ordens pendentes: "+str(st["pending"])+"\n"+
    (wallet_holdings_line()+"\n" if get_address() else "")+
    "Perda do dia: US$ "+format(st["daily_loss_usd"],".2f")+(" / "+format(trade_state.daily_loss_limit(),".2f") if trade_state.DAILY_LOSS_LIMIT_ENABLED else " (sem limite diário)")+"\n"+
    "P/L real hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD · total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD · operações: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)\n"+
@@ -340,7 +340,7 @@ def startup_notice():
  reason=live_engine.why_stopped()
  send(chat,"🔄 Bot reiniciado (deploy). Estado salvo recuperado:\n"+
   ("🟢 Robô LIGADO e operando" if reason is None else "🔴 Robô parado: "+reason)+
-  "\n📦 Posições abertas: "+str(st["positions"])+"/3 (stop e venda automática continuam)"+
+  "\n📦 Posições abertas: "+str(st["positions"])+"/"+str(trade_state.MAX_POSITIONS)+" (venda automática continua)"+
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 HEARTBEAT={"at":0.0,"step":"iniciando"}
 def beat(step):
