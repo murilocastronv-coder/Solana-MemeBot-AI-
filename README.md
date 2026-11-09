@@ -101,4 +101,8 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   a carteira dele tem de verdade (SPL Token e Token-2022, sem SOL/USDC/USDT e sem sobras de menos de
   US$ 1 ou que não dá para vender, `HOLDINGS_DUST_USD`). Se já houver 3 moedas, ou se já tiver a
   moeda, não compra. O 📊 Status mostra "Moedas na carteira agora: N/3".
+- **Convicção:** só copia quando a carteira coloca na moeda pelo menos o que ela costuma colocar
+  (mediana das últimas compras observadas, ou a média do histórico no começo;
+  `COPY_CONVICTION_MULT=1.0`, use `1.5` para exigir 50% acima do normal ou `0` para desligar).
+  Compras bem abaixo do normal dela, que costumam ser apostas pequenas ou testes, não são copiadas.
 
