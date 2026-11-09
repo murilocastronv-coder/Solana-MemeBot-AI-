@@ -180,7 +180,7 @@ class NewRulesTests(unittest.TestCase):
         c.follow(W)
         d = c._load()
         d["wallets"][W].update(clone=True, holds=[600, 700, 900],
-                               audit={"at": time.time(), "pnl_recent": 50.0, "trades_recent": 12, "win_recent": 0.8})
+                               audit={"at": time.time(), "pnl_recent": 50.0, "trades_recent": 20, "win_recent": 0.8})
         c._save(d)
         with patch.object(c, "new_signals", return_value=[("buy", "MINTX", 200.0)]), \
                 patch.object(c, "_open", return_value=None) as op:
@@ -307,16 +307,33 @@ class RecentResultTests(unittest.TestCase):
         return a, c._load()["wallets"][a]
 
     def test_profitable_last_two_weeks_is_ok(self):
-        a, w = self.audit([1.5, 1.4, 0.9, 1.6] * 3)      # 12 trades, 9 wins, +US$ 420
-        self.assertEqual(w["audit"]["trades_recent"], 12)
-        self.assertAlmostEqual(w["audit"]["pnl_recent"], 420.0, places=0)
+        a, w = self.audit([1.5, 1.4, 0.9, 1.6] * 4, days_ago=2)   # 16 trades, 12 wins, +US$ 560
+        self.assertEqual(w["audit"]["trades_recent"], 16)
+        self.assertAlmostEqual(w["audit"]["pnl_recent"], 560.0, places=0)
         self.assertEqual(c.result_status(w), "ok")
-        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 12)))
+        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 16)))
 
-    def test_needs_ten_trades(self):
-        self.assertEqual(c.RESULT_MIN_TRADES, 10)
-        a, w = self.audit([1.5] * 9)                     # profitable, but only 9 trades
+    def test_needs_more_than_15_trades_in_9_days(self):
+        self.assertEqual((c.RESULT_MIN_TRADES, c.RESULT_DAYS), (16, 9))
+        a, w = self.audit([1.5] * 15, days_ago=2)        # profitable, but only 15 trades
         self.assertEqual(c.result_status(w), "bad")
+        b, w2 = self.audit([1.5] * 16, days_ago=12)      # good, but 12 days ago (outside 9 days)
+        self.assertEqual(c.result_status(w2), "bad")
+
+    def test_keeps_only_top_profit_wallets(self):
+        now = time.time()
+        wallets = []
+        for k in range(c.TOP_WALLETS + 3):
+            a = str(Keypair().pubkey())
+            c.follow(a)
+            d = c._load()
+            d["wallets"][a].update(holds=[600] * 5, audit={"at": now, "pnl_recent": 10.0 * (k + 1),
+                                                          "trades_recent": 20, "win_recent": 0.7})
+            c._save(d)
+            wallets.append(a)
+        removed = c.remove_fast_wallets()
+        self.assertEqual(sorted(removed), sorted(wallets[:3]))       # the 3 lowest profits leave
+        self.assertEqual(len(c._load()["wallets"]), c.TOP_WALLETS)
 
     def test_losing_or_old_results_are_bad_and_removed(self):
         a, w = self.audit([0.5, 0.6, 1.2, 0.7])          # losing

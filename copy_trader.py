@@ -48,7 +48,7 @@ MIN_ROUNDTRIP = 0.92
 NETWORK_FEE_USD = 0.003
 START_USD = 100.0
 MAX_WALLETS = int(_env("COPY_MAX_WALLETS", 30))
-MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 15))
+MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 10))
 # A new candidate replaces an unproven followed wallet only if its score is clearly better.
 REPLACE_MARGIN = _env("COPY_REPLACE_MARGIN", 1.5)
 # Only follow wallets holding at least this much (SOL balance in USD); remove them below it.
@@ -74,8 +74,10 @@ MIN_LONG_SHARE = _env("COPY_MIN_LONG_HOLD_SHARE", 0.6)
 AUDIT_MAX_TX = int(_env("COPY_AUDIT_MAX_TX", 300))
 # Recent results: only copy wallets that made money in the last RESULT_DAYS days
 # (>= RESULT_MIN_TRADES closed trades, win rate >= RESULT_MIN_WIN, profit > RESULT_MIN_USD).
-RESULT_DAYS = _env("COPY_RESULT_DAYS", 14)
-RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 10))
+RESULT_DAYS = _env("COPY_RESULT_DAYS", 9)
+RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 16))   # more than 15 trades in the period
+# Keep only the TOP_WALLETS wallets with the highest profit in the period; the rest are removed.
+TOP_WALLETS = int(_env("COPY_TOP_WALLETS", 10))
 RESULT_MIN_WIN = _env("COPY_RESULT_MIN_WIN", 0.5)
 RESULT_MIN_USD = _env("COPY_RESULT_MIN_USD", 0)
 AUDIT_VALID_S = _env("COPY_AUDIT_VALID_HOURS", 24) * 3600
@@ -938,10 +940,18 @@ def remove_fast_wallets():
             if a not in busy and (holder_status(w)[0] == "fast" or result_status(w) == "bad"):
                 d["wallets"].pop(a)
                 removed.append(a)
+        # only the best: rank approved wallets by profit in the period, drop the ones below the top
+        approved = sorted(((w.get("audit") or {}).get("pnl_recent", 0.0), a) for a, w in d["wallets"].items()
+                          if result_status(w) == "ok")
+        for _, a in approved[:max(0, len(approved) - TOP_WALLETS)]:
+            if a not in busy:
+                d["wallets"].pop(a)
+                removed.append(a)
         if removed:
             _save(d)
     for a in removed:
-        _event("removi " + a[:6] + "…: fecha rápido demais ou sem bom resultado em " + format(RESULT_DAYS, ".0f") + " dias")
+        _event("removi " + a[:6] + "…: fecha rápido demais, sem bom resultado em " + format(RESULT_DAYS, ".0f") +
+               " dias ou fora das " + str(TOP_WALLETS) + " de maior lucro")
     return removed
 
 
@@ -986,7 +996,8 @@ def audit_all(rpc, sol_usd, max_tx=None):
             "Regras: segura ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min (mediana) e ≥ " +
             format(MIN_LONG_SHARE * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
             " min; nos últimos " + format(RESULT_DAYS, ".0f") + " dias: lucro, ≥ " + str(RESULT_MIN_TRADES) +
-            " operações e acerto ≥ " + format(RESULT_MIN_WIN * 100, ".0f") + "%. "
+            " operações e acerto ≥ " + format(RESULT_MIN_WIN * 100, ".0f") + "%; ficam só as " + str(TOP_WALLETS) +
+            " de maior lucro. "
             "As que não passam são removidas e a busca automática coloca outras no lugar.")
     return head + ("\n\n" + "\n".join(rows) if rows else "\nNenhuma carteira na lista.")
 
