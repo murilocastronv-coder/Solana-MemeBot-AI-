@@ -153,3 +153,64 @@ class WalletHistoryTests(unittest.TestCase):
     def test_fast_flipper_history_is_rejected(self):
         dw.scan(get=fake_dex(), rpc=self.rpc(hold=40), now=1_800_000_000)
         self.assertEqual(wallet_copy.best_wallets(), [])
+
+
+class FakeResp:
+    def __init__(self, status, payload=None):
+        self.status_code, self._payload = status, payload or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError("HTTP %d" % self.status_code)
+
+    def json(self):
+        return self._payload
+
+
+class FakeSession:
+    def __init__(self, responses):
+        self.responses, self.posts = list(responses), 0
+
+    def post(self, *a, **k):
+        self.posts += 1
+        return self.responses.pop(0)
+
+
+class RpcLimiterTests(unittest.TestCase):
+    def make(self, responses):
+        self.sleeps, self.t = [], [0.0]
+
+        def sleep(x):
+            self.sleeps.append(x)
+            self.t[0] += x
+        self.session = FakeSession(responses)
+        return dw._rpc_factory("http://rpc", sleep=sleep, clock=lambda: self.t[0], session=self.session)
+
+    def test_retries_rate_limit_then_succeeds(self):
+        rpc = self.make([FakeResp(429), FakeResp(200, {"error": {"message": "Too many requests"}}),
+                         FakeResp(200, {"result": 7})])
+        before = dw.RPC_ERRORS["count"]
+        self.assertEqual(rpc("getSlot", []), 7)
+        self.assertEqual(self.session.posts, 3)
+        self.assertEqual(dw.RPC_ERRORS["count"] - before, 2)
+
+    def test_real_error_is_not_retried(self):
+        rpc = self.make([FakeResp(200, {"error": {"message": "invalid param"}})])
+        with self.assertRaises(ValueError):
+            rpc("getTransaction", ["x"])
+        self.assertEqual(self.session.posts, 1)
+
+    def test_throttles_to_max_rps(self):
+        rpc = self.make([FakeResp(200, {"result": 1}) for _ in range(5)])
+        for _ in range(5):
+            rpc("getSlot", [])
+        self.assertGreaterEqual(self.t[0], 4 / dw.MAX_RPS - 1e-9)
+
+    def test_cycle_report_saved(self):
+        d = tempfile.mkdtemp()
+        with patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")}):
+            dw.scan(get=fake_dex(), rpc=FakeRpc(), now=1_800_000_000)
+            c = wallet_copy.summary()["last_cycle"]
+        self.assertEqual(c["tx_read"], 6)
+        self.assertEqual(c["failed"], 0)
+        self.assertGreaterEqual(c["buyers"], 1)

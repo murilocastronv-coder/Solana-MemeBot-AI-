@@ -260,4 +260,5 @@ def summary(now=None):
             "dex_transactions_scanned": int(state.get("dex_transactions_scanned", 0)),
             "dex_tokens": list(state.get("dex_tokens", [])),
             "wallets_analyzed": len(state.get("dex_analyzed", {})),
+            "last_cycle": dict(state.get("dex_last_cycle", {})),
             "last_slot": state.get("last_slot")}

@@ -34,6 +34,9 @@ TX_PER_TOKEN = int(_env("COPY_DEX_TX_PER_TOKEN", 15))
 WALLETS_PER_CYCLE = int(_env("COPY_DEX_WALLETS_PER_CYCLE", 4))
 WALLET_HISTORY = int(_env("COPY_DEX_WALLET_HISTORY", 50))
 REANALYZE_SECONDS = _env("COPY_DEX_REANALYZE_HOURS", 12) * 3600
+# Free RPC plans refuse bursts (HTTP 429). Stay under the limit and retry refused calls.
+MAX_RPS = max(0.5, _env("COPY_RPC_MAX_RPS", 6))
+RPC_ERRORS = {"count": 0, "last": ""}
 
 _http = requests.Session()
 
@@ -78,16 +81,42 @@ def trending_pairs(get=_get_json, max_tokens=MAX_TOKENS):
     return sorted(best.values(), key=lambda x: x["volume24h"], reverse=True)[:max_tokens]
 
 
-def _rpc_factory(rpc_url):
-    session = requests.Session()
+def _rpc_factory(rpc_url, sleep=time.sleep, clock=time.monotonic, session=None):
+    """JSON-RPC caller limited to MAX_RPS, retrying rate-limited / temporary failures."""
+    session = session or requests.Session()
+    gap = 1.0 / MAX_RPS
+    last = {"at": 0.0}
 
     def rpc(method, params):
-        r = session.post(rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=20)
-        r.raise_for_status()
-        payload = r.json()
-        if payload.get("error"):
-            raise RuntimeError("Solana RPC " + method + " failed")
-        return payload.get("result")
+        for attempt in range(4):
+            wait = last["at"] + gap - clock()
+            if wait > 0:
+                sleep(wait)
+            last["at"] = clock()
+            try:
+                r = session.post(rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+                                 timeout=20)
+                if r.status_code == 429 or r.status_code >= 500:
+                    raise RuntimeError("HTTP " + str(r.status_code))
+                r.raise_for_status()
+                payload = r.json()
+                err = payload.get("error")
+                if err:
+                    text = str(err.get("message", err)) if isinstance(err, dict) else str(err)
+                    if "limit" in text.lower() or "too many" in text.lower():
+                        raise RuntimeError("rate limit: " + text[:80])
+                    raise ValueError(method + ": " + text[:120])   # real error: no retry
+                return payload.get("result")
+            except ValueError as exc:
+                RPC_ERRORS["count"] += 1
+                RPC_ERRORS["last"] = str(exc)[:120]
+                raise
+            except Exception as exc:
+                RPC_ERRORS["count"] += 1
+                RPC_ERRORS["last"] = (type(exc).__name__ + ": " + str(exc))[:120]
+                if attempt == 3:
+                    raise
+                sleep(0.5 * 2 ** attempt)
     return rpc
 
 
@@ -140,7 +169,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         cursors = state.setdefault("dex_cursors", {})
         seen = set(state.get("dex_seen_sigs", []))
         buyers = []
-        scanned = 0
+        scanned = failed = 0
+        errors_before = RPC_ERRORS["count"]
         for p in pairs:
             params = {"limit": per_token}
             if cursors.get(p["pair"]):
@@ -148,6 +178,7 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
             try:
                 sigs = rpc("getSignaturesForAddress", [p["pair"], params]) or []
             except Exception:
+                failed += 1
                 continue
             if not sigs:
                 continue
@@ -157,6 +188,7 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
                 try:
                     tx = _get_tx(rpc, s["signature"])
                 except Exception:
+                    failed += 1
                     continue
                 if not isinstance(tx, dict):
                     continue
@@ -174,17 +206,26 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         analyzed = state.setdefault("dex_analyzed", {})
         now = int(now or time.time())
         fresh = [w for w in dict.fromkeys(buyers) if now - int(analyzed.get(w, 0)) >= REANALYZE_SECONDS]
+        done = with_trades = 0
         for w in fresh[:max(0, wallets_per_cycle)]:
             try:
                 stats = analyze_wallet(w, rpc, history)
             except Exception:
+                failed += 1
                 continue
             analyzed[w] = now
+            done += 1
             if stats:
                 state["wallets"][w] = stats
+                with_trades += 1
         if len(analyzed) > 5000:
             state["dex_analyzed"] = dict(sorted(analyzed.items(), key=lambda kv: kv[1])[-3000:])
         state["dex_seen_sigs"] = list(seen)[-20000:]
+        state["dex_last_cycle"] = {"at": now, "tokens": len(pairs), "tx_read": scanned, "failed": failed,
+                                   "rpc_errors": RPC_ERRORS["count"] - errors_before,
+                                   "last_error": RPC_ERRORS["last"] if RPC_ERRORS["count"] > errors_before else "",
+                                   "buyers": len(set(buyers)), "new_buyers": len(fresh),
+                                   "histories": done, "histories_with_trades": with_trades}
         state["dex_tokens"] = [{"symbol": p["symbol"], "mint": p["mint"], "volume24h": p["volume24h"]} for p in pairs]
         state["dex_transactions_scanned"] = int(state.get("dex_transactions_scanned", 0)) + scanned
         state["updated_at"] = int(time.time())
