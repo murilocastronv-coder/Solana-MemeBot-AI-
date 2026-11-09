@@ -237,7 +237,7 @@ def scan_confirmed(rpc_url=None, max_blocks=25):
         tx_count = 0
         for slot in slots:
             block = rpc("getBlock", [slot, {"encoding": "json", "transactionDetails": "full",
-                "rewards": False, "commitment": "confirmed", "maxSupportedTransactionVersion": 0}])
+                "rewards": False, "commitment": "confirmed", "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1"))}])
             if not isinstance(block, dict):
                 continue
             transactions = block.get("transactions") or []

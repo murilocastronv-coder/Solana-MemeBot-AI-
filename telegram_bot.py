@@ -84,6 +84,10 @@ def last_cycle_line(c):
  line=("Última rodada (há "+str(ago//60)+" min): "+str(c.get("tx_read",0))+" negociações lidas, "+
   str(c.get("buyers",0))+" compradores ("+str(c.get("new_buyers",0))+" novos), "+
   str(c.get("histories",0))+" históricos analisados ("+str(c.get("histories_with_trades",0))+" com operações fechadas)")
+ if c.get("screened"):
+  r=c.get("rejected") or {}
+  line+=("\nTriagem: "+str(c["screened"])+" carteiras · reprovadas por idade "+str(r.get("idade",0))+
+   ", atividade "+str(r.get("atividade",0))+", saldo "+str(r.get("saldo",0)))
  if c.get("failed") or c.get("rpc_errors"):
   line+="\n⚠️ RPC: "+str(c.get("failed",0))+" leituras perdidas, "+str(c.get("rpc_errors",0))+" recusas"+(" ("+c.get("last_error","")+")" if c.get("last_error") else "")
  return line
