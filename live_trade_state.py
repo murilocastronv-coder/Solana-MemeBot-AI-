@@ -468,7 +468,7 @@ def reconcile_known_signature(order_id, owner):
         if not pending or not pending.get("signature"):
             return {"status": "manual_review", "reason": "Missing signature"}
         signature = pending["signature"]
-        tx = rpc("getTransaction", [signature, {"encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": 0}])
+        tx = rpc("getTransaction", [signature, {"encoding": "jsonParsed", "commitment": "finalized", "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1"))}])
         if not tx:
             return {"status": "waiting_finality", "signature": signature}
         # Do not reconcile an unrelated signature against the owner's balances.

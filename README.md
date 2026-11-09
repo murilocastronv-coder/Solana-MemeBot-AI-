@@ -14,6 +14,10 @@ compras e vendas delas, em simulação ou com dinheiro real.
    SOL e tempo que segurou cada moeda. Ajustes de consumo do RPC: `COPY_DEX_MAX_TOKENS` (8),
    `COPY_DEX_TX_PER_TOKEN` (15), `COPY_DEX_WALLETS_PER_CYCLE` (4), `COPY_DEX_WALLET_HISTORY` (50).
    `COPY_DISCOVERY_SOURCE=blocos` lê blocos inteiros; `ambos` usa as duas fontes.
+   **Triagem rápida:** antes de ler o histórico, cada comprador passa pelos filtros baratos (idade,
+   atividade diária e saldo: 1–3 leituras). Até 25 carteiras triadas e 6 históricos completos por
+   rodada (`COPY_DEX_SCREEN_PER_CYCLE`, `COPY_DEX_WALLETS_PER_CYCLE`). As leituras pedem transações
+   até a versão 1 da Solana (`SOLANA_MAX_TX_VERSION`).
 2. **Carteira aprovada** quando tem: lucro realizado positivo, acerto ≥ 55%, ≥ 3 operações
    fechadas e retenção média ≥ 5 min por moeda. As mais lucrativas entram primeiro.
 3. **Seguir**: o bot passa a seguir até 15 carteiras aprovadas (`COPY_AUTO_MAX_WALLETS`), das

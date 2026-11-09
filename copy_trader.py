@@ -484,7 +484,7 @@ def new_signals(wallet, info):
     info["last_sig"] = newest
     out = []
     for sig in reversed(fresh):
-        tx = _rpc("getTransaction", [sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0,
+        tx = _rpc("getTransaction", [sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1")),
                                            "commitment": "confirmed"}])
         signal = signal_from_tx(tx, wallet)
         if signal:

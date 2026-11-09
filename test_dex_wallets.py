@@ -81,6 +81,12 @@ class DexWalletTests(unittest.TestCase):
         self.assertEqual(s["dex_transactions_scanned"], 6)
         self.assertEqual(len(s["dex_tokens"]), 3)
 
+    def test_reads_new_transaction_version(self):
+        rpc = FakeRpc()
+        dw.scan(get=fake_dex(), rpc=rpc)
+        opts = [p[1] for m, p in rpc.calls if m == "getTransaction"]
+        self.assertTrue(opts and all(o["maxSupportedTransactionVersion"] == 1 for o in opts))
+
     def test_second_scan_only_reads_new_trades(self):
         rpc = FakeRpc()
         dw.scan(get=fake_dex(), rpc=rpc)
@@ -106,10 +112,16 @@ class WalletHistoryTests(unittest.TestCase):
     """The pair scan only catches the BUY; the wallet's own history proves it holds and profits."""
 
     def setUp(self):
+        import copy_trader
         d = tempfile.mkdtemp()
         p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
         p.start()
         self.addCleanup(p.stop)
+        self.screen = {"old": True, "active": True, "rich": True}
+        for name, key in (("old_enough", "old"), ("active_daily", "active"), ("has_min_balance", "rich")):
+            q = patch.object(copy_trader, name, side_effect=lambda *_a, k=key: self.screen[k])
+            q.start()
+            self.addCleanup(q.stop)
 
     def rpc(self, hold=600):
         txs = {}
@@ -150,6 +162,21 @@ class WalletHistoryTests(unittest.TestCase):
         rpc.calls.clear()
         dw.scan(get=fake_dex(), rpc=rpc, now=1_800_000_000 + 600)
         self.assertNotIn(("getSignaturesForAddress", TRADER), rpc.calls)
+
+    def test_screening_rejects_before_reading_history(self):
+        for key, reason in (("old", "idade"), ("active", "atividade"), ("rich", "saldo")):
+            d = tempfile.mkdtemp()
+            with patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")}):
+                self.screen = {"old": True, "active": True, "rich": True}
+                self.screen[key] = False
+                rpc = self.rpc()
+                dw.scan(get=fake_dex(), rpc=rpc, now=1_800_000_000)
+                history_reads = [p for m, p in rpc.calls if m == "getTransaction" and p.startswith("h")]
+                self.assertEqual(history_reads, [])
+                c = wallet_copy.summary()["last_cycle"]
+                self.assertEqual(c["rejected"][reason], 1)
+                self.assertEqual(c["histories"], 0)
+                self.assertEqual(wallet_copy.best_wallets(), [])
 
     def test_fast_flipper_history_is_rejected(self):
         dw.scan(get=fake_dex(), rpc=self.rpc(hold=40), now=1_800_000_000)

@@ -31,7 +31,10 @@ MIN_VOLUME_24H = _env("COPY_DEX_MIN_VOLUME_24H_USD", 50000)
 MAX_TOKENS = int(_env("COPY_DEX_MAX_TOKENS", 8))
 TX_PER_TOKEN = int(_env("COPY_DEX_TX_PER_TOKEN", 15))
 # Speed-up: wallets seen buying a hot coin get their own recent history read right away.
-WALLETS_PER_CYCLE = int(_env("COPY_DEX_WALLETS_PER_CYCLE", 4))
+WALLETS_PER_CYCLE = int(_env("COPY_DEX_WALLETS_PER_CYCLE", 6))
+# Cheap screening first (age, daily activity, balance: 1-3 calls per wallet); only wallets that
+# pass get the full history read (~50 calls). Many more wallets checked per RPC credit.
+SCREEN_PER_CYCLE = int(_env("COPY_DEX_SCREEN_PER_CYCLE", 25))
 WALLET_HISTORY = int(_env("COPY_DEX_WALLET_HISTORY", 50))
 REANALYZE_SECONDS = _env("COPY_DEX_REANALYZE_HOURS", 12) * 3600
 # Wallet age: how far back we page (1000 signatures per call) to find activity >= 30 days ago.
@@ -136,7 +139,7 @@ def _buyers(tx):
 
 def _get_tx(rpc, signature):
     return rpc("getTransaction", [signature, {"encoding": "json", "commitment": "confirmed",
-                                              "maxSupportedTransactionVersion": 0}])
+                                              "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1"))}])
 
 
 def wallet_activity(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pages=AGE_PAGES):
@@ -177,10 +180,26 @@ def wallet_age_days(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pa
     return wallet_activity(wallet, rpc, now, first_page, min_days, pages)["age_days"]
 
 
-def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None):
+def screen_wallet(wallet, rpc, now, limit=WALLET_HISTORY):
+    """Cheap filters before the expensive history read.
+    Returns (reason or None, signatures, activity)."""
+    import copy_trader
+    sigs = rpc("getSignaturesForAddress", [wallet, {"limit": limit}]) or []
+    act = wallet_activity(wallet, rpc, now, first_page=sigs)
+    if not copy_trader.old_enough(act):
+        return "idade", sigs, act
+    if not copy_trader.active_daily(act):
+        return "atividade", sigs, act
+    if not copy_trader.has_min_balance(wallet):
+        return "saldo", sigs, act
+    return None, sigs, act
+
+
+def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None, sigs=None, activity=None):
     """Replay the wallet's latest transactions (oldest first) on a clean state.
     Returns its stats (closed trades, wins, profit, hold time per coin, age in days) or None."""
-    sigs = rpc("getSignaturesForAddress", [wallet, {"limit": limit}]) or []
+    if sigs is None:
+        sigs = rpc("getSignaturesForAddress", [wallet, {"limit": limit}]) or []
     tmp = wallet_copy.empty_state()
     for s in reversed(sigs):
         if s.get("err"):
@@ -193,7 +212,9 @@ def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None):
             wallet_copy.process_confirmed_block(tmp, {"blockTime": tx.get("blockTime") or s.get("blockTime"),
                                                       "transactions": [tx]}, slot=tx.get("slot"))
     stats = tmp["wallets"].get(wallet)
-    if stats:
+    if stats and activity is not None:
+        stats.update(activity)
+    elif stats:
         try:
             stats.update(wallet_activity(wallet, rpc, int(now or time.time()), first_page=sigs))
         except Exception:
@@ -202,7 +223,7 @@ def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None):
 
 
 def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token=TX_PER_TOKEN,
-         wallets_per_cycle=WALLETS_PER_CYCLE, history=WALLET_HISTORY, now=None):
+         wallets_per_cycle=WALLETS_PER_CYCLE, history=WALLET_HISTORY, now=None, screen=SCREEN_PER_CYCLE):
     """Read the newest trades of each hot pair and update wallet history. Returns tx count."""
     if rpc is None:
         rpc_url = (rpc_url or os.getenv("SOLANA_RPC_URL", "")).strip()
@@ -253,14 +274,26 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         analyzed = state.setdefault("dex_analyzed", {})
         now = int(now or time.time())
         fresh = [w for w in dict.fromkeys(buyers) if now - int(analyzed.get(w, 0)) >= REANALYZE_SECONDS]
-        done = with_trades = 0
-        for w in fresh[:max(0, wallets_per_cycle)]:
+        done = with_trades = screened = 0
+        rejected = {"idade": 0, "atividade": 0, "saldo": 0}
+        for w in fresh[:max(0, screen)]:
+            if done >= wallets_per_cycle:
+                break
             try:
-                stats = analyze_wallet(w, rpc, history, now=now)
+                reason, sigs, act = screen_wallet(w, rpc, now, history)
             except Exception:
                 failed += 1
                 continue
             analyzed[w] = now
+            screened += 1
+            if reason:
+                rejected[reason] += 1
+                continue
+            try:
+                stats = analyze_wallet(w, rpc, history, now=now, sigs=sigs, activity=act)
+            except Exception:
+                failed += 1
+                continue
             done += 1
             if stats:
                 state["wallets"][w] = stats
@@ -272,7 +305,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
                                    "rpc_errors": RPC_ERRORS["count"] - errors_before,
                                    "last_error": RPC_ERRORS["last"] if RPC_ERRORS["count"] > errors_before else "",
                                    "buyers": len(set(buyers)), "new_buyers": len(fresh),
-                                   "histories": done, "histories_with_trades": with_trades}
+                                   "histories": done, "histories_with_trades": with_trades,
+                                   "screened": screened, "rejected": rejected}
         state["dex_tokens"] = [{"symbol": p["symbol"], "mint": p["mint"], "volume24h": p["volume24h"]} for p in pairs]
         state["dex_transactions_scanned"] = int(state.get("dex_transactions_scanned", 0)) + scanned
         state["updated_at"] = int(time.time())
