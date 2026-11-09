@@ -91,4 +91,8 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
 - **Toda carteira seguida**, inclusive as de `/clonar` e `/seguir`, só tem compras copiadas se
   segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
   abre ordem. A compra mínima de US$ 40 vale para todas.
+- **Auditoria** (botão **🔍 Auditar carteiras** ou `/auditar`; também ao iniciar, a cada 6 h e ao
+  usar `/seguir`): lê o histórico de cada carteira seguida e mede quanto tempo ela segura cada moeda.
+  Só copia se a mediana for ≥ 5 min **e** pelo menos 60% das posições durarem ≥ 5 min
+  (`COPY_MIN_LONG_HOLD_SHARE`). Carteira que fecha em 1 minuto fica bloqueada.
 

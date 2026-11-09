@@ -63,6 +63,9 @@ _balance_cache = {}
 # round trips and copy it only if the median hold is at least this long.
 MIN_HOLD_SECONDS = _env("COPY_MIN_HOLD_MINUTES", 5) * 60
 MIN_ROUND_TRIPS = int(_env("COPY_MIN_ROUND_TRIPS", 3))
+# ... and at least this share of its positions must last 5+ min (blocks frequent 1-minute flippers).
+MIN_LONG_SHARE = _env("COPY_MIN_LONG_HOLD_SHARE", 0.6)
+AUDIT_MAX_TX = int(_env("COPY_AUDIT_MAX_TX", 150))
 
 _LOCK = threading.RLock()
 _safety_cache = {}
@@ -188,7 +191,7 @@ def auto_follow(candidate):
     address = str(candidate.get("wallet") or "")
     Pubkey.from_string(address)
     holds = [max(0, int(x)) for x in candidate.get("hold_samples", [])]
-    if len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS:
+    if len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS or long_share(holds) < MIN_LONG_SHARE:
         return False
     if int(candidate.get("closed_trades", 0)) < MIN_ROUND_TRIPS:
         return False
@@ -346,7 +349,7 @@ def replace_worst(candidate):
     for us) for a new candidate that passes the same filters. Wallets with an open copy stay."""
     address = str(candidate.get("wallet") or "")
     holds = [max(0, int(x)) for x in candidate.get("hold_samples", [])]
-    if (len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS
+    if (len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS or long_share(holds) < MIN_LONG_SHARE
             or int(candidate.get("closed_trades", 0)) < MIN_ROUND_TRIPS
             or int(candidate.get("realized_lamports", 0)) <= 0):
         return False
@@ -781,13 +784,67 @@ def _median(values):
     return v[len(v) // 2] if v else 0.0
 
 
+def long_share(holds):
+    """Fraction of positions held at least MIN_HOLD_SECONDS."""
+    return sum(1 for h in holds if h >= MIN_HOLD_SECONDS) / len(holds) if holds else 0.0
+
+
 def holder_status(w):
-    """('ok'|'watching'|'fast', median hold seconds) from the wallet's observed round trips."""
+    """('ok'|'watching'|'fast', median hold seconds) from the wallet's round trips.
+    ok = median >= 5 min AND at least MIN_LONG_SHARE of its positions held >= 5 min."""
     holds = w.get("holds") or []
     if len(holds) < MIN_ROUND_TRIPS:
         return "watching", _median(holds)
     med = _median(holds)
-    return ("ok" if med >= MIN_HOLD_SECONDS else "fast"), med
+    ok = med >= MIN_HOLD_SECONDS and long_share(holds) >= MIN_LONG_SHARE
+    return ("ok" if ok else "fast"), med
+
+
+def audit_wallet(address, rpc, sol_usd, max_tx=None):
+    """Measure the wallet's real hold time per coin from its history and store it.
+    Returns (status, median_seconds, share_long, positions)."""
+    import wallet_profile
+    max_tx = max_tx or AUDIT_MAX_TX
+    _, closed, _ = wallet_profile.analyze(address, rpc, sol_usd, max_tx=max_tx)
+    holds = wallet_profile.holds_seconds(closed)
+    with _LOCK:
+        d = _load()
+        w = d["wallets"].get(address)
+        if w is None:
+            return None
+        if holds:
+            w["holds"] = holds
+        w["audit"] = {"at": int(time.time()), "positions": len(closed), "median_s": int(_median(holds)),
+                      "long_share": round(long_share(holds), 3)}
+        _save(d)
+        status, med = holder_status(w)
+    return status, med, long_share(holds), len(closed)
+
+
+def audit_all(rpc, sol_usd, max_tx=None):
+    """Audit every followed wallet. Returns a Telegram report."""
+    with _LOCK:
+        wallets = list(_load()["wallets"])
+    rows = []
+    for a in wallets:
+        try:
+            res = audit_wallet(a, rpc, sol_usd, max_tx)
+        except Exception as exc:
+            rows.append("⚠️ " + a[:6] + "…" + a[-4:] + ": não consegui ler (" + type(exc).__name__ + ")")
+            continue
+        if res is None:
+            continue
+        status, med, share, n = res
+        icon = {"ok": "✅ COPIA", "fast": "⛔ NÃO COPIA", "watching": "👀 SEM DADOS"}[status]
+        rows.append(icon + " " + a[:6] + "…" + a[-4:] + " · segura " + format(med / 60, ".1f") + " min (mediana) · " +
+                    format(share * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min · " +
+                    str(n) + " posições medidas")
+    ok = sum(1 for r in rows if r.startswith("✅"))
+    head = ("🔍 AUDITORIA DAS CARTEIRAS: " + str(ok) + " de " + str(len(rows)) + " liberadas para copiar\n"
+            "Regra: segura ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min (mediana) e ≥ " +
+            format(MIN_LONG_SHARE * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
+            " min. As outras ficam na lista mas não abrem ordem.")
+    return head + ("\n\n" + "\n".join(rows) if rows else "\nNenhuma carteira na lista.")
 
 
 def _track_hold(wallet, side, mint, now):
