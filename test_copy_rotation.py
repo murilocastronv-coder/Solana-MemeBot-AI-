@@ -7,6 +7,15 @@ from solders.keypair import Keypair
 
 import copy_trader as c
 
+REAL_WALLET_USD = c.wallet_usd
+
+
+def setUpModule():
+    # every wallet in these tests has a big enough balance unless a test says otherwise
+    p = patch.object(c, "wallet_usd", return_value=1000.0)
+    p.start()
+    unittest.addModuleCleanup(p.stop)
+
 
 def cand(pnl=10**9, holds=(400, 500, 600), trades=5):
     return {"wallet": str(Keypair().pubkey()), "closed_trades": trades, "realized_lamports": pnl,
@@ -56,6 +65,49 @@ class RotationTests(unittest.TestCase):
         d["positions"]["MINT"] = {"wallet": ws[0]["wallet"], "real": False}
         c._save(d)
         self.assertFalse(c.replace_worst(cand()))
+
+
+class MinBalanceTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        c._balance_cache.clear()
+
+    def test_min_is_150_usd(self):
+        self.assertEqual(c.MIN_WALLET_USD, 150)
+
+    def test_poor_wallet_is_not_followed(self):
+        with patch.object(c, "wallet_usd", return_value=90.0):
+            self.assertFalse(c.auto_follow(cand()))
+        with patch.object(c, "wallet_usd", return_value=None):   # balance unknown: wait
+            self.assertFalse(c.auto_follow(cand()))
+        with patch.object(c, "wallet_usd", return_value=151.0):
+            self.assertTrue(c.auto_follow(cand()))
+
+    def test_wallet_below_min_is_removed_unless_copy_open(self):
+        rich, poor, busy = cand(), cand(), cand()
+        for w in (rich, poor, busy):
+            c.auto_follow(w)
+        d = c._load()
+        d["positions"]["MINT"] = {"wallet": busy["wallet"], "real": False}
+        c._save(d)
+        bal = {rich["wallet"]: 500.0, poor["wallet"]: 40.0, busy["wallet"]: 10.0}
+        with patch.object(c, "wallet_usd", side_effect=lambda a: bal[a]):
+            removed = c.prune_low_balance()
+        self.assertEqual(removed, [poor["wallet"]])
+        wallets = c._load()["wallets"]
+        self.assertIn(busy["wallet"], wallets)      # stays until its copy is closed
+        self.assertEqual(wallets[rich["wallet"]]["balance_usd"], 500.0)
+        self.assertIn("saldo US$ 500", c.wallets_text())
+
+    def test_wallet_usd_reads_rpc_balance(self):
+        real = REAL_WALLET_USD
+        with patch.object(c, "_rpc", return_value={"value": 2 * 10**9}), patch.object(c, "_sol_usd", return_value=100.0):
+            self.assertEqual(real("X"), 200.0)
+        with patch.object(c, "_rpc", side_effect=RuntimeError("down")):
+            self.assertIsNone(real("Y"))
 
 
 class TelegramMenuTests(unittest.TestCase):

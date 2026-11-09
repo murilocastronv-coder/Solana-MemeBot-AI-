@@ -329,7 +329,10 @@ def wallet_discovery_loop():
     if candidate["wallet"] in followed:continue
     if copy_trader.auto_follow(candidate):added.append(candidate["wallet"])
     elif copy_trader.replace_worst(candidate):added.append(candidate["wallet"])
+   removed=copy_trader.prune_low_balance()
    chat=active_chat()
+   if chat and removed:
+    send(chat,"🗑️ Removi "+str(len(removed))+" carteira(s) com saldo abaixo de US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+":\n"+"\n".join(x[:6]+"…"+x[-4:] for x in removed))
    if chat and added:
     send(chat,"🔎 Descobri " + str(len(added)) + " carteira(s) lucrativas nas moedas em alta do DexScreener, segurando ≥ 5 min. Vou observar apenas as próximas compras; nenhuma posição antiga foi copiada.\n" + "\n".join(x[:6]+"…"+x[-4:] for x in added))
   except Exception as exc:

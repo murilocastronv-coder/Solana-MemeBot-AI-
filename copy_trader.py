@@ -46,6 +46,10 @@ MAX_WALLETS = int(_env("COPY_MAX_WALLETS", 30))
 MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 15))
 # A new candidate replaces an unproven followed wallet only if its score is clearly better.
 REPLACE_MARGIN = _env("COPY_REPLACE_MARGIN", 1.5)
+# Only follow wallets holding at least this much (SOL balance in USD); remove them below it.
+MIN_WALLET_USD = _env("COPY_MIN_WALLET_USD", 150)
+BALANCE_MAX_AGE = 600
+_balance_cache = {}
 # Only copy wallets that HOLD: we first watch each wallet's own buy->sell
 # round trips and copy it only if the median hold is at least this long.
 MIN_HOLD_SECONDS = _env("COPY_MIN_HOLD_MINUTES", 5) * 60
@@ -144,15 +148,79 @@ def auto_follow(candidate):
         auto_count = sum(bool(w.get("auto_discovered")) for w in d["wallets"].values())
         if auto_count >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS:
             return False
+    if not has_min_balance(address):
+        return False
+    with _LOCK:
+        d = _load()
+        if address in d["wallets"]:
+            return False
+        auto_count = sum(bool(w.get("auto_discovered")) for w in d["wallets"].values())
+        if auto_count >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS:
+            return False
         d["wallets"][address] = {
             "last_sig": None, "copies": 0, "wins": 0, "pnl_usd": 0.0,
             "paused": False, "open_buys": {}, "holds": holds[-30:],
             "auto_discovered": True,
         }
         _record_stats(d["wallets"][address], candidate)
+        usd = wallet_usd(address)
+        if usd is not None:
+            d["wallets"][address]["balance_usd"] = round(usd, 2)
         _save(d)
     _event("descoberta automática: " + address[:6] + "… passou os filtros de retenção e histórico")
     return True
+
+
+def wallet_usd(address, max_age=BALANCE_MAX_AGE):
+    """SOL balance of a wallet in USD (cached 10 min). None if it cannot be read now."""
+    now = time.monotonic()
+    hit = _balance_cache.get(address)
+    if hit and now - hit[0] < max_age:
+        return hit[1]
+    try:
+        res = _rpc("getBalance", [address, {"commitment": "confirmed"}])
+        lamports = int(res["value"] if isinstance(res, dict) else res)
+        usd = lamports / 1e9 * _sol_usd()
+    except Exception:
+        return None
+    _balance_cache[address] = (now, usd)
+    return usd
+
+
+def has_min_balance(address):
+    if MIN_WALLET_USD <= 0:
+        return True
+    usd = wallet_usd(address)
+    return usd is not None and usd >= MIN_WALLET_USD
+
+
+def prune_low_balance():
+    """Remove auto-discovered wallets whose balance fell below MIN_WALLET_USD.
+    A wallet with an open copy stays until that copy is closed. Returns removed addresses."""
+    if MIN_WALLET_USD <= 0:
+        return []
+    with _LOCK:
+        d = _load()
+        busy = {p.get("wallet") for p in d["positions"].values()}
+        auto = [a for a, w in d["wallets"].items() if w.get("auto_discovered") and a not in busy]
+    removed = []
+    for a in auto:
+        usd = wallet_usd(a)
+        if usd is None:
+            continue
+        with _LOCK:
+            d = _load()
+            w = d["wallets"].get(a)
+            if not w:
+                continue
+            w["balance_usd"] = round(usd, 2)
+            if usd < MIN_WALLET_USD and a not in {p.get("wallet") for p in d["positions"].values()}:
+                d["wallets"].pop(a)
+                removed.append(a)
+            _save(d)
+    for a in removed:
+        _event("removi " + a[:6] + "…: saldo abaixo de US$ " + format(MIN_WALLET_USD, ".0f"))
+    return removed
 
 
 def score(stats):
@@ -189,6 +257,8 @@ def replace_worst(candidate):
     if (len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS
             or int(candidate.get("closed_trades", 0)) < MIN_ROUND_TRIPS
             or int(candidate.get("realized_lamports", 0)) <= 0):
+        return False
+    if not has_min_balance(address):
         return False
     with _LOCK:
         d = _load()
@@ -244,7 +314,8 @@ def wallets_text():
              "Cópias feitas: " + str(copies) + " · resultado das cópias: " + format(pnl, "+.2f") + " USD",
              "Ordenadas pela nota (lucro × acerto × experiência). Carteira sem resultado é trocada "
              "por outra com nota " + format(REPLACE_MARGIN, "g") + "× maior; com " + str(MIN_COPIES_TO_JUDGE) +
-             " cópias no prejuízo, é pausada."]
+             " cópias no prejuízo, é pausada.",
+             "Saldo mínimo da carteira copiada: US$ " + format(MIN_WALLET_USD, ".0f") + " em SOL (abaixo disso é removida)."]
     for i, (addr, w) in enumerate(rows, 1):
         st = w.get("stats") or {}
         status, med = holder_status(w)
@@ -253,7 +324,8 @@ def wallets_text():
         if st:
             hist = (" · histórico " + format(st.get("realized_lamports", 0) / 1e9, "+.3f") + " SOL, acerto " +
                     format(st.get("win_rate", 0) * 100, ".0f") + "%, " + str(st.get("closed_trades", 0)) + " ops")
-        lines.append(str(i) + ". " + icon + " nota " + format(w.get("score", 0.0), ".3f") + hist +
+        bal = (" · saldo US$ " + format(w["balance_usd"], ".0f")) if w.get("balance_usd") is not None else ""
+        lines.append(str(i) + ". " + icon + " nota " + format(w.get("score", 0.0), ".3f") + bal + hist +
                      " · segura " + format(med / 60, ".0f") + " min · cópias " + str(w.get("copies", 0)) +
                      " (" + str(w.get("wins", 0)) + " no lucro) · P/L " + format(w.get("pnl_usd", 0.0), "+.2f") +
                      " USD\n   solscan.io/account/" + addr)
