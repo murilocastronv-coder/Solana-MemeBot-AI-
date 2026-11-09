@@ -149,7 +149,9 @@ def best_wallets(state=None, limit=10):
         rows.append({"wallet": owner, "closed_trades": trades,
             "win_rate": float(stats["wins"]) / trades,
             "realized_lamports": int(stats["realized_lamports"]),
-            "average_buy_lamports": int(stats.get("cost_lamports_closed", 0) / trades),
+            # None = not measured yet (history read before this field existed), not "zero"
+            "average_buy_lamports": (int(stats["cost_lamports_closed"] / trades)
+                                     if "cost_lamports_closed" in stats else None),
             "age_days": stats.get("age_days"),
             "active_days_7": stats.get("active_days_7"),
             "average_hold_seconds": int(stats["total_hold_seconds"] / trades),
