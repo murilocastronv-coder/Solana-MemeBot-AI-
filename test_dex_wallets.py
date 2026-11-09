@@ -203,26 +203,26 @@ class WalletAgeTests(unittest.TestCase):
 
     def test_old_wallet_proven_from_first_page(self):
         rows, rpc = self.pages([self.NOW - d * 86400 for d in (1, 5, 60)])
-        self.assertGreaterEqual(dw.wallet_age_days("W", rpc, self.NOW, first_page=rows), 49)
+        self.assertGreaterEqual(dw.wallet_age_days("W", rpc, self.NOW, first_page=rows), 7)
         self.assertEqual(rpc.calls, [])               # no extra RPC call needed
 
     def test_young_wallet(self):
-        rows, rpc = self.pages([self.NOW - d * 86400 for d in (1, 3, 9)])
-        self.assertLess(dw.wallet_age_days("W", rpc, self.NOW, first_page=rows[:2]), 30)
+        rows, rpc = self.pages([self.NOW - d * 86400 for d in (1, 3, 5)])
+        self.assertLess(dw.wallet_age_days("W", rpc, self.NOW, first_page=rows[:2]), 7)
 
     def test_pages_back_for_busy_wallet(self):
         times = [self.NOW - i * 3000 for i in range(2500)]   # ~87 days over 2500 txs
         rows, rpc = self.pages(times)
         age = dw.wallet_age_days("W", rpc, self.NOW, first_page=rows[:50])
-        self.assertGreaterEqual(age, 49)
-        self.assertLessEqual(len(rpc.calls), 2)
+        self.assertGreaterEqual(age, 7)
+        self.assertLessEqual(len(rpc.calls), 1)
 
-    def test_default_minimum_is_seven_weeks(self):
+    def test_default_minimum_is_seven_days(self):
         import copy_trader
-        self.assertEqual(dw.MIN_AGE_DAYS, 49)
-        self.assertEqual(copy_trader.MIN_WALLET_DAYS, 49)
-        self.assertFalse(copy_trader.old_enough({"age_days": 40}))
-        self.assertTrue(copy_trader.old_enough({"age_days": 50}))
+        self.assertEqual(dw.MIN_AGE_DAYS, 7)
+        self.assertEqual(copy_trader.MIN_WALLET_DAYS, 7)
+        self.assertFalse(copy_trader.old_enough({"age_days": 5}))
+        self.assertTrue(copy_trader.old_enough({"age_days": 8}))
 
     def test_counts_active_days_in_last_week(self):
         times = [self.NOW - d * 86400 - 3600 for d in (0, 1, 2, 4, 6, 6, 40)]   # days 0,1,2,4,6 + old

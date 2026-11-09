@@ -87,7 +87,7 @@ class MinBalanceTests(unittest.TestCase):
 
     def test_young_or_unknown_age_wallet_is_not_followed(self):
         young = cand()
-        young["age_days"] = 12
+        young["age_days"] = 3
         self.assertFalse(c.auto_follow(young))
         unknown = cand()
         unknown["age_days"] = None
