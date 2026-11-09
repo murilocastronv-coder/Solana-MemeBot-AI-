@@ -234,7 +234,22 @@ class AuditTests(unittest.TestCase):
         c.follow(a)
         text = c.audit_all(self.rpc_for(60, a), 100.0)
         self.assertIn("0 de 1 liberadas", text)
-        self.assertIn("⛔ NÃO COPIA", text)
+        self.assertIn("REMOVIDA", text)
+        self.assertNotIn(a, c._load()["wallets"])          # slot freed for the automatic search
+
+    def test_remove_fast_keeps_holders_watching_and_open_copies(self):
+        fast, busy, ok, new = (str(Keypair().pubkey()) for _ in range(4))
+        for a in (fast, busy, ok, new):
+            c.follow(a)
+        d = c._load()
+        d["wallets"][fast]["holds"] = [60] * 5
+        d["wallets"][busy]["holds"] = [60] * 5
+        d["wallets"][ok]["holds"] = [900] * 5
+        d["positions"]["M"] = {"wallet": busy, "real": False}
+        c._save(d)
+        self.assertEqual(c.remove_fast_wallets(), [fast])
+        left = c._load()["wallets"]
+        self.assertEqual(set(left), {busy, ok, new})       # busy leaves after its copy closes
 
     def test_auto_follow_rejects_mostly_fast_wallet(self):
         cand = {"wallet": str(Keypair().pubkey()), "closed_trades": 5, "realized_lamports": 10**9,

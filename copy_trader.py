@@ -821,6 +821,25 @@ def audit_wallet(address, rpc, sol_usd, max_tx=None):
     return status, med, long_share(holds), len(closed)
 
 
+def remove_fast_wallets():
+    """Remove every followed wallet that fails the 5-minute rule (it would never be copied),
+    so the automatic search can fill the slot. A wallet with an open copy stays until it closes.
+    Returns removed addresses."""
+    removed = []
+    with _LOCK:
+        d = _load()
+        busy = {p.get("wallet") for p in d["positions"].values()}
+        for a, w in list(d["wallets"].items()):
+            if a not in busy and holder_status(w)[0] == "fast":
+                d["wallets"].pop(a)
+                removed.append(a)
+        if removed:
+            _save(d)
+    for a in removed:
+        _event("removi " + a[:6] + "…: fecha posições em menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min")
+    return removed
+
+
 def audit_all(rpc, sol_usd, max_tx=None):
     """Audit every followed wallet. Returns a Telegram report."""
     with _LOCK:
@@ -835,15 +854,16 @@ def audit_all(rpc, sol_usd, max_tx=None):
         if res is None:
             continue
         status, med, share, n = res
-        icon = {"ok": "✅ COPIA", "fast": "⛔ NÃO COPIA", "watching": "👀 SEM DADOS"}[status]
+        icon = {"ok": "✅ COPIA", "fast": "🗑️ REMOVIDA (rápida demais)", "watching": "👀 SEM DADOS"}[status]
         rows.append(icon + " " + a[:6] + "…" + a[-4:] + " · segura " + format(med / 60, ".1f") + " min (mediana) · " +
                     format(share * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min · " +
                     str(n) + " posições medidas")
+    remove_fast_wallets()
     ok = sum(1 for r in rows if r.startswith("✅"))
     head = ("🔍 AUDITORIA DAS CARTEIRAS: " + str(ok) + " de " + str(len(rows)) + " liberadas para copiar\n"
             "Regra: segura ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min (mediana) e ≥ " +
             format(MIN_LONG_SHARE * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
-            " min. As outras ficam na lista mas não abrem ordem.")
+            " min. As rápidas demais são removidas e a busca automática coloca outras no lugar.")
     return head + ("\n\n" + "\n".join(rows) if rows else "\nNenhuma carteira na lista.")
 
 
