@@ -53,21 +53,75 @@ class UserCopyTests(unittest.TestCase):
         self.assertAlmostEqual(st["history"][0]["pnl_usd"], 20 * 0.96 - 10, places=4)
         self.assertTrue(any("LUCRO" in t for _, t in self.sent))
 
-    def test_real_buy_pays_fee_to_owner_wallet_after_swap(self):
+    def test_real_buy_puts_fee_inside_the_swap_transaction(self):
         uc.accept_terms(202)
         uc.set_mode(202, "real")
+        with patch.object(uc, "sol_balance", return_value=int(1e9)), patch.object(uc, "token_balance", return_value=5000), \
+                patch.object(uc, "atomic_swap", return_value={"signature": "s", "fee_lamports": int(0.1e9 * 0.04)}) as sw, \
+                patch.object(uc, "transfer_sol") as separate_fee:
+            uc.on_buy(MINT, LEADER, self.send, sync=True)
+        self.assertEqual(sw.call_args.kwargs["fee_lamports"], int(0.1e9 * 0.04))
+        self.assertEqual(int(sw.call_args.args[3]), int(0.1e9 * 0.96))
+        separate_fee.assert_not_called()                                    # no second transaction
+        st = uc.load(202)
+        self.assertEqual(st["positions"][MINT]["tokens"], 5000)
+        self.assertEqual(st["fees_paid_lamports"], int(0.1e9 * 0.04))
+
+    def test_route_that_cannot_take_the_fee_falls_back_to_swap_then_fee(self):
+        uc.accept_terms(209)
+        uc.set_mode(209, "real")
         calls = []
         with patch.object(uc, "sol_balance", return_value=int(1e9)), \
+                patch.object(uc, "atomic_swap", side_effect=uc.NotSent("too large", fallback=True)), \
                 patch.object(uc, "quote_order", return_value={"requestId": "r"}), \
                 patch.object(uc, "execute", side_effect=lambda c, od: calls.append("swap") or
                              {"signature": "s", "total_output_amount": 5000}), \
                 patch.object(uc, "transfer_sol", side_effect=lambda kp, to, lam: calls.append(("fee", to, lam)) or "f"):
             uc.on_buy(MINT, LEADER, self.send, sync=True)
-        self.assertEqual(calls[0], "swap")                                   # fee only after the trade went through
-        self.assertEqual(calls[1], ("fee", self.owner_wallet, int(0.1e9 * 0.04)))
-        st = uc.load(202)
-        self.assertEqual(st["positions"][MINT]["tokens"], 5000)
-        self.assertEqual(st["fees_paid_lamports"], int(0.1e9 * 0.04))
+        self.assertEqual(calls, ["swap", ("fee", self.owner_wallet, int(0.1e9 * 0.04))])
+
+    def test_atomic_swap_sends_one_tx_with_swap_and_fee(self):
+        import base64
+        from solders.hash import Hash
+        from solders.instruction import CompiledInstruction
+        from solders.message import MessageHeader, MessageV0
+        from solders.pubkey import Pubkey
+        from solders.transaction import VersionedTransaction
+        import live_swap_executor as lx
+        address, _ = uw.create_or_get(210)
+        prog = Pubkey.new_unique()
+        jup_msg = MessageV0(MessageHeader(1, 0, 1), [Pubkey.from_string(address), prog], Hash.default(),
+                            [CompiledInstruction(1, b"swap", bytes([0]))], [])
+        unsigned = base64.b64encode(bytes(VersionedTransaction.populate(jup_msg, [uc_sig_placeholder()]))).decode()
+        sent = {}
+
+        def rpc(method, params):
+            if method == "simulateTransaction":
+                return {"value": {"err": None}}
+            if method == "sendTransaction":
+                sent["tx"] = VersionedTransaction.from_bytes(base64.b64decode(params[0]))
+                return "sig"
+            return {"value": [{"confirmationStatus": "confirmed", "err": None}]}
+        with patch.object(lx, "quote", return_value={"outAmount": str(int(0.5e9))}), \
+                patch.object(lx, "build_swap", return_value={"swapTransaction": unsigned}), \
+                patch.object(uc, "_rpc", side_effect=rpc):
+            res = uc.atomic_swap(210, MINT, uc.SOL_MINT, 1000)
+        self.assertEqual(res["fee_lamports"], int(0.5e9 * 0.04))           # sell: 4% of the SOL received
+        tx = sent["tx"]
+        self.assertTrue(tx.verify_with_results()[0])                        # signed by the user's own wallet
+        keys = [str(k) for k in tx.message.account_keys]
+        last = tx.message.instructions[-1]
+        self.assertEqual(keys[last.program_id_index], "11111111111111111111111111111111")
+        self.assertEqual([keys[a] for a in bytes(last.accounts)], [address, self.owner_wallet])
+        self.assertEqual(bytes(tx.message.instructions[0].data), b"swap")
+
+    def test_failed_simulation_sends_nothing(self):
+        import live_swap_executor as lx
+        uw.create_or_get(211)
+        with patch.object(lx, "quote", side_effect=RuntimeError("no route")), patch.object(uc, "_rpc") as rpc:
+            with self.assertRaises(uc.NotSent):
+                uc.atomic_swap(211, uc.SOL_MINT, MINT, 1000, fee_lamports=10)
+        rpc.assert_not_called()
 
     def test_failed_quote_charges_nothing(self):
         uc.accept_terms(203)
@@ -98,19 +152,23 @@ class UserCopyTests(unittest.TestCase):
         st = uc.load(205)
         self.assertEqual((st["fees_owed_lamports"], st["fees_paid_lamports"]), (0, 1234))
 
-    def test_real_sell_pays_fee_on_proceeds(self):
+    def test_real_sell_fee_inside_and_profit_from_sol_received(self):
         d = uc._default()
         d.update(mode="real", terms_at=1)
         d["positions"][MINT] = {"leader": LEADER, "real": True, "tokens": 5000, "cost_usd": 10.0, "opened_at": time.time()}
         uc.save(206, d)
         uw.create_or_get(206)
-        fees = []
+        fee = int(0.05e9 * 0.04)
+        balances = iter([int(1e9), int(1e9) + int(0.05e9) - fee])            # before / after the sale
         with patch.object(uc, "token_balance", return_value=5000), \
-                patch.object(uc, "swap", return_value={"signature": "s", "total_output_amount": int(0.05e9)}), \
-                patch.object(uc, "transfer_sol", side_effect=lambda kp, to, lam: fees.append(lam) or "f"):
+                patch.object(uc, "sol_balance", side_effect=lambda a: next(balances)), \
+                patch.object(uc, "atomic_swap", return_value={"signature": "s", "fee_lamports": fee}), \
+                patch.object(uc, "transfer_sol") as separate_fee:
             uc.on_sell(MINT, LEADER, 1.0, self.send, sync=True)
-        self.assertEqual(fees, [int(0.05e9 * 0.04)])
-        self.assertAlmostEqual(uc.load(206)["history"][0]["pnl_usd"], 5 * 0.96 - 10, places=4)
+        separate_fee.assert_not_called()
+        st = uc.load(206)
+        self.assertEqual(st["fees_paid_lamports"], fee)
+        self.assertAlmostEqual(st["history"][0]["pnl_usd"], 5 * 0.96 - 10, places=4)
 
     def test_wallet_with_user_position_is_not_removed(self):
         d = uc._default()
@@ -142,6 +200,11 @@ class UserCopyTests(unittest.TestCase):
             tb.handle({"callback_query": {"id": "1", "data": "u_real_ok", "message": {"chat": {"id": 300, "type": "private"}}}})
         self.assertEqual(uc.load(300)["mode"], "real")
         self.assertIn("u_sim", {b["callback_data"] for row in tb.user_keyboard() for b in row})
+
+
+def uc_sig_placeholder():
+    from solders.signature import Signature
+    return Signature.default()
 
 
 class FeeTransferTests(unittest.TestCase):
