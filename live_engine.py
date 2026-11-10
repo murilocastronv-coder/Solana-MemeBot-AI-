@@ -132,7 +132,7 @@ EXIT_TEXT = {
     "launch": "🆕 Lançamento: vende TUDO assim que der +3% de lucro líquido, na hora se o criador vender, sai cedo se cair 10% ou não subir +4% em 25 s, stop -15%, máx. 2 min",
     "candle": "🎯 Vende no alvo +1,5% durante a vela | 🛑 stop -3% | 🕯️ senão vende quando a vela de 1 min fechar",
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
-    "sniper": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
+    "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
 }
 

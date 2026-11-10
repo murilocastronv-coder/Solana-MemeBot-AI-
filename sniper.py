@@ -2,7 +2,7 @@
 anti-scam and anti-honeypot checks. Owner only. SIMULATION or REAL (main bot wallet).
 
 Entry (all must pass):
-- DexScreener pair on Solana, quoted in SOL/USDC, liquidity US$ 50k-250k, pair >= 1 min old
+- DexScreener pair on Solana, quoted in SOL/USDC, liquidity US$ 50k-250k, pair >= 1 hour old
   (and <= SNIPER_MAX_AGE_HOURS), at least one website/social link.
 - Momentum ("best strategy" = rising with real buyers, not a pump top): last 5 min with
   >= SNIPER_MIN_BUYS_5M buys and buys/sells >= 1.3, 5-min volume >= SNIPER_MIN_VOL_5M,
@@ -12,7 +12,7 @@ Entry (all must pass):
   RugCheck without "danger" risks and with liquidity locked/burned >= SNIPER_MIN_LP_LOCKED.
 - Anti-honeypot: Jupiter buy -> sell round trip returns >= 92% (copy_trader.safety_reason) and the
   order's price impact <= SNIPER_MAX_IMPACT.
-Exit: the live engine's "sniper" rules (stop -12%, trailing from +25% selling 12% below the top,
+Exit: the live engine's "sniper" rules (stop -40% / SNIPER_STOP_LOSS, trailing from +25% selling 12% below the top,
 time stop 30 min). A coin is never bought twice within SNIPER_COOLDOWN_HOURS.
 """
 import json
@@ -34,7 +34,8 @@ def _f(name, default):
 
 MIN_LIQ = _f("SNIPER_MIN_LIQUIDITY_USD", 50_000)
 MAX_LIQ = _f("SNIPER_MAX_LIQUIDITY_USD", 250_000)
-MIN_AGE_S = _f("SNIPER_MIN_AGE_MINUTES", 1) * 60
+MIN_AGE_S = _f("SNIPER_MIN_AGE_MINUTES", 60) * 60          # coin created at least 1 hour ago
+STOP_LOSS = _f("SNIPER_STOP_LOSS", 0.40)
 MAX_AGE_S = _f("SNIPER_MAX_AGE_HOURS", 24) * 3600
 MIN_BUYS_5M = int(_f("SNIPER_MIN_BUYS_5M", 15))
 MIN_BUY_RATIO = _f("SNIPER_MIN_BUY_RATIO", 1.3)
@@ -146,6 +147,10 @@ def candidate_pairs(get=None):
     return list(best.values())
 
 
+def _age_text(seconds):
+    return format(seconds / 3600, ".0f") + " h" if seconds >= 3600 else format(seconds / 60, ".0f") + " min"
+
+
 def filter_reason(p, now=None):
     """'' if the pair passes liquidity, age, quote, socials and momentum; else why not."""
     now = now or time.time()
@@ -161,7 +166,7 @@ def filter_reason(p, now=None):
         return "idade desconhecida"
     age = now - float(created) / 1000
     if age < MIN_AGE_S:
-        return "moeda com menos de " + format(MIN_AGE_S / 60, ".0f") + " min"
+        return "moeda com menos de " + _age_text(MIN_AGE_S)
     if age > MAX_AGE_S:
         return "moeda velha demais"
     info = p.get("info") or {}
@@ -374,7 +379,7 @@ def status_text():
     mode = "REAL" if d["enabled"] and d["real"] else ("SIMULAÇÃO" if d["enabled"] else "DESLIGADO")
     lines = ["🎯 SNIPER — " + mode,
              "Liquidez US$ " + format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil · moeda com mais de " +
-             format(MIN_AGE_S / 60, ".0f") + " min · US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " +
+             _age_text(MIN_AGE_S) + " · US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " +
              str(MAX_POSITIONS) + " posições · opera o dia inteiro",
              "Entra com impulso: compras > vendas e preço subindo +" + format(MIN_CHANGE_5M, ".0f") + "% a +" +
              format(MAX_CHANGE_5M, ".0f") + "% em 5 min (sem pegar topo)",
@@ -382,7 +387,7 @@ def status_text():
              "%, 10 maiores donos < 25%, RugCheck sem risco grave",
              "🛡️ Anti-golpe: sem taxa/gatilho escondido no token, com site/rede social",
              "🛡️ Anti-honeypot: teste de compra e venda devolve ≥ 92%, impacto ≤ " + format(MAX_IMPACT, ".0f") + "%",
-             "Saída: stop −12% · a partir de +25% vende 12% abaixo do topo · sai em 30 min se não decolar"]
+             "Saída: stop −" + format(STOP_LOSS * 100, ".0f") + "% · a partir de +25% vende 12% abaixo do topo · sai em 30 min se não decolar"]
     if LAST_SCAN["at"]:
         top = sorted(LAST_SCAN["rejected"].items(), key=lambda kv: -kv[1])[:4]
         lines.append("Última busca (há " + str(int(time.time() - LAST_SCAN["at"])) + " s): " + str(LAST_SCAN["seen"]) +

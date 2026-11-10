@@ -14,7 +14,7 @@ NOW = 1_800_000_000
 def pair(**kw):
     p = {"chainId": "solana", "baseToken": {"address": MINT, "symbol": "SNP"},
          "quoteToken": {"address": sn.SOL_MINT}, "liquidity": {"usd": 120_000},
-         "pairCreatedAt": (NOW - 600) * 1000, "info": {"websites": [{"url": "https://x"}]},
+         "pairCreatedAt": (NOW - 7200) * 1000, "info": {"websites": [{"url": "https://x"}]},
          "txns": {"m5": {"buys": 40, "sells": 20}}, "volume": {"m5": 12_000},
          "priceChange": {"m5": 6, "h1": 20}, "fdv": 600_000}
     p.update(kw)
@@ -30,9 +30,9 @@ class FilterTests(unittest.TestCase):
         self.assertIn("> US$ 250 mil", sn.filter_reason(pair(liquidity={"usd": 251_000}), NOW))
         self.assertEqual(sn.filter_reason(pair(liquidity={"usd": 50_000}), NOW), "")
 
-    def test_coin_must_be_older_than_one_minute(self):
-        self.assertIn("menos de 1 min", sn.filter_reason(pair(pairCreatedAt=(NOW - 30) * 1000), NOW))
-        self.assertEqual(sn.filter_reason(pair(pairCreatedAt=(NOW - 61) * 1000), NOW), "")
+    def test_coin_must_be_at_least_one_hour_old(self):
+        self.assertIn("menos de 1 h", sn.filter_reason(pair(pairCreatedAt=(NOW - 3599) * 1000), NOW))
+        self.assertEqual(sn.filter_reason(pair(pairCreatedAt=(NOW - 3601) * 1000), NOW), "")
 
     def test_momentum_and_scam_filters(self):
         self.assertIn("sem site", sn.filter_reason(pair(info={}), NOW))
@@ -70,6 +70,15 @@ class ProtectionTests(unittest.TestCase):
         other.assert_not_called()
 
 
+class StopLossTests(unittest.TestCase):
+    def test_sniper_stop_is_40_percent(self):
+        from live_exit_monitor import position_signal
+        pos = {"mode": "sniper", "opened_at": time.time()}
+        self.assertEqual(position_signal(pos, 100, 61)["action"], "hold")      # -39%: holds
+        sig = position_signal(pos, 100, 59)                                    # -41%: sells
+        self.assertEqual((sig["action"], sig["reason"]), ("sell", "stop_loss"))
+
+
 class CycleTests(unittest.TestCase):
     def setUp(self):
         d = tempfile.mkdtemp()
@@ -93,7 +102,7 @@ class CycleTests(unittest.TestCase):
             sn.cycle(lambda c, t: sent.append(t), 1, get=self._get([pair()]), now=NOW + 60)   # not twice
         self.assertEqual(len(sn._load()["positions"]), 1)
         self.assertEqual(sum("COMPROU" in t for t in sent), 1)
-        with patch.object(ct, "_order", return_value={"outAmount": str(int(0.15e9))}):     # US$ 15 of 20: -25%
+        with patch.object(ct, "_order", return_value={"outAmount": str(int(0.11e9))}):     # US$ 11 of 20: -45%
             sn.sim_exits(lambda c, t: sent.append(t), 1)
         self.assertEqual(sn._load()["positions"], {})
         self.assertIn("PREJUÍZO", sent[-1])
