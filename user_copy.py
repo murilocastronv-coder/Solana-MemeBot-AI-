@@ -530,8 +530,38 @@ def _close(chat, mint, net_usd, p, send, fee_usd=0.0, note=None):
             ("\n" + note if note else ""))
 
 
+def leader_balance(leader, mint):
+    import copy_trader as ct
+    return ct.wallet_token_balance(leader, mint)
+
+
+def watch_leaders(send=None, now=None):
+    """If the copied wallet no longer holds the coin (a sale we missed, or coins moved away), sell."""
+    now = now or time.time()
+    checked = {}
+    for chat in users():
+        for mint, p in list(load(chat)["positions"].items()):
+            if p.get("pending") or p.get("selling") or p.get("sell_retry_at") or not p.get("leader"):
+                continue
+            if now - float(p.get("opened_at") or now) < 90:
+                continue
+            key = (p["leader"], mint)
+            if key not in checked:
+                try:
+                    checked[key] = leader_balance(p["leader"], mint)
+                except Exception:
+                    checked[key] = None
+            if checked[key] == 0:
+                _sell(chat, mint, 1.0, send)
+
+
 def upkeep(send=None):
-    """Every minute: retry owed fees, confirm uncertain buys, retry failed sells."""
+    """Every minute: retry owed fees, confirm uncertain buys, retry failed sells, and sell copies
+    whose copied wallet no longer holds the coin."""
+    try:
+        watch_leaders(send)
+    except Exception:
+        pass
     for chat in users():
         d = load(chat)
         if int(d.get("fees_owed_lamports", 0)) > 0:

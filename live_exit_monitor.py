@@ -11,6 +11,7 @@ from jupiter_v2_executor import order, SOL_MINT, USDC_MINT
 
 _last_alert = {}
 _quote_fail_since = {}  # mint -> monotonic time quotes started failing
+_quote_err_logged = {}  # mint -> last time the reason was logged
 DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
 SNIPER_MAX_HOLD_SECONDS = 30 * 60  # sniper trade that never took off is closed
@@ -96,8 +97,11 @@ def _evaluate():
                 live_trade_state.update_peak(mint, signal["peak_ratio"])
             _quote_fail_since.pop(mint, None)
             yield mint, position, signal
-        except Exception:
-            logging.warning("Live position quote/monitoring unavailable for mint %s", mint[:8])
+        except Exception as exc:
+            if time.monotonic() - _quote_err_logged.get(mint, -1e9) >= 600:
+                _quote_err_logged[mint] = time.monotonic()
+                logging.warning("Live position quote/monitoring unavailable for mint %s: %s: %s", mint[:8],
+                                type(exc).__name__, str(exc)[:200])
             # Dead token (rug / no liquidity): Jupiter works for SOL but has no route for it.
             if not _jupiter_healthy():
                 _quote_fail_since.pop(mint, None)
