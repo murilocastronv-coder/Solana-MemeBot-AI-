@@ -255,23 +255,27 @@ class AuditTests(unittest.TestCase):
         a = str(Keypair().pubkey())
         c.follow(a)
         text = c.audit_all(self.rpc_for(60, a), 100.0)
-        self.assertIn("0 de 1 liberadas", text)
-        self.assertIn("REMOVIDA", text)
+        self.assertIn("0 de 1 sendo copiadas", text)
+        self.assertIn("SAI (sem lucro nas cópias)", text)
         self.assertNotIn(a, c._load()["wallets"])          # slot freed for the automatic search
 
-    def test_remove_fast_keeps_holders_watching_and_open_copies(self):
-        fast, busy, ok, new = (str(Keypair().pubkey()) for _ in range(4))
-        for a in (fast, busy, ok, new):
+    def test_after_test_only_profitable_wallets_stay(self):
+        win, loss, idle, busy = (str(Keypair().pubkey()) for _ in range(4))
+        for a in (win, loss, idle, busy):
             c.follow(a)
         d = c._load()
-        d["wallets"][fast]["holds"] = [60] * 5
-        d["wallets"][busy]["holds"] = [60] * 5
-        d["wallets"][ok]["holds"] = [900] * 5
+        d["wallets"][win].update(copies=4, pnl_usd=12.5)
+        d["wallets"][loss].update(copies=3, pnl_usd=-8.0)
+        d["wallets"][busy].update(copies=1, pnl_usd=-2.0)
         d["positions"]["M"] = {"wallet": busy, "real": False}
         c._save(d)
-        self.assertEqual(c.remove_fast_wallets(), [fast])
+        removed = c.remove_fast_wallets()
+        self.assertEqual(set(removed), {loss, idle})
         left = c._load()["wallets"]
-        self.assertEqual(set(left), {busy, ok, new})       # busy leaves after its copy closes
+        self.assertEqual(set(left), {win, busy})              # busy leaves after its copy closes
+        self.assertTrue(left[win]["proven"])
+        self.assertIn("nenhuma cópia", c.REMOVAL_REASON[idle])
+        self.assertTrue(c.is_rejected(loss))
 
     def test_auto_follow_rejects_mostly_fast_wallet(self):
         cand = {"wallet": str(Keypair().pubkey()), "closed_trades": 5, "realized_lamports": 10**9,
@@ -317,7 +321,7 @@ class RecentResultTests(unittest.TestCase):
         self.assertEqual(w["audit"]["trades_recent"], 40)
         self.assertAlmostEqual(w["audit"]["pnl_recent"], 1400.0, places=0)
         self.assertEqual(c.result_status(w), "ok")
-        self.assertIn("✅ COPIA", c.audit_line(a, c.holder_status(w) + (0.0, 40)))
+        self.assertEqual(c.holder_status(w)[0], "ok")
 
     def test_needs_40_trades_in_9_days(self):
         self.assertEqual((c.RESULT_MIN_TRADES, c.RESULT_DAYS), (40, 9))
@@ -326,20 +330,13 @@ class RecentResultTests(unittest.TestCase):
         b, w2 = self.audit([1.5] * 16, days_ago=12)      # good, but 12 days ago (outside 9 days)
         self.assertEqual(c.result_status(w2), "bad")
 
-    def test_keeps_only_top_profit_wallets(self):
-        now = time.time()
-        wallets = []
-        for k in range(c.TOP_WALLETS + 3):
-            a = str(Keypair().pubkey())
-            c.follow(a)
-            d = c._load()
-            d["wallets"][a].update(holds=[600] * 5, audit={"at": now, "pnl_recent": 10.0 * (k + 1),
-                                                          "trades_recent": 45, "win_recent": 0.7})
-            c._save(d)
-            wallets.append(a)
-        removed = c.remove_fast_wallets()
-        self.assertEqual(sorted(removed), sorted(wallets[:3]))       # the 3 lowest profits leave
-        self.assertEqual(len(c._load()["wallets"]), c.TOP_WALLETS)
+    def test_proven_wallet_leaves_when_copies_turn_negative(self):
+        a = str(Keypair().pubkey())
+        c.follow(a)
+        d = c._load(); d["wallets"][a].update(copies=2, pnl_usd=5.0); c._save(d)
+        self.assertEqual(c.remove_fast_wallets(), [])
+        d = c._load(); d["wallets"][a].update(copies=5, pnl_usd=-1.0); c._save(d)
+        self.assertEqual(c.remove_fast_wallets(), [a])
 
     def test_losing_or_old_results_are_bad_and_removed(self):
         a, w = self.audit([0.5, 0.6, 1.2, 0.7])          # losing

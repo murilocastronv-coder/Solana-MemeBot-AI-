@@ -468,9 +468,9 @@ def wallet_discovery_loop():
    removed=copy_trader.prune_low_balance()+copy_trader.remove_fast_wallets()
    chat=active_chat()
    if chat and removed:
-    send(chat,"🗑️ Parei de copiar "+str(len(removed))+" carteira(s): saldo < US$ "+format(copy_trader.MIN_WALLET_USD,".0f")+
-     ", compras < US$ "+format(copy_trader.MIN_BUY_USD,".0f")+", idade < "+format(copy_trader.MIN_WALLET_DAYS,".0f")+
-     " dias, sem operar quase todo dia ou fechando posições em menos de 5 min. A busca coloca outras no lugar.\n"+"\n".join("solscan.io/account/"+x for x in removed))
+    send(chat,"🗑️ Parei de copiar "+str(len(removed))+" carteira(s) depois do teste de "+format(copy_trader.TEST_DAYS,".0f")+
+     " dias (sem lucro nas cópias). A busca coloca novas no lugar.\n"+
+     "\n".join("• "+x[:6]+"…"+x[-4:]+": "+copy_trader.REMOVAL_REASON.get(x,"saldo baixo")+"\n  solscan.io/account/"+x for x in removed))
    if chat and added:
     total=sum(1 for w in copy_trader._load()["wallets"].values() if not w.get("paused"))
     text=("🆕 NOVA CARTEIRA PARA COPIAR" if len(added)==1 else "🆕 "+str(len(added))+" NOVAS CARTEIRAS PARA COPIAR")+\

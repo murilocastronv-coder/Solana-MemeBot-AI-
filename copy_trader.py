@@ -521,6 +521,8 @@ def wallets_text():
         typical = typical_buy_usd(w, offline=True)   # panel: never wait on the network
         if typical:
             bal += " · costuma colocar US$ " + format(typical, ".0f")
+        if proven(w) and not in_test(w):
+            bal += " · ✅ aprovada no teste"
         if in_test(w) and w.get("followed_at"):
             left = TEST_DAYS * 86400 - (time.time() - float(w["followed_at"]))
             bal += " · 🧪 em teste (faltam " + (format(left / 3600, ".0f") + " h" if left < 2 * 86400 else
@@ -1173,7 +1175,8 @@ def preaudit_and_follow(candidate, rpc, sol_usd):
         busy = {p.get("wallet") for p in d["positions"].values()}
         full = len(auto) >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS
         if full:
-            free = sorted((pnl, a) for pnl, a in auto if a not in busy and not in_test(d["wallets"][a]))
+            free = sorted((pnl, a) for pnl, a in auto if a not in busy and not in_test(d["wallets"][a])
+                          and not proven(d["wallets"][a]))
             if not free or audit["pnl_recent"] < REPLACE_PNL_MARGIN * max(free[0][0], 0.01):
                 return "full"            # good, but not clearly better than the weakest approved wallet
             d["wallets"].pop(free[0][1])
@@ -1206,32 +1209,41 @@ def result_status(w, now=None):
     return "ok" if ok else "bad"
 
 
+REMOVAL_REASON = {}   # address -> why it was removed (for the Telegram notice)
+
+
+def proven(w):
+    """Profitable for US: at least one copy and the copies' total result above zero."""
+    return int(w.get("copies", 0)) >= 1 and float(w.get("pnl_usd", 0.0)) > 0
+
+
 def remove_fast_wallets():
-    """Remove every followed wallet that fails the 5-minute rule (it would never be copied),
-    so the automatic search can fill the slot. A wallet with an open copy stays until it closes.
-    Returns removed addresses."""
+    """After its TEST_DAYS test, a wallet stays only if our copies of it made money ("aprovada no
+    teste"); otherwise it leaves (loss, zero result or no copy at all) and can't come back for
+    REJECT_DAYS, so the automatic search puts a new one in its place. A wallet with an open copy
+    stays until that copy closes. Returns removed addresses."""
     ensure_test_start()
     removed = []
     with _LOCK:
         d = _load()
         busy = {p.get("wallet") for p in d["positions"].values()}
         for a, w in list(d["wallets"].items()):
-            if a not in busy and not in_test(w) and (holder_status(w)[0] == "fast" or result_status(w) == "bad"):
-                d["wallets"].pop(a)
-                removed.append(a)
-        # only the best: rank approved wallets by profit in the period, drop the ones below the top
-        approved = sorted(((w.get("audit") or {}).get("pnl_recent", 0.0), a) for a, w in d["wallets"].items()
-                          if result_status(w) == "ok")
-        for _, a in approved[:max(0, len(approved) - TOP_WALLETS)]:
-            if a not in busy and not in_test(d["wallets"][a]):
-                d["wallets"].pop(a)
-                removed.append(a)
-        if removed:
+            if a in busy or in_test(w) or w.get("leaving"):
+                continue
+            if proven(w):
+                if not w.get("proven"):
+                    w["proven"] = True
+                    _event("✅ " + a[:6] + "… aprovada no teste: cópias " + format(w["pnl_usd"], "+.2f") + " USD")
+                continue
+            d["wallets"].pop(a)
+            removed.append(a)
+            REMOVAL_REASON[a] = ("nenhuma cópia em " + format(TEST_DAYS, ".0f") + " dias" if not w.get("copies") else
+                                 "cópias com resultado " + format(float(w.get("pnl_usd", 0.0)), "+.2f") + " USD")
+        if removed or any(w.get("proven") for w in d["wallets"].values()):
             _save(d)
     _reject(removed)
     for a in removed:
-        _event("removi " + a[:6] + "…: fecha rápido demais, sem bom resultado em " + format(RESULT_DAYS, ".0f") +
-               " dias ou fora das " + str(TOP_WALLETS) + " de maior lucro")
+        _event("removi " + a[:6] + "…: " + REMOVAL_REASON.get(a, "sem lucro"))
     return removed
 
 
@@ -1242,14 +1254,14 @@ def audit_line(address, res):
         w = _load()["wallets"].get(address) or {}
     a = w.get("audit") or {}
     result = result_status(w) if w else "unknown"
-    if status == "fast":
-        icon = "🗑️ REMOVIDA (rápida demais)"
-    elif result == "bad":
-        icon = "🗑️ REMOVIDA (sem bom resultado em " + format(RESULT_DAYS, ".0f") + " dias)"
-    elif status == "ok" and result == "ok":
-        icon = "✅ COPIA"
+    if w and in_test(w):
+        icon = "🧪 EM TESTE (copiando)"
+    elif w and proven(w):
+        icon = "✅ APROVADA NO TESTE (cópias " + format(float(w.get("pnl_usd", 0.0)), "+.2f") + " USD)"
+    elif w:
+        icon = "🗑️ SAI (sem lucro nas cópias)"
     else:
-        icon = "👀 SEM DADOS"
+        icon = "🗑️ REMOVIDA"
     return (icon + " " + address[:6] + "…" + address[-4:] + " · " + format(RESULT_DAYS, ".0f") + " dias: " +
             format(a.get("pnl_recent", 0.0), "+.0f") + " USD em " + str(a.get("trades_recent", 0)) + " ops, acerto " +
             format(a.get("win_recent", 0.0) * 100, ".0f") + "% · segura " + format(med / 60, ".1f") + " min · " +
@@ -1271,14 +1283,12 @@ def audit_all(rpc, sol_usd, max_tx=None):
             continue
         rows.append(audit_line(a, res))
     remove_fast_wallets()
-    ok = sum(1 for r in rows if r.startswith("✅"))
-    head = ("🔍 AUDITORIA DAS CARTEIRAS: " + str(ok) + " de " + str(len(rows)) + " liberadas para copiar\n"
-            "Regras: segura ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min (mediana) e ≥ " +
-            format(MIN_LONG_SHARE * 100, ".0f") + "% das posições ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
-            " min; nos últimos " + format(RESULT_DAYS, ".0f") + " dias: lucro, ≥ " + str(RESULT_MIN_TRADES) +
-            " operações e acerto ≥ " + format(RESULT_MIN_WIN * 100, ".0f") + "%; ficam só as " + str(TOP_WALLETS) +
-            " de maior lucro. "
-            "As que não passam são removidas e a busca automática coloca outras no lugar.")
+    ok = sum(1 for r in rows if r.startswith("✅") or r.startswith("🧪"))
+    head = ("🔍 AUDITORIA DAS CARTEIRAS: " + str(ok) + " de " + str(len(rows)) + " sendo copiadas\n"
+            "Regras: carteira nova entra só se passar nos últimos " + format(RESULT_DAYS, ".0f") + " dias (lucro, ≥ " +
+            str(RESULT_MIN_TRADES) + " operações, acerto ≥ " + format(RESULT_MIN_WIN * 100, ".0f") + "%, segura ≥ " +
+            format(MIN_HOLD_SECONDS / 60, ".0f") + " min); fica " + format(TEST_DAYS, ".0f") + " dias em teste; depois "
+            "fica só se as cópias derem lucro.")
     return head + ("\n\n" + "\n".join(rows) if rows else "\nNenhuma carteira na lista.")
 
 
