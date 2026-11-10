@@ -584,6 +584,8 @@ ADOPTED = []   # (mint, wallet) put back by adopt_orphans: check once whether th
 
 
 SELL_RETRY_S = 30
+# the copied wallet "closed" the coin when it keeps 5% or less of the most it held (leftover dust)
+LEADER_CLOSED_SHARE = _env("COPY_LEADER_CLOSED_SHARE", 0.05)
 WATCH_EVERY_S = 60
 _WATCH = {"at": 0.0}
 
@@ -640,8 +642,16 @@ def watch_copied_balances(send=None, chat=None, now=None):
             held = wallet_token_balance(w, mint)
         except Exception:
             continue
-        if held == 0:
-            _event(w[:6] + "… não tem mais " + mint[:6] + ": vendendo a cópia")
+        top = max(int(p.get("leader_max") or 0), held)
+        if top != int(p.get("leader_max") or 0):
+            with _LOCK:
+                d = _load()
+                if mint in d["positions"]:
+                    d["positions"][mint]["leader_max"] = top        # most the copied wallet held of this coin
+                    _save(d)
+        if held == 0 or (top > 0 and held <= LEADER_CLOSED_SHARE * top):
+            _event(w[:6] + "… fechou " + mint[:6] + " (tem " + format(held / top * 100 if top else 0, ".0f") +
+                   "% do que tinha): vendendo a cópia")
             logging.info("copied wallet %s no longer holds %s: selling", w[:6], mint[:8])
             _want_sell(mint, "copy_follow")
             msgs += _close(mint, "copy_follow", send, chat)
