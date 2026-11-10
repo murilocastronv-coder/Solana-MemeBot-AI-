@@ -24,6 +24,8 @@ services:
         value: "38"
       - key: SNIPER_MAX_POSITIONS
         value: "3"
+      - key: SNIPER_MIN_LIQUIDITY_USD
+        value: "10000"
       - key: COPY_ORDER_USD
         value: "32"
       # No máximo 8 operações copiadas abertas ao mesmo tempo

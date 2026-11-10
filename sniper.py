@@ -2,7 +2,7 @@
 anti-scam and anti-honeypot checks. Owner only. SIMULATION or REAL (main bot wallet).
 
 Entry (all must pass):
-- DexScreener pair on Solana, quoted in SOL/USDC, liquidity US$ 50k-250k, pair >= 1 hour old
+- DexScreener pair on Solana, quoted in SOL/USDC, liquidity US$ 10k-250k, pair >= 1 hour old
   (and <= SNIPER_MAX_AGE_HOURS), at least one website/social link.
 - Momentum ("best strategy" = rising with real buyers, not a pump top): last 5 min with
   >= SNIPER_MIN_BUYS_5M buys and buys/sells >= 1.3, 5-min volume >= SNIPER_MIN_VOL_5M,
@@ -32,7 +32,7 @@ def _f(name, default):
     return float(os.getenv(name, str(default)))
 
 
-MIN_LIQ = _f("SNIPER_MIN_LIQUIDITY_USD", 50_000)
+MIN_LIQ = _f("SNIPER_MIN_LIQUIDITY_USD", 10_000)     # minimum liquidity US$ 10k
 MAX_LIQ = _f("SNIPER_MAX_LIQUIDITY_USD", 250_000)
 MIN_AGE_S = _f("SNIPER_MIN_AGE_MINUTES", 60) * 60          # coin created at least 1 hour ago
 STOP_LOSS = _f("SNIPER_STOP_LOSS", 0.40)

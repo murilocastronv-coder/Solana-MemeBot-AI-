@@ -25,10 +25,11 @@ class FilterTests(unittest.TestCase):
     def test_good_pair_passes(self):
         self.assertEqual(sn.filter_reason(pair(), NOW), "")
 
-    def test_liquidity_window_50k_250k(self):
-        self.assertIn("< US$ 50 mil", sn.filter_reason(pair(liquidity={"usd": 49_000}), NOW))
+    def test_liquidity_window_10k_250k(self):
+        self.assertIn("< US$ 10 mil", sn.filter_reason(pair(liquidity={"usd": 9_999}), NOW))
+        self.assertEqual(sn.filter_reason(pair(liquidity={"usd": 10_000}, fdv=100_000), NOW), "")
         self.assertIn("> US$ 250 mil", sn.filter_reason(pair(liquidity={"usd": 251_000}), NOW))
-        self.assertEqual(sn.filter_reason(pair(liquidity={"usd": 50_000}), NOW), "")
+        self.assertEqual(sn.filter_reason(pair(liquidity={"usd": 50_000}), NOW), "")       # still fine
 
     def test_coin_must_be_at_least_one_hour_old(self):
         self.assertIn("menos de 1 h", sn.filter_reason(pair(pairCreatedAt=(NOW - 3599) * 1000), NOW))
