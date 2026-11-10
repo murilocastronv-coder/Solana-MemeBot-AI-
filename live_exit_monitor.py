@@ -43,7 +43,9 @@ def position_signal(position, cost, proceeds):
     if (position.get("mode") == "copy" and not position.get("copy_orphan")
             and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet"):
         # Copy trade: no fixed TP/SL; copy_trader sells when the copied wallet sells.
-        return {"action": "hold", "reason": "follow_wallet"}
+        ratio = float(proceeds) / float(cost) if cost else 0.0
+        return {"action": "hold", "reason": "follow_wallet", "change_pct": (ratio - 1) * 100,
+                "peak_ratio": max(ratio, float(position.get("peak_ratio") or 0))}
     if position.get("mode") in ("copy", "clone"):
         # Copy trade: target +50% / stop -15% (selling with the copied wallet is done by copy_trader).
         # A cloned wallet carries its own measured TP / SL / max hold on the position.
