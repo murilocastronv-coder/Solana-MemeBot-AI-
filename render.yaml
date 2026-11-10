@@ -21,16 +21,25 @@ services:
         value: "32"
       - key: COPY_ORDER_USD
         value: "32"
+      # No máximo 8 operações copiadas abertas ao mesmo tempo
       - key: COPY_MAX_POSITIONS
-        value: "3"
+        value: "8"
+      - key: MAX_OPEN_ORDERS
+        value: "8"
+      - key: MAX_POSITIONS
+        value: "8"
       - key: COPY_MIN_HOLD_MINUTES
         value: "5"
       - key: COPY_MIN_ROUND_TRIPS
         value: "3"
       - key: COPY_AUTO_DISCOVERY_ENABLED
         value: "true"
+      # A busca automática coloca carteiras novas sozinha até o limite de 20
       - key: COPY_AUTO_MAX_WALLETS
-        value: "5"
+        value: "20"
+      # Mensagens automáticas iguais: no máximo 1 vez a cada 2 h (compra/venda sempre avisa)
+      - key: NOTIFY_REPEAT_HOURS
+        value: "2"
       - key: COPY_DISCOVERY_INTERVAL_SECONDS
         value: "30"
       # Defina no painel (segredos): TELEGRAM_BOT_TOKEN, BOT_WALLET_ENCRYPTION_PASSPHRASE e

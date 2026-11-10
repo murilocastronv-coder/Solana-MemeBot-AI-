@@ -44,7 +44,33 @@ def request_api(method,**params):
   raise RuntimeError("Telegram API returned HTTP "+str(r.status_code))
  try:return r.json()
  except ValueError:raise RuntimeError("Telegram API returned invalid JSON") from None
+# Anti-repetition: automatic messages (not answers to a button/command) with the same content are
+# sent at most once every NOTIFY_REPEAT_HOURS. Buys and sells always go through.
+NOTIFY_REPEAT_S=float(os.getenv("NOTIFY_REPEAT_HOURS","2"))*3600
+SENT_AT={}
+SENT_LOCK=threading.Lock()
+CTX=threading.local()   # CTX.interactive=True while answering the owner (button/command)
+TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|🟢 LONG|🔴 SHORT")
+def is_trade_message(text):
+ """A buy/sell notice: always sent, never held back (errors and warnings are not trades)."""
+ t=(text or "").lstrip()
+ return bool(TRADE_RE.search(t)) and not t.startswith(("⛔","⚠️","🚨","⏳"))
+def fingerprint(text):
+ """Same message with other numbers (prices, counts, minutes) counts as a repetition."""
+ return re.sub(r"\s+"," ",re.sub(r"[0-9]+([.,][0-9]+)?","#",text or "")).strip()[:600]
+def should_send(text,now=None):
+ if getattr(CTX,"interactive",False) or is_trade_message(text) or NOTIFY_REPEAT_S<=0:return True
+ now=now or time.time();key=fingerprint(text)
+ with SENT_LOCK:
+  if now-SENT_AT.get(key,0)<NOTIFY_REPEAT_S:return False
+  SENT_AT[key]=now
+  if len(SENT_AT)>2000:
+   for k in sorted(SENT_AT,key=SENT_AT.get)[:1000]:SENT_AT.pop(k,None)
+ return True
 def send(chat,text,keyboard=None):
+ if not should_send(text):
+  logging.info("repeated notice held back (%.0f h): %s",NOTIFY_REPEAT_S/3600,(text or "")[:80].replace("\n"," "))
+  return {}
  args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
@@ -101,8 +127,10 @@ def last_cycle_line(c):
   line+="\n⚠️ RPC: "+str(c.get("failed",0))+" leituras perdidas, "+str(c.get("rpc_errors",0))+" recusas"+(" ("+c.get("last_error","")+")" if c.get("last_error") else "")
  return line
 def handle_safe(update):
+ CTX.interactive=True   # answers to the owner are never held back
  try:handle(update)
  except Exception:logging.exception("update failed")
+ finally:CTX.interactive=False
 def holdings_loop():
  """Keep the wallet's real coin count fresh for the status, off the Telegram thread."""
  while True:
@@ -455,9 +483,9 @@ def wallet_discovery_loop():
    followed={c["wallet"] for c in candidates if copy_trader.refresh_stats(c)}
    # audit BEFORE following (a few per round): only approved wallets enter the list
    rpc=dex_rpc()
-   checked=0
+   checked=0;budget=copy_trader.preaudit_budget()   # more per round while the list has free slots (max 20)
    for candidate in candidates:
-    if checked>=copy_trader.PREAUDIT_PER_CYCLE:break
+    if checked>=budget:break
     a=candidate["wallet"]
     if a in followed or copy_trader.is_rejected(a) or not copy_trader.prefilter(candidate):continue
     checked+=1
@@ -474,7 +502,7 @@ def wallet_discovery_loop():
    if chat and added:
     total=sum(1 for w in copy_trader._load()["wallets"].values() if not w.get("paused"))
     text=("🆕 NOVA CARTEIRA PARA COPIAR" if len(added)==1 else "🆕 "+str(len(added))+" NOVAS CARTEIRAS PARA COPIAR")+\
-     " — agora copiando "+str(total)+".\nSó as próximas compras serão copiadas; nenhuma posição antiga.\n\n"+\
+     " — agora copiando "+str(total)+" (limite "+str(copy_trader.MAX_AUTO_WALLETS)+").\nSó as próximas compras serão copiadas; nenhuma posição antiga.\n\n"+\
      "\n\n".join(copy_trader.wallet_card(x) for x in added)+"\n\n✅ Já auditada: passou nos últimos "+format(copy_trader.RESULT_DAYS,".0f")+" dias (lucro, ≥ "+str(copy_trader.RESULT_MIN_TRADES)+" operações, acerto)."
     for part in split_message(text):send(chat,part)
   except Exception as exc:
@@ -539,7 +567,11 @@ def analyze_wallet_job(chat,address,do_clone=None):
   logging.exception("wallet analysis failed")
   send(chat,"⛔ Análise falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
 def run_async(fn,*args):
- threading.Thread(target=fn,args=args,daemon=True).start()
+ interactive=getattr(CTX,"interactive",False)   # a job the owner asked for answers in full
+ def run():
+  CTX.interactive=interactive
+  fn(*args)
+ threading.Thread(target=run,daemon=True).start()
 def loop():
  offset=None
  try:startup_notice()

@@ -34,9 +34,9 @@ def _env(name, default):
 
 
 ORDER_USD = _env("COPY_ORDER_USD", 32)   # US$ per copied position
-MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 6))
+MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 8))   # at most 8 copied operations open
 # Simulation: copy + strategy robot together never hold more than this many open orders.
-MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 6))
+MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 8))
 STOP_LOSS = _env("COPY_STOP_LOSS", 0.15)
 # "wallet" (default): no fixed TP/SL, exit only when the copied wallet sells (same movement).
 # "tp_sl": also use COPY_TAKE_PROFIT / COPY_STOP_LOSS.
@@ -85,6 +85,23 @@ AUDIT_VALID_S = _env("COPY_AUDIT_VALID_HOURS", 24) * 3600
 # can't come back for REJECT_DAYS, and an approved wallet is only replaced by one whose profit in
 # the period is REPLACE_PNL_MARGIN x higher.
 PREAUDIT_PER_CYCLE = int(_env("COPY_PREAUDIT_PER_CYCLE", 1))
+# While the list still has free slots (below MAX_AUTO_WALLETS), audit more candidates per round so the
+# automatic search fills the list up to the limit faster.
+PREAUDIT_FILL_PER_CYCLE = int(_env("COPY_PREAUDIT_FILL_PER_CYCLE", 3))
+
+
+def free_auto_slots():
+    """How many more discovered wallets fit in the copy list (limit MAX_AUTO_WALLETS / MAX_WALLETS)."""
+    with _LOCK:
+        d = _load()
+    auto = sum(bool(w.get("auto_discovered")) for w in d["wallets"].values())
+    return max(0, min(MAX_AUTO_WALLETS - auto, MAX_WALLETS - len(d["wallets"])))
+
+
+def preaudit_budget():
+    """Candidates to audit this round: more while there is room in the list, 1 when it is full."""
+    free = free_auto_slots()
+    return max(PREAUDIT_PER_CYCLE, min(free, PREAUDIT_FILL_PER_CYCLE)) if free else PREAUDIT_PER_CYCLE
 REJECT_DAYS = _env("COPY_REJECT_DAYS", 3)
 REPLACE_PNL_MARGIN = _env("COPY_REPLACE_PNL_MARGIN", 1.2)
 # Test period: a wallet that enters is copied for at least TEST_DAYS before any automatic removal
