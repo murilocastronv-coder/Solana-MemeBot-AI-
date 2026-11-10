@@ -200,39 +200,9 @@ def follow(address):
         _save(d)
 
 
-def clone(address, summary, closed):
-    """Follow a wallet chosen by the owner and exit like it does: its own measured TP, SL and
-    max hold (from wallet_profile). Its entries are copied even if they are small or quick."""
-    import wallet_profile
-    follow(address)
-    exit_cfg = {
-        "tp": round(min(max(float(summary.get("suggest_tp") or TAKE_PROFIT), 0.05), 10.0), 4),
-        "sl": round(min(max(float(summary.get("suggest_sl") or STOP_LOSS), 0.03), 0.9), 4),
-        "max_hold_s": int(summary["suggest_max_hold_min"] * 60) if summary.get("suggest_max_hold_min") else None,
-    }
-    with _LOCK:
-        d = _load()
-        w = d["wallets"][address]
-        w["clone"] = True
-        w["exit"] = exit_cfg
-        w["holds"] = (wallet_profile.holds_seconds(closed) or w.get("holds") or [])[-30:]
-        w["profile"] = {k: summary.get(k) for k in ("positions", "win_rate", "pnl_usd", "tp_median", "sl_median",
-                                                    "hold_median", "size_median")}
-        _save(d)
-    _event("clonou " + address[:6] + "…: TP +" + format(exit_cfg["tp"] * 100, ".0f") + "% · SL -" +
-           format(exit_cfg["sl"] * 100, ".0f") + "%")
-    return exit_cfg
-
-
 def open_sim_total():
-    """Simulated open orders of the copy trade + the strategy robot."""
-    n = sum(1 for p in _load()["positions"].values() if not p.get("real"))
-    try:
-        import clone_strategy
-        n += len(clone_strategy._load()["positions"])
-    except Exception:
-        pass
-    return n
+    """Simulated open copy orders."""
+    return sum(1 for p in _load()["positions"].values() if not p.get("real"))
 
 
 def _exit_for(wallet):

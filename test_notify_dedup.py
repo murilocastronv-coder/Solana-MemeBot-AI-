@@ -20,7 +20,7 @@ class NotifyDedupTests(unittest.TestCase):
 
     def test_buys_and_sells_always_sent(self):
         for text in ("🟢 COPY COMPROU BONK\nabc", "💰 LUCRO — VENDEU BONK", "👥 SIM copiou compra de AbCd…: mint · US$ 32.00",
-                     "👥 SIM 🔻 vendeu BONK (a carteira vendeu): -1.00 USD", "🔴 SHORT BTC 5x"):
+                     "👥 SIM 🔻 vendeu BONK (a carteira vendeu): -1.00 USD", "🔻 PREJUÍZO — VENDEU WIF"):
             for _ in range(3):
                 self.assertTrue(tb.should_send(text, 5.0), text)
 
@@ -48,6 +48,22 @@ class FillWalletsTests(unittest.TestCase):
         with patch.object(c, "free_auto_slots", return_value=0):
             self.assertEqual(c.preaudit_budget(), c.PREAUDIT_PER_CYCLE)
         self.assertEqual(c.MAX_AUTO_WALLETS, 20)
+
+
+class MenuTests(unittest.TestCase):
+    def test_menu_has_only_copy_trade_and_bot_wallet(self):
+        data = {b["callback_data"] for row in tb.keyboard() for b in row}
+        self.assertEqual(data, {"copy_sim", "copy_real", "copy_off", "copy_status", "copy_wallets", "copy_following",
+                                "copy_positions", "audit", "wallet_deposit", "wallet_balance", "wallet_withdraw",
+                                "wallet_export"})
+
+    def test_removed_buttons_answer_removed(self):
+        tb.CTX.interactive = True
+        with patch.object(tb, "authorized", return_value=True), patch.object(tb, "request_api"), \
+                patch.object(tb, "send") as send:
+            for action in ("brk_sim", "strat_real", "clone_help", "/clonar"):
+                tb.handle({"message": {"chat": {"id": 1, "type": "private"}, "text": action}})
+        self.assertTrue(all("removido" in call.args[1] for call in send.call_args_list))
 
 
 if __name__ == "__main__":

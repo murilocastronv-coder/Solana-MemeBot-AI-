@@ -50,7 +50,7 @@ NOTIFY_REPEAT_S=float(os.getenv("NOTIFY_REPEAT_HOURS","2"))*3600
 SENT_AT={}
 SENT_LOCK=threading.Lock()
 CTX=threading.local()   # CTX.interactive=True while answering the owner (button/command)
-TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|🟢 LONG|🔴 SHORT")
+TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada")
 def is_trade_message(text):
  """A buy/sell notice: always sent, never held back (errors and warnings are not trades)."""
  t=(text or "").lstrip()
@@ -86,14 +86,7 @@ def keyboard():
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
-  [{"text":"📦 Posições abertas","callback_data":"copy_positions"}],
-  [{"text":"🧠 Clonar estratégia de uma carteira","callback_data":"clone_help"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
-  [{"text":"🤖 Robô estratégia SIM","callback_data":"strat_sim"},{"text":"🤖 Robô estratégia REAL","callback_data":"strat_real"}],
-  [{"text":"⏹️ Parar robô estratégia","callback_data":"strat_off"},{"text":"📊 Status robô","callback_data":"strat_status"}],
-  [{"text":"₿ Breakout SIM","callback_data":"brk_sim"},{"text":"₿ Breakout REAL","callback_data":"brk_real"}],
-  [{"text":"⏹️ Parar BTC","callback_data":"brk_off"},{"text":"📊 Status BTC","callback_data":"brk_status"}],
-  [{"text":"⚙️ Alavancagem BTC","callback_data":"brk_lev"},{"text":"📈 Backtest BTC 1 ano","callback_data":"brk_bt"}],
-  [{"text":"🧠 Melhorar estratégia BTC","callback_data":"brk_opt"}],
+  [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def robot_alive_line():
@@ -201,70 +194,10 @@ def handle(update):
  if not authorized(chat):
   if cb:return  # Do not flood chat on old inline buttons; do not grant access.
   send(chat,"🔒 Acesso não autorizado nesta sessão. Envie /id para obter seu ID e configure TELEGRAM_CHAT_ID no Render. A carteira existente permanece protegida.");return
- if action in ("strat_sim","strat_real","strat_off","strat_status","/robo"):
-  import clone_strategy as cs
-  try:
-   pre=""
-   if action=="strat_sim":cs.set_mode(True,False);pre="🧪 Robô da estratégia em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
-   elif action=="strat_real":live_engine.start();cs.set_mode(True,True);pre="💵 ROBÔ DA ESTRATÉGIA COM DINHEIRO REAL LIGADO.\n⚠️ Reproduz o perfil da carteira, não garante o resultado dela.\n\n"
-   elif action=="strat_off":cs.set_mode(False);pre="⏹️ Robô da estratégia desligado. Posições abertas continuam com alvo/stop.\n\n"
-   send(chat,pre+cs.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Robô estratégia: "+str(exc)[:200],keyboard())
-  return
  if action in ("audit","/auditar"):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
   run_async(audit_job,chat);return
- if action.startswith("brk_"):
-  import btc_breakout as bb
-  try:
-   if action=="brk_sim":bb.set_mode(True,False);send(chat,"🧪 BTC breakout em SIMULAÇÃO (preço real, dinheiro de mentira).\n\n"+bb.status_text(),keyboard());return
-   if action=="brk_off":bb.set_mode(False);send(chat,"⏹️ BTC breakout desligado: não abre novas posições. Posição aberta continua com alvo/stop.\n\n"+bb.status_text(),keyboard());return
-   if action=="brk_status":send(chat,bb.status_text(),keyboard());return
-   if action=="brk_lev":
-    send(chat,"⚙️ Alavancagem do BTC (máx. 20x). Quanto maior, mais rápido ganha E mais rápido perde:",
-     [[{"text":str(x)+"x","callback_data":"brk_lev_"+str(x)} for x in bb.LEVERAGES],[{"text":"⬅️ Voltar","callback_data":"/menu"}]]);return
-   if action.startswith("brk_lev_"):
-    lev=bb.set_leverage(int(action.split("_")[-1]))
-    send(chat,"⚙️ Alavancagem BTC: "+str(lev)+"x. Em "+str(lev)+"x, ~"+format(90/lev,".1f")+"% contra a posição liquida a garantia (o stop fica antes).\n\n"+bb.status_text(),keyboard());return
-   if action=="brk_bt":
-    send(chat,"⏳ Baixando 1 ano de velas de 15 min do BTC e simulando 2x, 3x, 5x, 10x e 20x… leva 1–2 minutos.")
-    def run_bt():
-     try:
-      text,_=bb.backtest_report()
-      for part in split_message(text):send(chat,part,keyboard())
-     except Exception as exc:send(chat,"⛔ Backtest falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
-    run_async(run_bt);return
-   if action=="brk_opt":
-    send(chat,"🧠 Testando "+str(len(bb.VARIANTS))+" versões da estratégia em 1 ano de velas de 15 min (escolhe em 8 meses, confere em 4). Leva 2–5 minutos…")
-    def run_opt():
-     try:
-      text,_,_=bb.optimize()
-      for part in split_message(text):send(chat,part,keyboard())
-     except Exception as exc:send(chat,"⛔ Melhoria falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
-    run_async(run_opt);return
-   if action in ("brk_real","brk_real_ok"):
-    d=bb._load();bt=bb.backtest_for(d["leverage"])
-    if not bt:send(chat,"⛔ Rode primeiro o 📈 Backtest BTC 1 ano: ele mostra se a estratégia teria dado lucro antes de usar dinheiro real.",keyboard());return
-    if action=="brk_real" and bt["final"]<=bt["start"]:
-     send(chat,"⚠️ ATENÇÃO: no backtest de 1 ano em "+str(d["leverage"])+"x esta estratégia PERDEU dinheiro ("+format(bt["return_pct"],"+.0f")+"%, queda máx. "+
-      format(bt["max_dd_pct"],".0f")+"%, "+str(bt["liquidations"])+" liquidações).\nLigar com dinheiro real mesmo assim?",
-      [[{"text":"💵 Ligar REAL mesmo assim","callback_data":"brk_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"/menu"}]]);return
-    bb.set_mode(True,True)
-    send(chat,"💵 BTC BREAKOUT COM DINHEIRO REAL LIGADO — "+str(d["leverage"])+"x na Jupiter Perps, "+format(bb.ORDER_FRACTION*100,".0f")+
-     "% da conta por operação. Cada ordem é simulada na blockchain antes de enviar.\n⚠️ Alavancagem pode zerar a garantia rápido.\n\n"+bb.status_text(),keyboard());return
-  except Exception as exc:send(chat,"⛔ BTC: "+str(exc)[:200],keyboard());return
- if action=="clone_help":
-  send(chat,"🧠 CLONAR A ESTRATÉGIA DE UMA CARTEIRA\nEnvie:\n/analisar ENDEREÇO → mostra como ela entra e sai (valor, plataforma, idade da moeda, TP, SL, tempo)\n/clonar ENDEREÇO → analisa e passa a copiar as compras dela, saindo com o TP/SL/tempo dela\n/estrategia ENDEREÇO → monta um ROBÔ PRÓPRIO com a estratégia dela (sem copiar): procura sozinho moedas com o mesmo perfil e sai com o TP/SL/tempo dela. Depois ligue em 🤖 Robô estratégia SIM ou REAL.",keyboard());return
- if action in ("/analisar","/clonar","/estrategia"):
-  parts=(msg or {}).get("text","").split()
-  if len(parts)!=2 or not re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}",parts[1]):
-   send(chat,"Uso: "+action+" ENDERECO_DA_CARTEIRA\n/analisar = só mostra a estratégia · /clonar = copia as entradas dele saindo com o TP/SL dele · /estrategia = robô próprio com a estratégia dele, sem copiar.",keyboard());return
-  if not os.getenv("SOLANA_RPC_URL"):
-   send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
-  send(chat,"🧠 Analisando "+parts[1][:6]+"…"+parts[1][-4:]+": lendo até 400 transações. Leva 1–3 minutos…")
-  run_async(analyze_wallet_job,chat,parts[1],{"/clonar":"clone","/estrategia":"strategy"}.get(action))
-  return
  if action in ("copy_positions","/posicoes_copy"):
   import copy_trader as ct
   try:
@@ -316,8 +249,9 @@ def handle(update):
   "mm_on","mm_off","mm_status","/mm",
   "launch_on","launch_off","launch_status","vol_sim","vol_real","vol_off","vol_status","/volume",
   "btcx_sim","btcx_real","btcx_off","btcx_status","btcx_lev","btcx_test","btcx_bt",
+  "clone_help","/analisar","/clonar","/estrategia","/robo",
   "mev_on","mev_off","mev_status","/mev","mev_config","mev_amount","mev_min","mev_tip","mev_mode_sim","mev_mode_real","mev_scan","mev_history"}
- if action in legacy or action.startswith("lev_"):  # old leverage buttons (BTC now uses brk_lev_)
+ if action in legacy or action.startswith(("lev_","brk_","strat_")):  # removed controls (BTC, strategy robot, clone)
   send(chat,"Esse controle foi removido. Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  elif action in ("wallet_export","/exportar_chave"):
@@ -369,11 +303,23 @@ def handle(update):
   CONNECTED_WALLETS.pop(str(chat),None)
   send(chat,"Carteira pública desvinculada desta sessão.")
  else:menu(chat)
+def leftover_btc_warning():
+ """The BTC breakout robot was removed: warn if its saved state still shows an open real position."""
+ try:
+  import json
+  path=trade_state._path().with_name("btc_breakout.json")
+  if path.exists() and (json.loads(path.read_text(encoding="utf-8")).get("real_position")):
+   return ("⚠️ O robô BTC foi removido, mas ficou uma posição REAL de BTC aberta na Jupiter Perps. "
+    "Feche ela pela Jupiter (jup.ag/perps) com a carteira do bot.")
+ except Exception:pass
+ return None
 def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
  send(chat,"🔄 Bot reiniciado (deploy).\n"+status_text(),keyboard())
+ warn=leftover_btc_warning()
+ if warn:send(chat,warn)
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  st=trade_state.status()
  reason=live_engine.why_stopped()
@@ -424,25 +370,6 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
-def btc_loop():
- """BTC breakout: manage the position and look for breakouts every 10 s."""
- while True:
-  time.sleep(10)
-  try:
-   import btc_breakout
-   chat=active_chat()
-   if chat:btc_breakout.cycle(send,chat)
-  except Exception as exc:logging.warning("btc breakout cycle failed: %s",type(exc).__name__)
-def strategy_loop():
- """Autonomous bot with a wallet's measured strategy: one pass every 20 s."""
- while True:
-  time.sleep(20)
-  try:
-   import clone_strategy
-   chat=active_chat()
-   if not chat or not clone_strategy.enabled():continue
-   for m in clone_strategy.cycle(send,chat):send(chat,m)
-  except Exception as exc:logging.warning("strategy cycle failed: %s",type(exc).__name__)
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -534,38 +461,6 @@ def audit_loop():
  while True:
   if os.getenv("SOLANA_RPC_URL") and active_chat():audit_job()
   time.sleep(int(os.getenv("COPY_AUDIT_EVERY_HOURS","6"))*3600)
-def analyze_wallet_job(chat,address,do_clone=None):
- """Read the wallet history, report its strategy and optionally clone it (runs off the Telegram thread)."""
- try:
-  import wallet_profile,dex_wallets,copy_trader
-  rpc=dex_wallets._rpc_factory(os.getenv("SOLANA_RPC_URL"))
-  summary,closed,text=wallet_profile.analyze(address,rpc,copy_trader._sol_usd(),get_json=dex_wallets._get_json)
-  for part in split_message(text):send(chat,part)
-  if do_clone=="strategy":
-   if not summary.get("positions"):
-    send(chat,"⛔ Não montei o robô: sem operações fechadas para medir a estratégia.",keyboard());return
-   import clone_strategy
-   clone_strategy.configure(address,summary)
-   send(chat,"🤖 ROBÔ MONTADO com a estratégia de "+address[:6]+"…"+address[-4:]+" (sem copiar a carteira):\n\n"+clone_strategy.status_text()+
-    "\n\nLigue em 🤖 Robô estratégia SIM para testar ou REAL para operar.",keyboard());return
-  if do_clone:
-   if not summary.get("positions"):
-    send(chat,"⛔ Não clonei: sem operações fechadas para medir a estratégia.",keyboard());return
-   ex=copy_trader.clone(address,summary,closed)
-   hold_status,med=copy_trader.holder_status(copy_trader._load()["wallets"].get(address,{}))
-   if hold_status=="fast":
-    copy_trader.remove_fast_wallets()
-    send(chat,"🗑️ NÃO CLONEI: "+address[:6]+"…"+address[-4:]+" fecha as posições rápido demais (mediana "+
-     format(med/60,".1f")+" min). Só copio carteiras que seguram ≥ "+format(copy_trader.MIN_HOLD_SECONDS/60,".0f")+
-     " min na maioria das posições.",keyboard());return
-   send(chat,"🧬 CLONADO: vou copiar as próximas compras de "+address[:6]+"…"+address[-4:]+" e sair como ele sai:\n"+
-    "TP +"+format(ex["tp"]*100,".0f")+"% · SL -"+format(ex["sl"]*100,".0f")+"%"+
-    (" · vende em no máximo "+format(ex["max_hold_s"]/60,".0f")+" min" if ex["max_hold_s"] else "")+
-    "\n"+("⚠️ COPY_EXIT_MODE=wallet: só saio quando ele vender, o TP/SL acima não é usado. " if copy_trader.EXIT_MODE=="wallet" else "Também vendo quando ele vender. ")+"Valor por cópia: US$ "+format(copy_trader.ORDER_USD,".0f")+
-    ". Precisa do copy ligado (SIMULAÇÃO ou REAL).",keyboard())
- except Exception as exc:
-  logging.exception("wallet analysis failed")
-  send(chat,"⛔ Análise falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
 def run_async(fn,*args):
  interactive=getattr(CTX,"interactive",False)   # a job the owner asked for answers in full
  def run():
@@ -578,10 +473,8 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
- threading.Thread(target=strategy_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
- threading.Thread(target=btc_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:

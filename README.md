@@ -52,6 +52,7 @@ compras e vendas delas, em simulação ou com dinheiro real.
 - **⏹️ Parar cópia** · **📊 Status** · **🔎 Carteiras encontradas** · **👛 Carteiras copiadas**
   (quantas está copiando, nota, histórico e resultado de cada uma).
 - **📥 Depositar SOL** · **💰 Ver saldo** · **💸 Saque manual** · **🔑 Exportar carteira**.
+- **📦 Posições abertas** · **🔍 Auditar carteiras**.
 - Comandos: `/seguir ENDEREÇO`, `/deixar ENDEREÇO`, `/carteiras`, `/copiadas`, `/status`.
 
 ## Configuração no Render
@@ -72,25 +73,10 @@ pip install -r requirements.txt
 python -m unittest discover -p "test_*.py"
 ```
 
-## Robô com a estratégia de uma carteira (sem copiar)
-- `/analisar ENDEREÇO`: lê até 400 transações da carteira e mostra como ela opera. Na entrada:
-  valor por moeda, plataforma, idade e valor de mercado da moeda quando compra, horários e
-  compra em partes. Na saída: take profit e stop loss reais (resultado de cada venda), tempo
-  segurando e venda em partes.
-- `/estrategia ENDEREÇO`: monta um **robô próprio** com esse perfil. Ele procura sozinho, nas
-  moedas em alta e novas do DexScreener, as que batem com a plataforma, a idade e o valor de
-  mercado típicos da carteira; passa no anti-golpe; compra `CLONE_ORDER_USD` (máx.
-  `CLONE_MAX_POSITIONS`) e sai com o TP, o SL e o tempo máximo medidos. Ligue em
-  **🤖 Robô estratégia SIM / REAL**.
-- `/clonar ENDEREÇO`: copia as compras da carteira e sai com o TP/SL dela.
-
-O que a carteira usa para decidir entrar (sinais, informações, leitura própria) não fica na
-blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simulação antes.
-
 ## Limites de ordens e regra dos 5 minutos
-- **No máximo 8 operações copiadas abertas ao mesmo tempo**, somando copy trade e robô da estratégia
+- **No máximo 8 operações copiadas abertas ao mesmo tempo**, de copy trade
   (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 8 abertas, nada novo abre.
-- **Toda carteira seguida**, inclusive as de `/clonar` e `/seguir`, só tem compras copiadas se
+- **Toda carteira seguida**, inclusive as de `/seguir`, só tem compras copiadas se
   segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
   abre ordem. A compra mínima de US$ 40 vale para todas.
 - **Auditoria** (botão **🔍 Auditar carteiras** ou `/auditar`; também ao iniciar, a cada 6 h e ao
@@ -107,22 +93,7 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   Compras bem abaixo do normal dela, que costumam ser apostas pequenas ou testes, não são copiadas.
 
 
-## ₿ BTC breakout 15 min (alavancado, Jupiter Perps)
-- **Regras** (`btc_breakout.py`): LONG quando a vela de 15 min fecha acima da máxima das últimas
-  20 velas e acima da média de 200; SHORT no inverso. Alvo 1×ATR(14), stop 2× o alvo
-  (`BRK_TP_ATR`, `BRK_SL_MULT`), saída por tempo após 8 h. Uma posição por vez, 20% da conta de
-  garantia (`BRK_ORDER_FRACTION`), alavancagem 2x a 20x (máx. 20x). O stop fica sempre antes da
-  liquidação.
-- **📈 Backtest BTC 1 ano**: baixa 1 ano de velas de 15 min (Binance, Coinbase de reserva) e simula
-  2x, 3x, 5x, 10x e 20x com taxas, juros e liquidação. Com stop 2× o alvo, a estratégia precisa
-  acertar mais de 67% (mais as taxas) para empatar.
-- **Real**: exige backtest feito; se o backtest da alavancagem escolhida perdeu dinheiro, pede
-  confirmação. Ordens na Jupiter Perps com a carteira do bot (garantia em USDC, trocada de SOL se
-  faltar), cada transação simulada na blockchain antes de enviar. Precisa de `LIVE_TRADING_ENABLED=true`.
-- **🧠 Melhorar estratégia BTC**: testa 16 versões fixas (rompimento de 20 ou 48 velas; alvo/stop
-  1×2, 1,5×1, 2×1 e 3×1 ATR; com e sem filtro de volume). Escolhe a melhor nos primeiros 8 meses
-  e confere nos últimos 4, que ela não viu. Só aplica no robô se der lucro também na conferência;
-  senão avisa e não muda nada.
+## Seleção das carteiras
 - **Resultado dos últimos 9 dias:** a auditoria (ao iniciar, a cada 6 h, ao seguir uma carteira e
   logo que a busca adiciona uma) lê até 300 transações e calcula o resultado da carteira nos
   últimos 9 dias. Só copia com lucro, **pelo menos 40 operações** e acerto ≥ 50% nesse período, e
