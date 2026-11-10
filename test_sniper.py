@@ -35,6 +35,10 @@ class FilterTests(unittest.TestCase):
         self.assertIn("menos de 1 h", sn.filter_reason(pair(pairCreatedAt=(NOW - 3599) * 1000), NOW))
         self.assertEqual(sn.filter_reason(pair(pairCreatedAt=(NOW - 3601) * 1000), NOW), "")
 
+    def test_coin_at_most_48_hours_old(self):
+        self.assertEqual(sn.filter_reason(pair(pairCreatedAt=(NOW - 47 * 3600) * 1000), NOW), "")
+        self.assertIn("mais de 48 h", sn.filter_reason(pair(pairCreatedAt=(NOW - 49 * 3600) * 1000), NOW))
+
     def test_momentum_and_scam_filters(self):
         self.assertIn("sem site", sn.filter_reason(pair(info={}), NOW))
         self.assertIn("mais vendas", sn.filter_reason(pair(txns={"m5": {"buys": 20, "sells": 30}}), NOW))

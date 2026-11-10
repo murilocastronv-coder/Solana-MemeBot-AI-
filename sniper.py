@@ -36,7 +36,7 @@ MIN_LIQ = _f("SNIPER_MIN_LIQUIDITY_USD", 10_000)     # minimum liquidity US$ 10k
 MAX_LIQ = _f("SNIPER_MAX_LIQUIDITY_USD", 250_000)
 MIN_AGE_S = _f("SNIPER_MIN_AGE_MINUTES", 60) * 60          # coin created at least 1 hour ago
 STOP_LOSS = _f("SNIPER_STOP_LOSS", 0.40)
-MAX_AGE_S = _f("SNIPER_MAX_AGE_HOURS", 24) * 3600
+MAX_AGE_S = _f("SNIPER_MAX_AGE_HOURS", 48) * 3600         # coin at most 48 hours old
 MIN_BUYS_5M = int(_f("SNIPER_MIN_BUYS_5M", 15))
 MIN_BUY_RATIO = _f("SNIPER_MIN_BUY_RATIO", 1.3)
 MIN_VOL_5M = _f("SNIPER_MIN_VOL_5M", 5_000)
@@ -234,7 +234,7 @@ def filter_reason(p, now=None):
     if age < MIN_AGE_S:
         return "moeda com menos de " + _age_text(MIN_AGE_S)
     if age > MAX_AGE_S:
-        return "moeda velha demais"
+        return "moeda com mais de " + _age_text(MAX_AGE_S)
     info = p.get("info") or {}
     if REQUIRE_SOCIALS and not (info.get("websites") or info.get("socials") or p.get("pump_socials")):
         return "sem site/rede social"
@@ -461,7 +461,7 @@ def status_text():
     mode = "REAL" if d["enabled"] and d["real"] else ("SIMULAÇÃO" if d["enabled"] else "DESLIGADO")
     lines = ["🎯 SNIPER — " + mode,
              "Liquidez US$ " + format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil · moeda com mais de " +
-             _age_text(MIN_AGE_S) + " · US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " +
+             _age_text(MIN_AGE_S) + " (até " + _age_text(MAX_AGE_S) + ") · US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " +
              str(MAX_POSITIONS) + " posições · opera o dia inteiro",
              "Fontes: DexScreener " + str(SOURCES["dexscreener"]) + " · pump.fun " + str(SOURCES["pumpfun"]) +
              " · GeckoTerminal (pump.fun/PumpSwap) " + str(SOURCES["geckoterminal"]) + " moedas" +
