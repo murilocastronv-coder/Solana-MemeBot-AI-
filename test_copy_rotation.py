@@ -172,9 +172,9 @@ class SelfAnalysisTests(unittest.TestCase):
         x["win_rate"] = win
         return x
 
-    def test_limit_is_10_by_default(self):
-        self.assertEqual(c.MAX_AUTO_WALLETS, 10)
-        for _ in range(10):
+    def test_limit_is_20_by_default(self):
+        self.assertEqual((c.MAX_AUTO_WALLETS, c.TOP_WALLETS), (20, 20))
+        for _ in range(20):
             self.assertTrue(c.auto_follow(self.c(0.01)))
         self.assertFalse(c.auto_follow(self.c(0.01)))
 
