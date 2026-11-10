@@ -48,6 +48,16 @@ class CopySellTests(unittest.TestCase):
             ct.watch_copied_balances()
         close.assert_called_once_with(MINT, "copy_follow", None, None)
 
+    def test_wallet_that_sold_almost_everything_counts_as_closed(self):
+        with patch.object(ct, "wallet_token_balance", return_value=1000), patch.object(ct, "_close") as close:
+            ct.watch_copied_balances()                  # first look: it holds 1000
+        close.assert_not_called()
+        ct._WATCH["at"] = 0.0
+        with patch.object(ct, "wallet_token_balance", return_value=30), \
+                patch.object(ct, "_close", return_value=[]) as close:
+            ct.watch_copied_balances()                  # now 3% of what it had: closed
+        close.assert_called_once()
+
     def test_wallet_still_holding_keeps_the_copy(self):
         with patch.object(ct, "wallet_token_balance", return_value=5), patch.object(ct, "_close") as close:
             ct.watch_copied_balances()
