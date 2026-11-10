@@ -142,7 +142,10 @@ python -m unittest discover -p "test_*.py"
 - Copia as mesmas carteiras que o bot encontrou e auditou, com os mesmos filtros: quando elas compram,
   todos os usuários ligados compram; quando vendem, eles vendem.
 - **Taxa: 4% (`USER_FEE_PERCENT`) de cada compra e de cada venda**, enviada em SOL para a carteira
-  principal do dono (a do `TELEGRAM_CHAT_ID`; ou `FEE_WALLET`). A taxa só é cobrada se a operação deu
-  certo; se a transferência falhar, fica pendente e o bot tenta de novo a cada minuto.
+  principal do dono (a do `TELEGRAM_CHAT_ID`; ou `FEE_WALLET`). **Automática e atômica:** a
+  transferência da taxa vai dentro da MESMA transação da compra/venda (Jupiter `/swap/v1` + transferência
+  de SOL, assinada pela carteira do usuário e simulada antes de enviar): ou a operação passa com a taxa,
+  ou nada acontece. Só se a rota não couber numa transação o bot usa o caminho antigo (troca e depois a
+  taxa, refeita a cada minuto se falhar). Slippage dos usuários: `USER_SLIPPAGE_BPS=300` (3%).
   Para ligar o REAL, o usuário precisa tocar em "✅ Aceito a taxa de 4%".
 - O 📊 Status do dono mostra quantos usuários estão copiando e o total de taxas recebidas.

@@ -297,7 +297,7 @@ def user_copy_action(chat,action):
    if not uc.load(chat).get("terms_at"):
     send(chat,"💵 COPY TRADE REAL — LEIA ANTES DE LIGAR\n"
      "• O bot compra e vende com a SUA carteira do bot, copiando as carteiras que ele encontrou e auditou.\n"
-     "• TAXA: "+fee+" do valor de CADA COMPRA e de CADA VENDA, enviada em SOL para a carteira do dono do bot.\n"
+     "• TAXA: "+fee+" do valor de CADA COMPRA e de CADA VENDA, cobrada automaticamente na MESMA transação da operação e enviada em SOL para a carteira do dono do bot.\n"
      "• Valor por cópia: US$ "+format(uc.load(chat)["order_usd"],".0f")+" (mude em ⚙️ Valor por cópia). Máx. "+str(uc.MAX_POSITIONS)+" posições.\n"
      "• Memecoins são de alto risco: você pode perder todo o valor. Copiar não garante lucro.\n"
      "• Deixe ~0,01 SOL a mais para taxas da rede.",

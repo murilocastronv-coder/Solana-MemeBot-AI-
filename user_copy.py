@@ -216,6 +216,79 @@ def swap(chat, input_mint, output_mint, amount):
     return execute(chat, quote_order(chat, input_mint, output_mint, amount))
 
 
+SLIPPAGE_BPS = int(os.getenv("USER_SLIPPAGE_BPS", "300"))
+
+
+class NotSent(RuntimeError):
+    """Nothing went to the blockchain (or it failed on-chain without effect). fallback=True: the
+    atomic format was not possible for this route, the old path (swap, then fee) may be used."""
+    def __init__(self, msg, fallback=False):
+        super().__init__(msg)
+        self.fallback = fallback
+
+
+class Uncertain(RuntimeError):
+    """Sent but not confirmed yet: check the wallet before deciding."""
+
+
+def atomic_swap(chat, input_mint, output_mint, amount, fee_lamports=None, wait_s=60):
+    """Swap with the fee INSIDE the same transaction (both land or neither does).
+    fee_lamports=None: 4% of the SOL the swap is quoted to return (sells).
+    Returns {"signature", "fee_lamports"}; raises NotSent or Uncertain."""
+    import fee_tx
+    import live_swap_executor as lx
+    from solders.transaction import VersionedTransaction
+    dest = fee_wallet()
+    try:
+        address, kp = _keypair(chat)
+        if not dest:
+            raise NotSent("fee wallet missing")
+        route = lx.quote(input_mint, output_mint, int(amount), slippage_bps=SLIPPAGE_BPS)
+        fee = int(fee_lamports if fee_lamports is not None else int(route["outAmount"]) * FEE_RATE)
+        payload = lx.build_swap(route, address)
+        unsigned = VersionedTransaction.from_bytes(base64.b64decode(payload["swapTransaction"], validate=True))
+        try:
+            msg = fee_tx.add_fee_transfer(unsigned.message, address, dest, fee)
+            signed = VersionedTransaction(msg, [kp])
+            raw = bytes(signed)
+            if len(raw) > fee_tx.MAX_TX_BYTES:
+                raise fee_tx.FeeTxError("transaction too large with the fee")
+        except fee_tx.FeeTxError as exc:
+            raise NotSent(str(exc), fallback=True)
+        encoded = base64.b64encode(raw).decode()
+        sim = _rpc("simulateTransaction", [encoded, {"encoding": "base64", "commitment": "confirmed"}])
+        if not isinstance(sim, dict) or (sim.get("value") or {}).get("err") is not None:
+            raise NotSent("simulation failed")
+    except (NotSent, Uncertain):
+        raise
+    except Exception as exc:
+        raise NotSent(type(exc).__name__)
+    try:
+        sig = _rpc("sendTransaction", [encoded, {"encoding": "base64", "skipPreflight": True, "maxRetries": 3}])
+    except Exception:
+        raise Uncertain("send not acknowledged")
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        try:
+            st = (_rpc("getSignatureStatuses", [[sig]]) or {}).get("value", [None])[0]
+        except Exception:
+            st = None
+        if st:
+            if st.get("err") is not None:
+                raise NotSent("failed on-chain (nothing swapped, no fee)")
+            if st.get("confirmationStatus") in ("confirmed", "finalized"):
+                return {"signature": sig, "fee_lamports": fee}
+        time.sleep(2)
+    raise Uncertain("not confirmed yet")
+
+
+def _record_fee_paid(chat, lamports):
+    with _user_lock(chat):
+        d = load(chat)
+        d["fees_paid_lamports"] = int(d.get("fees_paid_lamports", 0)) + int(lamports)
+        save(chat, d)
+
+
 def _charge_fee(chat, lamports):
     """Send the fee to the owner's wallet; on failure keep it as owed (retried by upkeep)."""
     lamports = int(lamports)
@@ -303,22 +376,28 @@ def _buy(chat, mint, leader, send):
                         ". Deposite SOL (📥 Depositar) ou diminua o valor em ⚙️ Valor por cópia.")
                 return
             try:
-                od = quote_order(chat, SOL_MINT, mint, amount)
-            except Exception:
-                _drop(chat, mint)                   # nothing was sent
+                atomic_swap(chat, SOL_MINT, mint, amount, fee_lamports=fee)      # fee inside the same transaction
+                _record_fee_paid(chat, fee)
+                tokens = token_balance(address, mint)
+            except Uncertain:
+                _mark_unconfirmed(chat, mint, order_usd, fee, atomic=True)
                 return
-            try:
-                res = execute(chat, od)
-            except Exception:
-                # may or may not have gone through: upkeep checks the wallet before deciding
-                with _user_lock(chat):
-                    d = load(chat)
-                    if mint in d["positions"]:
-                        d["positions"][mint].update(cost_usd=order_usd, fee_lamports=fee, check_since=time.time())
-                        save(chat, d)
-                return
-            tokens = int(res["total_output_amount"])
-            _charge_fee(chat, fee)
+            except NotSent as exc:
+                if not exc.fallback:
+                    _drop(chat, mint)               # nothing was sent, nothing charged
+                    return
+                try:                                # route can't take the fee inside: swap, then fee
+                    od = quote_order(chat, SOL_MINT, mint, amount)
+                except Exception:
+                    _drop(chat, mint)
+                    return
+                try:
+                    res = execute(chat, od)
+                except Exception:
+                    _mark_unconfirmed(chat, mint, order_usd, fee, atomic=False)
+                    return
+                tokens = int(res["total_output_amount"])
+                _charge_fee(chat, fee)
         else:
             tokens = int(ct._order(SOL_MINT, mint, amount)["outAmount"])
         with _user_lock(chat):
@@ -334,6 +413,17 @@ def _buy(chat, mint, leader, send):
                 format(order_usd * FEE_RATE, ".2f") + ")\nsolscan.io/token/" + mint)
     except Exception:
         _drop(chat, mint)
+
+
+def _mark_unconfirmed(chat, mint, order_usd, fee, atomic):
+    """Sent but not confirmed: upkeep checks the wallet before deciding (and charges the fee only
+    if it was not already inside the transaction)."""
+    with _user_lock(chat):
+        d = load(chat)
+        if mint in d["positions"]:
+            d["positions"][mint].update(cost_usd=order_usd, check_since=time.time(),
+                                        fee_lamports=0 if atomic else fee, fee_inside=fee if atomic else 0)
+            save(chat, d)
 
 
 def _drop(chat, mint):
@@ -359,12 +449,36 @@ def _sell(chat, mint, fraction, send):
             amount = token_balance(address, mint)
             part = 1.0
             if amount <= 0:
-                _close(chat, mint, 0.0, p, send, note="moeda não está mais na carteira")
+                before = p.get("sol_before")
+                if before is not None:     # an earlier sell went through after all: value it from the SOL received
+                    got = max(0, sol_balance(address) - int(before))
+                    fee = int(got / (1 - FEE_RATE) * FEE_RATE)                   # the fee went in the same transaction
+                    _record_fee_paid(chat, fee)
+                    _close(chat, mint, got / 1e9 * sol_usd, p, send, fee_usd=fee / 1e9 * sol_usd)
+                else:
+                    _close(chat, mint, 0.0, p, send, note="moeda não está mais na carteira")
                 return
-            res = swap(chat, mint, SOL_MINT, amount)
-            received = int(res["total_output_amount"])
-            fee = int(received * FEE_RATE)
-            _charge_fee(chat, fee)
+            before = sol_balance(address)
+            try:
+                res = atomic_swap(chat, mint, SOL_MINT, amount)                    # 4% fee inside the same transaction
+                fee = res["fee_lamports"]
+                _record_fee_paid(chat, fee)
+                received = max(0, sol_balance(address) - before) + fee           # SOL from the sale, before the fee
+            except Uncertain:
+                with _user_lock(chat):
+                    d = load(chat)
+                    if mint in d["positions"]:
+                        d["positions"][mint].update(selling=False, sol_before=before,
+                                                    sell_retry_at=time.time() + SELL_RETRY_S)
+                        save(chat, d)
+                return
+            except NotSent as exc:
+                if not exc.fallback:
+                    raise
+                res = swap(chat, mint, SOL_MINT, amount)                           # old path: sale, then fee
+                received = int(res["total_output_amount"])
+                fee = int(received * FEE_RATE)
+                _charge_fee(chat, fee)
         else:
             part = 1.0 if fraction is None or float(fraction) >= 0.95 else max(0.0, float(fraction))
             amount = int(int(p["tokens"]) * part)
@@ -439,7 +553,9 @@ def upkeep(send=None):
                                 d["positions"][mint] = {"leader": p["leader"], "real": True, "tokens": tokens,
                                                         "cost_usd": p["cost_usd"], "opened_at": p["opened_at"]}
                                 save(chat, d)
-                        _charge_fee(chat, p.get("fee_lamports", 0))
+                        _charge_fee(chat, p.get("fee_lamports", 0))          # 0 when the fee was inside the tx
+                        if p.get("fee_inside"):
+                            _record_fee_paid(chat, p["fee_inside"])
                         _notify(send, chat, "🟢 COPY COMPROU " + mint[:6] + "… (compra confirmada na carteira)")
                     elif time.time() - float(p["check_since"]) > PENDING_GIVE_UP_S:
                         _drop(chat, mint)
