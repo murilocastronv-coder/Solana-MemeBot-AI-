@@ -156,7 +156,7 @@ python -m unittest discover -p "test_*.py"
   desliga) e compra só as que passam em tudo. Os dados de negociação vêm sempre da DexScreener, então as
   moedas da pump.fun passam pelos mesmos filtros e proteções. Na curva de lançamento a liquidez fica presa
   no contrato (o criador não consegue tirar), então ali não se exige liquidez travada; o resto vale igual:
-  - **liquidez entre US$ 10 mil e US$ 250 mil**, moeda com **pelo menos 1 hora** de criada (e até 24 h), par em SOL/USDC;
+  - **liquidez entre US$ 10 mil e US$ 250 mil**, moeda com **pelo menos 1 hora** de criada (e até 48 h), par em SOL/USDC;
   - **estratégia de impulso**: nos últimos 5 min ≥ 15 compras, compras ≥ 1,3× vendas, volume ≥ US$ 5 mil,
     preço +2% a +25% (subindo, sem pegar topo) e positivo na última hora; valor de mercado ≤ 15× a liquidez;
   - **anti-rug**: criador sem poder de criar moedas nem congelar carteiras, 10 maiores donos < 25%,
