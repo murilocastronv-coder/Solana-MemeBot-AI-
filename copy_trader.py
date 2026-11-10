@@ -109,6 +109,37 @@ REPLACE_PNL_MARGIN = _env("COPY_REPLACE_PNL_MARGIN", 1.2)
 TEST_DAYS = _env("COPY_TEST_DAYS", 3)
 
 
+def _busy(d):
+    """Copied wallets with an open position (owner's or any user's): they stay watched until it is sold."""
+    out = {p.get("wallet") for p in d["positions"].values()}
+    try:
+        import user_copy
+        out |= user_copy.busy_wallets()
+    except Exception:
+        pass
+    return out
+
+
+def drop_finished_leaving():
+    """A wallet marked to leave goes away once nobody (owner or user) holds a copy from it."""
+    with _LOCK:
+        d = _load()
+        busy = _busy(d)
+        gone = [a for a, w in d["wallets"].items() if w.get("leaving") and a not in busy]
+        for a in gone:
+            d["wallets"].pop(a)
+        if gone:
+            _save(d)
+
+
+def users_active():
+    try:
+        import user_copy
+        return user_copy.any_active()
+    except Exception:
+        return False
+
+
 def in_test(w, now=None):
     fa = w.get("followed_at")
     return fa is None or (now or time.time()) - float(fa) < TEST_DAYS * 86400
@@ -318,7 +349,7 @@ def prune_low_balance():
         return []
     with _LOCK:
         d = _load()
-        busy = {p.get("wallet") for p in d["positions"].values()}
+        busy = _busy(d)
         auto = [a for a, w in d["wallets"].items() if w.get("auto_discovered") and a not in busy and not in_test(w)]
     removed = []
     for a in auto:
@@ -335,7 +366,7 @@ def prune_low_balance():
             small = st.get("average_buy_lamports") is not None and not big_enough_buyer(st)
             small = small or (st.get("age_days") is not None and not old_enough(st))
             small = small or (st.get("active_days_7") is not None and not active_daily(st))
-            if (usd < MIN_WALLET_USD or small) and a not in {p.get("wallet") for p in d["positions"].values()}:
+            if (usd < MIN_WALLET_USD or small) and a not in _busy(d):
                 d["wallets"].pop(a)
                 removed.append(a)
             _save(d)
@@ -392,7 +423,7 @@ def replace_worst(candidate):
         d = _load()
         if address in d["wallets"]:
             return False
-        busy = {p.get("wallet") for p in d["positions"].values()}
+        busy = _busy(d)
         bad = [(w.get("pnl_usd", 0.0), a) for a, w in d["wallets"].items()
                if _bad_auto_wallet(w) and a not in busy and not in_test(w)]
         if bad:
@@ -675,7 +706,7 @@ def unfollow(address):
     (no new buys) and leaves when that copy closes. Returns True if removed now."""
     with _LOCK:
         d = _load()
-        if address in {p.get("wallet") for p in d["positions"].values()} and address in d["wallets"]:
+        if address in _busy(d) and address in d["wallets"]:
             d["wallets"][address]["leaving"] = True
             _save(d)
             return False
@@ -966,7 +997,7 @@ def _close(mint, reason, send=None, chat=None):
                                          "closed_at": time.time()}])[-300:]
         paused = _score(d, pos["wallet"], pnl)
         w = d["wallets"].get(pos["wallet"])
-        if w and w.get("leaving") and pos["wallet"] not in {p.get("wallet") for p in d["positions"].values()}:
+        if w and w.get("leaving") and pos["wallet"] not in _busy(d):
             d["wallets"].pop(pos["wallet"])
         _save(d)
     if not pos.get("real"):
@@ -1156,7 +1187,7 @@ def preaudit_and_follow(candidate, rpc, sol_usd):
         d = _load()
         auto = [(((w.get("audit") or {}).get("pnl_recent", 0.0)), a) for a, w in d["wallets"].items()
                 if w.get("auto_discovered")]
-        busy = {p.get("wallet") for p in d["positions"].values()}
+        busy = _busy(d)
         full = len(auto) >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS
         if full:
             free = sorted((pnl, a) for pnl, a in auto if a not in busy and not in_test(d["wallets"][a])
@@ -1210,7 +1241,7 @@ def remove_fast_wallets():
     removed = []
     with _LOCK:
         d = _load()
-        busy = {p.get("wallet") for p in d["positions"].values()}
+        busy = _busy(d)
         for a, w in list(d["wallets"].items()):
             if a in busy or in_test(w) or w.get("leaving"):
                 continue
@@ -1324,10 +1355,13 @@ def cycle(send=None, chat=None):
     """One pass over every followed wallet. Returns Telegram messages.
     With copying switched off, wallets that still have an open copy are watched anyway, only to
     sell together with them (there is no fixed TP/SL)."""
-    active = enabled()
+    owner_on = enabled()
+    users_on = users_active()
+    active = owner_on or users_on        # signals are read while the owner or any user is copying
     msgs = []
     ensure_test_start()
     adopt_orphans()
+    drop_finished_leaving()
     msgs += sell_if_already_sold(send, chat)
     try:
         msgs += recover_real_orphans()
@@ -1335,7 +1369,7 @@ def cycle(send=None, chat=None):
         LAST_ERROR["text"] = "recuperação de posições falhou: " + type(exc).__name__
     with _LOCK:
         d = _load()
-        busy = {p.get("wallet") for p in d["positions"].values()}
+        busy = _busy(d)
         wallets = {a: w for a, w in d["wallets"].items() if active or a in busy}
     if not wallets:
         return msgs
@@ -1358,6 +1392,11 @@ def cycle(send=None, chat=None):
                 typical = typical_buy_usd(_load()["wallets"].get(wallet, {}))   # usual size BEFORE this buy (no lock: may hit the network)
                 _record_buy_size(wallet, paid_usd)
             if side == "sell":
+                try:
+                    import user_copy
+                    user_copy.on_sell(mint, wallet, extra, send)      # users holding it sell too
+                except Exception as exc:
+                    LAST_ERROR["text"] = "venda dos usuários falhou: " + type(exc).__name__
                 with _LOCK:
                     pos = _load()["positions"].get(mint)
                 if pos and pos["wallet"] == wallet:
@@ -1389,6 +1428,14 @@ def cycle(send=None, chat=None):
                         _event("ignorou compra baixa de " + wallet[:6] + "…: US$ " + format(paid_usd, ".0f") +
                                " (ela costuma colocar US$ " + format(typical, ".0f") + ")")
                         continue
+                if users_on and not safety_reason(mint):
+                    try:
+                        import user_copy
+                        user_copy.on_buy(mint, wallet, send)          # every copying user buys too
+                    except Exception as exc:
+                        LAST_ERROR["text"] = "compra dos usuários falhou: " + type(exc).__name__
+                if not owner_on:
+                    continue
                 m = _open(mint, wallet, send, chat)
                 if m:
                     msgs.append(m)
