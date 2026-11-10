@@ -103,6 +103,8 @@ def keyboard():
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
+  [{"text":"🎯 Sniper SIM","callback_data":"snp_sim"},{"text":"🎯 Sniper REAL","callback_data":"snp_real"}],
+  [{"text":"⏹️ Parar sniper","callback_data":"snp_off"},{"text":"📊 Status sniper","callback_data":"snp_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def user_keyboard():
@@ -229,6 +231,20 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
+ if action in ("snp_sim","snp_real","snp_real_ok","snp_off","snp_status","/sniper_status"):
+  import sniper as sn
+  try:
+   if action=="snp_sim":sn.set_mode(True,False);pre="🧪 SNIPER em SIMULAÇÃO (preços reais, US$ 100 de mentira).\n\n"
+   elif action=="snp_real":
+    send(chat,"🎯 SNIPER COM DINHEIRO REAL\nCompra US$ "+format(sn.ORDER_USD,".0f")+" por moeda (máx. "+str(sn.MAX_POSITIONS)+
+     " ao mesmo tempo) com a carteira principal, o dia inteiro.\n⚠️ Memecoin nova é o tipo de moeda mais arriscado: as proteções reduzem golpes, mas não evitam perdas. Recomendo testar antes em 🎯 Sniper SIM.",
+     [[{"text":"✅ Ligar sniper REAL","callback_data":"snp_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"snp_status"}]]);return
+   elif action=="snp_real_ok":live_engine.start();sn.set_mode(True,True);pre="💵 SNIPER REAL LIGADO.\n\n"
+   elif action=="snp_off":sn.set_mode(False);pre="⏹️ Sniper desligado: não abre novas posições. As abertas continuam com stop e stop móvel.\n\n"
+   else:pre=""
+   send(chat,pre+sn.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
+  return
  if action in ("audit","/auditar"):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
@@ -446,6 +462,15 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
+def sniper_loop():
+ """Sniper: scans DexScreener every SNIPER_SCAN_SECONDS, all day."""
+ import sniper
+ while True:
+  time.sleep(sniper.SCAN_EVERY_S)
+  try:
+   chat=active_chat()
+   if chat:sniper.cycle(send,chat)
+  except Exception as exc:logging.warning("sniper cycle failed: %s",type(exc).__name__)
 USERS_UPKEEP={"next":0.0}
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
@@ -556,6 +581,7 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
+ threading.Thread(target=sniper_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
