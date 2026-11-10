@@ -15,7 +15,9 @@ DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
 SNIPER_MAX_HOLD_SECONDS = 30 * 60  # sniper trade that never took off is closed
 
-SNIPER_EXIT = {"stop_loss": "0.12", "arm": "1.25", "drop": "0.12"}
+SNIPER_STOP_LOSS = os.getenv("SNIPER_STOP_LOSS", "0.40")      # sniper: stop -40%
+SNIPER_EXIT = {"stop_loss": SNIPER_STOP_LOSS, "arm": "1.25", "drop": "0.12"}
+PUMPFUN_EXIT = {"stop_loss": "0.12", "arm": "1.25", "drop": "0.12"}  # old pump.fun positions only
 HOT_EXIT = {"stop_loss": "0.06", "arm": "1.08", "drop": "0.05"}
 HOT_MAX_HOLD_SECONDS = 45 * 60  # fast mover that did not move is closed
 
@@ -31,7 +33,8 @@ def quote_value_usd(mint, amount):
 def position_signal(position, cost, proceeds):
     """Exit decision shared by real trading and the simulator."""
     if position.get("mode") in ("sniper", "pumpfun"):
-        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **SNIPER_EXIT)
+        rules = SNIPER_EXIT if position.get("mode") == "sniper" else PUMPFUN_EXIT
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rules)
         held = time.time() - float(position.get("opened_at") or time.time())
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
