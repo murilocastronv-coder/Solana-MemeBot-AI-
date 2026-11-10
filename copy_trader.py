@@ -986,6 +986,33 @@ def safety_reason(mint):
 
 
 # ---------------------------------------------------------------- trading
+def _real_result(mint, opened_at):
+    """Profit of THIS real copy: the live engine's sale of the coin closed after the copy was opened.
+    None if there is no such record (never credit an old trade of the same coin)."""
+    import live_trade_state as st
+    since = float(opened_at or 0) - 5
+    for h in reversed(st.history()):
+        if h.get("mint") == mint and float(h.get("closed_at") or 0) >= since:
+            return None if h.get("pnl_usd") is None else float(h["pnl_usd"])
+    return None
+
+
+def reset_bad_scores_once():
+    """Copy results counted before the fix were wrong (failed buys and old trades counted as losing
+    copies): start every wallet's count again, unpause them and give them a new 3-day test. Once."""
+    with _LOCK:
+        d = _load()
+        if d.get("score_v2"):
+            return False
+        for w in d["wallets"].values():
+            w.update(copies=0, wins=0, pnl_usd=0.0, paused=False, followed_at=time.time())
+            w.pop("proven", None)
+        d["score_v2"] = True
+        _save(d)
+    _event("contagem das cópias corrigida: carteiras zeradas e em novo teste de 3 dias")
+    return True
+
+
 def _score(d, wallet, pnl):
     w = d["wallets"].get(wallet)
     if not w:
@@ -1105,9 +1132,8 @@ def _close(mint, reason, send=None, chat=None):
     if pos.get("real"):
         import live_engine
         import live_trade_state as st
-        before = st.pnl_summary()["total_pnl_usd"]
         try:
-            live_engine.sell_now(mint, "copy_follow" if reason == "copy_follow" else reason, send, chat)
+            result = live_engine.sell_now(mint, "copy_follow" if reason == "copy_follow" else reason, send, chat)
         except Exception as exc:
             why = type(exc).__name__ + ": " + str(exc)[:160]
             LAST_ERROR["text"] = "venda real falhou: " + why
@@ -1117,7 +1143,16 @@ def _close(mint, reason, send=None, chat=None):
                 msgs.append("⚠️ A carteira copiada vendeu " + mint[:6] + "…, mas a minha venda falhou (" + why[:120] +
                             "). Vou tentar de novo a cada " + str(SELL_RETRY_S) + " s até vender.")
             return msgs
-        pnl = st.pnl_summary()["total_pnl_usd"] - before
+        if result == "pending":
+            # sent, still being confirmed: keep the copy; sync_real_closed credits the real result later
+            with _LOCK:
+                d = _load()
+                if mint in d["positions"]:
+                    d["positions"][mint].pop("sell_wanted", None)
+                    d["positions"][mint]["selling_since"] = time.time()
+                    _save(d)
+            return msgs
+        pnl = _real_result(mint, pos.get("opened_at"))      # this position's own sale; None = unknown
     else:
         try:
             value = _order(mint, SOL_MINT, int(pos["tokens"]))
@@ -1134,9 +1169,9 @@ def _close(mint, reason, send=None, chat=None):
         if not pos.get("real"):
             d["balance"] += pnl + float(pos["cost_usd"]) - float(pos.get("realized_usd", 0.0))
         d["history"] = (d["history"] + [{"mint": mint, "wallet": pos["wallet"], "reason": reason,
-                                         "pnl_usd": round(pnl, 4), "real": bool(pos.get("real")),
+                                         "pnl_usd": None if pnl is None else round(pnl, 4), "real": bool(pos.get("real")),
                                          "closed_at": time.time()}])[-300:]
-        paused = _score(d, pos["wallet"], pnl)
+        paused = _score(d, pos["wallet"], pnl) if pnl is not None else None
         w = d["wallets"].get(pos["wallet"])
         if w and w.get("leaving") and pos["wallet"] not in _busy(d):
             d["wallets"].pop(pos["wallet"])
@@ -1218,11 +1253,13 @@ def sync_real_closed():
                 and not (p.get("pending_buy") and time.time() - float(p.get("opened_at", 0)) < 900)]
         for mint in gone:
             pos = d["positions"].pop(mint)
-            last = next((h for h in reversed(st.history()) if h.get("mint") == mint), {}) if hasattr(st, "history") else {}
-            pnl = float(last.get("pnl_usd") or 0.0)
+            if pos.get("pending_buy"):
+                continue                       # the buy never went through: not a copy, nothing to credit
+            pnl = _real_result(mint, pos.get("opened_at"))
             d["history"] = (d["history"] + [{"mint": mint, "wallet": pos["wallet"], "reason": "stop/alvo",
-                                             "pnl_usd": round(pnl, 4), "real": True, "closed_at": time.time()}])[-300:]
-            paused = _score(d, pos["wallet"], pnl)
+                                             "pnl_usd": None if pnl is None else round(pnl, 4), "real": True,
+                                             "closed_at": time.time()}])[-300:]
+            paused = _score(d, pos["wallet"], pnl) if pnl is not None else None
             if paused:
                 msgs.append(paused)
         if gone:
@@ -1500,6 +1537,7 @@ def cycle(send=None, chat=None):
     users_on = users_active()
     active = owner_on or users_on        # signals are read while the owner or any user is copying
     msgs = []
+    reset_bad_scores_once()
     ensure_test_start()
     unpause_test_wallets()
     adopt_orphans()
