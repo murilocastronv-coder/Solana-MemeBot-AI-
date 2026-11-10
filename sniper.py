@@ -62,8 +62,8 @@ PUMP_API = os.getenv("SNIPER_PUMP_API", "https://frontend-api-v3.pump.fun").rstr
 PUMP_FEEDS = ("/coins?offset=0&limit=50&sort=last_trade_timestamp&order=DESC&includeNsfw=false",
               "/coins?offset=0&limit=50&sort=market_cap&order=DESC&includeNsfw=false")
 GECKO = "https://api.geckoterminal.com/api/v2"
-GECKO_FEEDS = ("/networks/solana/dexes/pump-fun/pools?page=1&sort=h24_tx_count_desc",
-               "/networks/solana/dexes/pumpswap/pools?page=1&sort=h24_tx_count_desc")
+GECKO_FEEDS = tuple("/networks/solana/dexes/" + dex + "/pools?page=" + str(page) + "&sort=h24_tx_count_desc"
+                    for dex in ("pump-fun", "pumpswap") for page in (1, 2))
 PUMP_DEXES = {"pumpfun", "pumpswap"}
 SOURCES = {"dexscreener": 0, "pumpfun": 0, "geckoterminal": 0}
 BAD_EXTENSIONS = {"transferHook": "token com gatilho de transferência (pode travar a venda)",
@@ -129,6 +129,20 @@ def _get(url):
     return r.json()
 
 
+_SOURCE_WARNED = {}
+
+
+def _source_failed(name, exc):
+    """Log why a source failed (at most once every 30 min per source)."""
+    import logging
+    if time.monotonic() - _SOURCE_WARNED.get(name, -1e9) < 1800:
+        return
+    _SOURCE_WARNED[name] = time.monotonic()
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    logging.warning("sniper source %s unavailable: %s%s", name, type(exc).__name__,
+                    (" HTTP " + str(status)) if status else "")
+
+
 def pump_mints(fetch=None):
     """pump.fun coins: (mints, {mint: has website/twitter/telegram}). Each source may fail alone."""
     fetch = fetch or _get
@@ -138,7 +152,8 @@ def pump_mints(fetch=None):
     for feed in PUMP_FEEDS:
         try:
             rows = fetch(PUMP_API + feed)
-        except Exception:
+        except Exception as exc:
+            _source_failed("pump.fun", exc)
             continue
         rows = rows.get("coins", []) if isinstance(rows, dict) else rows
         for c in rows if isinstance(rows, list) else []:
@@ -150,7 +165,8 @@ def pump_mints(fetch=None):
     for feed in GECKO_FEEDS:
         try:
             rows = fetch(GECKO + feed)
-        except Exception:
+        except Exception as exc:
+            _source_failed("GeckoTerminal", exc)
             continue
         for pool in (rows or {}).get("data", []) if isinstance(rows, dict) else []:
             base = ((((pool or {}).get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id", "")
