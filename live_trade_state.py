@@ -55,23 +55,23 @@ def _save(state):
             os.unlink(name)
 
 def status():
-    with _LOCK:
-        state = _load()
-        return {"enabled": bool(state["enabled"]), "halted": bool(state["halted"]),
-                "positions": len(state["positions"]), "pending": len(state["pending"]),
-                "daily_loss_usd": float(state["daily_loss_usd"])}
+    # Read-only: the file is replaced atomically, so no need to wait for the lock (a reconciliation
+    # can hold it while it reads the blockchain); the panel answers at once.
+    state = _load()
+    return {"enabled": bool(state["enabled"]), "halted": bool(state["halted"]),
+            "positions": len(state["positions"]), "pending": len(state["pending"]),
+            "daily_loss_usd": float(state["daily_loss_usd"])}
 
 def pnl_summary():
-    """Realized profit/loss from confirmed sells (USD)."""
-    with _LOCK:
-        state = _load()
-        if state["day"] != datetime.now(timezone.utc).date().isoformat():
-            day = 0.0
-        else:
-            day = float(state.get("day_pnl_usd", 0.0))
-        return {"day_pnl_usd": day, "total_pnl_usd": float(state.get("total_pnl_usd", 0.0)),
-                "trades_closed": int(state.get("trades_closed", 0)),
-                "trades_won": int(state.get("trades_won", 0))}
+    """Realized profit/loss from confirmed sells (USD). Read-only, never waits for the lock."""
+    state = _load()
+    if state["day"] != datetime.now(timezone.utc).date().isoformat():
+        day = 0.0
+    else:
+        day = float(state.get("day_pnl_usd", 0.0))
+    return {"day_pnl_usd": day, "total_pnl_usd": float(state.get("total_pnl_usd", 0.0)),
+            "trades_closed": int(state.get("trades_closed", 0)),
+            "trades_won": int(state.get("trades_won", 0))}
 
 def set_position_label(mint, symbol, mode="normal"):
     import time as _time
@@ -340,8 +340,7 @@ def _scaled_daily_loss_limit(usd):
         return state["max_daily_loss_usd"]
 
 def daily_loss_limit():
-    with _LOCK:
-        return _loss_limit(_load())
+    return _loss_limit(_load())
 
 def adopt_position(mint, amount_raw, cost_usd, symbol, mode="copy", **fields):
     """Register a coin the wallet holds but the engine lost track of, so it can be sold by the bot."""
