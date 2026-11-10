@@ -20,7 +20,7 @@ compras e vendas delas, em simulação ou com dinheiro real.
    até a versão 1 da Solana (`SOLANA_MAX_TX_VERSION`).
 2. **Carteira aprovada** quando tem: lucro realizado positivo, acerto ≥ 55%, ≥ 3 operações
    fechadas e retenção média ≥ 5 min por moeda. As mais lucrativas entram primeiro.
-3. **Seguir**: o bot passa a seguir até 15 carteiras aprovadas (`COPY_AUTO_MAX_WALLETS`), das
+3. **Seguir**: o bot passa a seguir até 20 carteiras aprovadas (`COPY_AUTO_MAX_WALLETS`), das
    melhores para as piores pela **nota** (lucro × acerto × experiência). Uma carteira que ainda
    não provou nada nas nossas cópias é trocada por outra com nota 1,5× maior
    (`COPY_REPLACE_MARGIN`).
@@ -60,7 +60,7 @@ Variáveis obrigatórias (segredos):
 - `BOT_WALLET_ENCRYPTION_PASSPHRASE` (senha que criptografa a carteira do bot no disco);
 - `SOLANA_RPC_URL`: RPC dedicado (ex.: Helius). **Sem ele a busca automática não roda.**
 
-Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=32`, `MAX_ORDER_USD=32`, `COPY_MAX_POSITIONS=3`,
+Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=32`, `MAX_ORDER_USD=32`, `COPY_MAX_POSITIONS=8`, `COPY_AUTO_MAX_WALLETS=20`, `NOTIFY_REPEAT_HOURS=2`,
 `COPY_MIN_HOLD_MINUTES=5`, `COPY_AUTO_DISCOVERY_ENABLED=true`, `DAILY_LOSS_LIMIT_ENABLED=false`.
 
 Use uma **carteira dedicada** só para o bot, com pouco dinheiro (ver `DEDICATED_WALLET.md` e
@@ -88,8 +88,8 @@ O que a carteira usa para decidir entrar (sinais, informações, leitura própri
 blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simulação antes.
 
 ## Limites de ordens e regra dos 5 minutos
-- **No máximo 6 ordens abertas ao mesmo tempo**, somando copy trade e robô da estratégia
-  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 6 abertas, nada novo abre.
+- **No máximo 8 operações copiadas abertas ao mesmo tempo**, somando copy trade e robô da estratégia
+  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 8 abertas, nada novo abre.
 - **Toda carteira seguida**, inclusive as de `/clonar` e `/seguir`, só tem compras copiadas se
   segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
   abre ordem. A compra mínima de US$ 40 vale para todas.
@@ -99,8 +99,8 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   (`COPY_MIN_LONG_HOLD_SHARE`). Carteira que fecha rápido é **removida** (com cópia aberta, sai quando ela fechar) e a busca automática coloca outra no lugar.
 - **Conferência da carteira antes de comprar** (dinheiro real): o bot lê na blockchain as moedas que
   a carteira dele tem de verdade (SPL Token e Token-2022, sem SOL/USDC/USDT e sem sobras de menos de
-  US$ 1 ou que não dá para vender, `HOLDINGS_DUST_USD`). Se já houver 3 moedas, ou se já tiver a
-  moeda, não compra. O 📊 Status mostra "Moedas na carteira agora: N/3".
+  US$ 1 ou que não dá para vender, `HOLDINGS_DUST_USD`). Se já houver 8 moedas, ou se já tiver a
+  moeda, não compra. O 📊 Status mostra "Moedas na carteira agora: N/8".
 - **Convicção:** só copia quando a carteira coloca na moeda pelo menos o que ela costuma colocar
   (mediana das últimas compras observadas, ou a média do histórico no começo;
   `COPY_CONVICTION_MULT=1.0`, use `1.5` para exigir 50% acima do normal ou `0` para desligar).
@@ -141,3 +141,12 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   Prejuízo, resultado zero ou nenhuma cópia nos 3 dias: sai, fica 3 dias sem voltar e a busca coloca
   uma nova (que também passa pelo teste).
 
+
+## Mensagens sem repetição
+- Avisos automáticos iguais (status, erros, "observando", pendências…) são enviados **no máximo uma
+  vez a cada 2 horas** (`NOTIFY_REPEAT_HOURS`; números diferentes no texto contam como a mesma
+  mensagem). **Compras e vendas são sempre avisadas na hora.** Respostas aos botões e comandos
+  também saem sempre.
+- **Carteiras novas automáticas:** enquanto a lista tiver vaga (limite de 20,
+  `COPY_AUTO_MAX_WALLETS`), a busca audita até 3 candidatas por rodada
+  (`COPY_PREAUDIT_FILL_PER_CYCLE`) e coloca sozinha as aprovadas. Com a lista cheia, volta a 1 por rodada.
