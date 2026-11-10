@@ -58,6 +58,22 @@ class CopySellTests(unittest.TestCase):
             ct.watch_copied_balances()                  # now 3% of what it had: closed
         close.assert_called_once()
 
+    def test_sale_being_confirmed_is_not_sent_twice(self):
+        d = ct._load()
+        d["positions"][MINT]["selling_since"] = time.time()
+        ct._save(d)
+        with patch.object(ct, "wallet_token_balance", return_value=0), patch.object(ct, "_close") as close:
+            ct.watch_copied_balances()
+        close.assert_not_called()
+
+    def test_panel_shows_how_much_the_copied_wallet_still_holds(self):
+        with patch.object(ct, "wallet_token_balance", side_effect=[1000]):
+            ct.watch_copied_balances()
+        ct._WATCH["at"] = 0.0
+        with patch.object(ct, "wallet_token_balance", return_value=600):
+            ct.watch_copied_balances()
+        self.assertIn("ainda tem 60% do que tinha", ct.positions_text())
+
     def test_wallet_still_holding_keeps_the_copy(self):
         with patch.object(ct, "wallet_token_balance", return_value=5), patch.object(ct, "_close") as close:
             ct.watch_copied_balances()

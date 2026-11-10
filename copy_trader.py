@@ -635,7 +635,8 @@ def watch_copied_balances(send=None, chat=None, now=None):
     _WATCH["at"] = now
     msgs = []
     with _LOCK:
-        positions = {m: p for m, p in _load()["positions"].items() if not p.get("sell_wanted") and not p.get("pending_buy")}
+        positions = {m: p for m, p in _load()["positions"].items() if not p.get("sell_wanted") and not p.get("pending_buy")
+                     and now - float(p.get("selling_since") or 0) > 180}     # a sale being confirmed: don't send another
     for mint, p in positions.items():
         w = p.get("wallet")
         if not w or now - float(p.get("opened_at") or now) < 90:      # give a fresh copy time to settle
@@ -645,12 +646,11 @@ def watch_copied_balances(send=None, chat=None, now=None):
         except Exception:
             continue
         top = max(int(p.get("leader_max") or 0), held)
-        if top != int(p.get("leader_max") or 0):
-            with _LOCK:
-                d = _load()
-                if mint in d["positions"]:
-                    d["positions"][mint]["leader_max"] = top        # most the copied wallet held of this coin
-                    _save(d)
+        with _LOCK:
+            d = _load()
+            if mint in d["positions"]:
+                d["positions"][mint].update(leader_max=top, leader_held=held, leader_checked=now)   # shown in the panel
+                _save(d)
         if held == 0 or (top > 0 and held <= LEADER_CLOSED_SHARE * top):
             _event(w[:6] + "… fechou " + mint[:6] + " (tem " + format(held / top * 100 if top else 0, ".0f") +
                    "% do que tinha): vendendo a cópia")
@@ -772,6 +772,13 @@ def positions_text():
                  "⚠️ carteira fora da lista — volta a ser vigiada na próxima rodada")
         if info and info.get("leaving"):
             watch += " (só até esta venda)"
+        if p.get("leader_checked") and p.get("leader_max"):
+            share = int(p.get("leader_held") or 0) / int(p["leader_max"]) * 100
+            watch += "\n  📊 a carteira ainda tem " + format(share, ".0f") + "% do que tinha (conferido há " + \
+                     str(int((time.time() - float(p["leader_checked"])) // 60)) + " min) · vendo quando cair a ≤ " + \
+                     format(LEADER_CLOSED_SHARE * 100, ".0f") + "%"
+        if p.get("selling_since") and time.time() - float(p["selling_since"]) < 600:
+            watch = "⏳ venda enviada, confirmando na blockchain"
         if p.get("sell_wanted"):
             watch = "⏳ a carteira já vendeu — tentando vender a cada " + str(SELL_RETRY_S) + " s" + \
                     (" (último erro: " + str(p.get("sell_error"))[:80] + ")" if p.get("sell_error") else "")
