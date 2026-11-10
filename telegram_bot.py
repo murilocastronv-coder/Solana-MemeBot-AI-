@@ -74,6 +74,11 @@ def send(chat,text,keyboard=None):
  args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
+def send_parts(chat,text,keyboard=None):
+ """Send a long text in parts; the menu goes on the last part (one message less to wait for)."""
+ parts=split_message(text) or [""]
+ for part in parts[:-1]:send(chat,part)
+ send(chat,parts[-1],keyboard)
 def split_message(text,limit=3800):
  """Telegram allows ~4096 characters per message."""
  parts,cur=[],""
@@ -119,6 +124,9 @@ def last_cycle_line(c):
  if c.get("failed") or c.get("rpc_errors"):
   line+="\n⚠️ RPC: "+str(c.get("failed",0))+" leituras perdidas, "+str(c.get("rpc_errors",0))+" recusas"+(" ("+c.get("last_error","")+")" if c.get("last_error") else "")
  return line
+def answer_callback(callback_id):
+ try:request_api("answerCallbackQuery",callback_query_id=callback_id)
+ except Exception:pass   # an old/expired button: nothing to stop
 def handle_safe(update):
  CTX.interactive=True   # answers to the owner are never held back
  try:handle(update)
@@ -176,7 +184,8 @@ def handle(update):
  msg=update.get("message");cb=update.get("callback_query")
  if cb:
   chat=cb.get("message",{}).get("chat",{}).get("id");action=cb.get("data","")
-  request_api("answerCallbackQuery",callback_query_id=cb["id"])
+  # stop the button's loading spinner in parallel: the answer does not wait for this round trip
+  threading.Thread(target=answer_callback,args=(cb["id"],),daemon=True).start()
  else:
   chat=(msg or {}).get("chat",{}).get("id");action=(msg or {}).get("text","").split(" ")[0]
  if not chat:return
@@ -201,17 +210,22 @@ def handle(update):
  if action in ("copy_positions","/posicoes_copy"):
   import copy_trader as ct
   try:
-   ct.adopt_orphans()
-   for m in ct.recover_real_orphans(force=True):send(chat,m)
-   for part in split_message(ct.positions_text()):send(chat,part)
-   send(chat,"Menu:",keyboard())
-  except Exception as exc:send(chat,"Posições indisponíveis: "+type(exc).__name__,keyboard())
+   send_parts(chat,ct.positions_text(),keyboard())   # answer at once from the saved state
+  except Exception as exc:send(chat,"Posições indisponíveis: "+type(exc).__name__,keyboard());return
+  def check_chain():
+   """Blockchain check for coins the bot lost track of: off the tap, reports only if it found something."""
+   try:
+    ct.adopt_orphans()
+    found=ct.recover_real_orphans(force=True)
+    for m in found:send(chat,m)
+    if found:send_parts(chat,ct.positions_text(),keyboard())
+   except Exception as exc:logging.warning("orphan recovery failed: %s",type(exc).__name__)
+  run_async(check_chain)
   return
  if action in ("copy_following","/copiadas"):
   import copy_trader as ct
   try:
-   for part in split_message(ct.wallets_text()):send(chat,part)
-   send(chat,"Menu:",keyboard())
+   send_parts(chat,ct.wallets_text(),keyboard())
   except Exception as exc:send(chat,"Lista indisponível: "+type(exc).__name__,keyboard())
   return
  if action in ("copy_wallets","/carteiras"):
@@ -282,7 +296,7 @@ def handle(update):
     return
    try:
     rpc=os.getenv("SOLANA_RPC_URL","https://api.mainnet-beta.solana.com")
-    response=session.post(rpc,json={"jsonrpc":"2.0","id":1,"method":"getBalance","params":[address]},timeout=12)
+    response=session.post(rpc,json={"jsonrpc":"2.0","id":1,"method":"getBalance","params":[address]},timeout=6)
     response.raise_for_status()
     data=response.json()
     if "error" in data:raise ValueError("RPC error")

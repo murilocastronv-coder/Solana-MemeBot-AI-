@@ -237,6 +237,7 @@ def auto_follow(candidate):
     if (not old_enough(candidate) or not active_daily(candidate) or not big_enough_buyer(candidate)
             or not has_min_balance(address)):
         return False
+    usd = wallet_usd(address)          # network: outside the lock (cached by has_min_balance)
     with _LOCK:
         d = _load()
         if address in d["wallets"]:
@@ -251,7 +252,6 @@ def auto_follow(candidate):
             "auto_discovered": True,
         }
         _record_stats(d["wallets"][address], candidate)
-        usd = wallet_usd(address)
         if usd is not None:
             d["wallets"][address]["balance_usd"] = round(usd, 2)
         _save(d)
@@ -433,8 +433,7 @@ def refresh_stats(candidate):
 
 def wallet_card(address):
     """Full description of a followed wallet, for the 'new wallet' notice."""
-    with _LOCK:
-        w = _load()["wallets"].get(address)
+    w = _load()["wallets"].get(address)       # panel: atomic file, no need to wait the lock
     if not w:
         return "solscan.io/account/" + address
     st = w.get("stats") or {}
@@ -472,8 +471,7 @@ def wallet_card(address):
 
 def wallets_text():
     """Followed wallets ranked by score, with their history and our copy results."""
-    with _LOCK:
-        d = _load()
+    d = _load()       # panel: atomic file, no need to wait the lock
     rows = sorted(d["wallets"].items(), key=lambda kv: kv[1].get("score", 0.0), reverse=True)
     active = sum(1 for _, w in rows if not w.get("paused"))
     copies = sum(w.get("copies", 0) for _, w in rows)
@@ -642,8 +640,7 @@ def recover_real_orphans(force=False):
 
 def positions_text():
     """Open copies, where each came from and whether that wallet is being watched."""
-    with _LOCK:
-        d = _load()
+    d = _load()       # panel: atomic file, no need to wait the lock
     try:
         import live_trade_state as st
         live = st._load()["positions"]
@@ -1358,8 +1355,7 @@ def cycle(send=None, chat=None):
             _track_hold(wallet, side, mint, time.time())
             typical = None
             if side == "buy" and paid_usd:
-                with _LOCK:
-                    typical = typical_buy_usd(_load()["wallets"].get(wallet, {}))   # usual size BEFORE this buy
+                typical = typical_buy_usd(_load()["wallets"].get(wallet, {}))   # usual size BEFORE this buy (no lock: may hit the network)
                 _record_buy_size(wallet, paid_usd)
             if side == "sell":
                 with _LOCK:
@@ -1407,8 +1403,7 @@ def cycle(send=None, chat=None):
 
 # ---------------------------------------------------------------- panel
 def status_text():
-    with _LOCK:
-        d = _load()
+    d = _load()       # panel: atomic file, never waits for a background job
     mode = "REAL" if d["enabled"] and d["real"] else ("SIMULAÇÃO" if d["enabled"] else "DESLIGADO")
     lines = ["👥 COPY TRADE — " + mode,
              "US$ " + format(ORDER_USD, ".0f") + " por cópia · máx. " + str(MAX_POSITIONS) + " posições · " +
