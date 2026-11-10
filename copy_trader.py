@@ -110,6 +110,8 @@ REPLACE_PNL_MARGIN = _env("COPY_REPLACE_PNL_MARGIN", 1.2)
 TEST_DAYS = _env("COPY_TEST_DAYS", 3)
 # During the test a wallet is only paused if its copies lost this much (US$) in total
 TEST_MAX_LOSS_USD = _env("COPY_TEST_MAX_LOSS_USD", 100)
+# Pause a copied wallet that makes this many trades shorter than MIN_HOLD (5 min) in its last 5 seen trades
+FAST_TRADES_TO_PAUSE = int(_env("COPY_FAST_TRADES_TO_PAUSE", 2))
 
 
 def _busy(d):
@@ -526,6 +528,9 @@ def wallets_text():
         st = w.get("stats") or {}
         status, med = holder_status(w)
         icon = "⏸️" if w.get("paused") else ("✅" if status == "ok" else ("👀" if status == "watching" else "⚡"))
+        if w.get("paused"):
+            icon += " pausada (" + ("trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min"
+                                    if w.get("pause_reason") == "fast" else "prejuízo nas cópias") + ")"
         hist = ""
         if st:
             hist = (" · histórico " + format(st.get("realized_lamports", 0) / 1e9, "+.3f") + " SOL, acerto " +
@@ -1048,7 +1053,8 @@ def unpause_test_wallets():
     with _LOCK:
         d = _load()
         for a, w in d["wallets"].items():
-            if w.get("paused") and in_test(w) and float(w.get("pnl_usd", 0.0)) > -TEST_MAX_LOSS_USD:
+            if (w.get("paused") and w.get("pause_reason") != "fast" and in_test(w)
+                    and float(w.get("pnl_usd", 0.0)) > -TEST_MAX_LOSS_USD):
                 w["paused"] = False
                 back.append(a)
         if back:
@@ -1527,13 +1533,25 @@ def _track_hold(wallet, side, mint, now):
             return
         w.setdefault("open_buys", {})
         w.setdefault("holds", [])
+        msg = None
         if side == "buy":
             w["open_buys"].setdefault(mint, now)
         elif mint in w["open_buys"]:
-            w["holds"] = (w["holds"] + [now - w["open_buys"].pop(mint)])[-30:]
+            held = now - w["open_buys"].pop(mint)
+            w["holds"] = (w["holds"] + [held])[-30:]
+            w["live_holds"] = ((w.get("live_holds") or []) + [round(held)])[-5:]      # trades seen live
+            fast = [h for h in w["live_holds"] if h < MIN_HOLD_SECONDS]
+            if len(fast) >= FAST_TRADES_TO_PAUSE and not w.get("paused"):
+                w["paused"], w["pause_reason"] = True, "fast"
+                msg = ("⏸️ Pausei " + wallet[:6] + "…" + wallet[-4:] + ": fez " + str(len(fast)) + " trades de menos de " +
+                       format(MIN_HOLD_SECONDS / 60, ".0f") + " min (último: " + format(held / 60, ".1f") +
+                       " min). Não copio mais as compras dela; posições abertas dela vendem quando ela vender.")
         if len(w["open_buys"]) > 200:
             w["open_buys"] = dict(list(w["open_buys"].items())[-100:])
         _save(d)
+    if msg:
+        _event(msg)
+    return msg
 
 
 def cycle(send=None, chat=None):
@@ -1575,7 +1593,9 @@ def cycle(send=None, chat=None):
                 _save(d)
         for side, mint, extra in signals:
             paid_usd = extra if side == "buy" else None
-            _track_hold(wallet, side, mint, time.time())
+            fast_msg = _track_hold(wallet, side, mint, time.time())
+            if fast_msg:
+                msgs.append(fast_msg)
             typical = None
             if side == "buy" and paid_usd:
                 typical = typical_buy_usd(_load()["wallets"].get(wallet, {}))   # usual size BEFORE this buy (no lock: may hit the network)

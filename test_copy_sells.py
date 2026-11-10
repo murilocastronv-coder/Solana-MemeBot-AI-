@@ -172,6 +172,48 @@ class ScoreTests(unittest.TestCase):
         self.assertFalse(ct.reset_bad_scores_once())                               # only once
 
 
+class FastTraderTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        d = ct._load()
+        d["score_v2"] = True
+        d["wallets"][W] = {"last_sig": "s", "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False, "holds": [],
+                           "open_buys": {}, "followed_at": time.time()}
+        ct._save(d)
+
+    def trade(self, mint, minutes, t0):
+        ct._track_hold(W, "buy", mint, t0)
+        return ct._track_hold(W, "sell", mint, t0 + minutes * 60)
+
+    def test_one_quick_trade_does_not_pause(self):
+        self.assertIsNone(self.trade("A", 2, 1000))
+        self.assertIsNone(self.trade("B", 30, 5000))
+        self.assertFalse(ct._load()["wallets"][W]["paused"])
+
+    def test_two_trades_under_5_min_pause_even_in_test(self):
+        self.trade("A", 2, 1000)
+        msg = self.trade("B", 3, 5000)
+        self.assertIn("trades de menos de 5 min", msg)
+        w = ct._load()["wallets"][W]
+        self.assertTrue(w["paused"])
+        self.assertEqual(ct.unpause_test_wallets(), [])          # not undone by the test-period unpause
+        self.assertIn("pausada (trades de menos de 5 min)", ct.wallets_text())
+
+    def test_paused_fast_wallet_still_sells_open_copies(self):
+        d = ct._load()
+        d["wallets"][W].update(paused=True, pause_reason="fast")
+        d["positions"][MINT] = {"wallet": W, "real": False, "tokens": 10, "cost_usd": 10.0, "opened_at": time.time()}
+        d["enabled"] = True
+        ct._save(d)
+        with patch.object(ct, "new_signals", return_value=[("sell", MINT, 1.0)]), \
+                patch.object(ct, "_close", return_value=[]) as close, patch.object(ct, "users_active", return_value=False):
+            ct.cycle()
+        close.assert_called_once()
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m
