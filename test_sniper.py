@@ -71,6 +71,47 @@ class ProtectionTests(unittest.TestCase):
         other.assert_not_called()
 
 
+class PumpFunTests(unittest.TestCase):
+    def test_pump_sources_are_read(self):
+        def fetch(url):
+            if "pump.fun" in url:
+                return [{"mint": "PumpMint1", "twitter": "https://x.com/a"}, {"mint": "PumpMint2"}]
+            return {"data": [{"relationships": {"base_token": {"data": {"id": "solana_GeckoMint"}}}}]}
+        mints, socials = sn.pump_mints(fetch)
+        self.assertEqual(set(mints), {"PumpMint1", "PumpMint2", "GeckoMint"})
+        self.assertEqual(socials, {"PumpMint1": True, "PumpMint2": False})
+
+    def test_pump_sources_down_keep_dexscreener(self):
+        def down(url):
+            raise ConnectionError()
+        self.assertEqual(sn.pump_mints(down), ([], {}))
+
+    def test_pump_coin_goes_through_same_filters_and_socials_from_pump(self):
+        p = pair(dexId="pumpswap", info={})
+        get = lambda path: [] if "/tokens/" not in path else [p]
+        found = sn.candidate_pairs(get, pump=([MINT], {MINT: True}))
+        self.assertEqual(len(found), 1)
+        self.assertEqual(sn.filter_reason(found[0], NOW), "")                 # socials registered on pump.fun
+        self.assertIn("sem site", sn.filter_reason(sn.candidate_pairs(get, pump=([MINT], {}))[0], NOW))
+
+    def test_launch_curve_skips_lp_lock_but_not_danger(self):
+        unlocked = lambda u: {"risks": [], "lpLockedPct": 0}
+        self.assertIn("rug", sn.rugcheck_reason(MINT, unlocked))               # normal pool: LP must be locked
+        self.assertEqual(sn.rugcheck_reason(MINT, unlocked, curve=True), "")   # pump.fun curve: can't be pulled
+        danger = lambda u: {"risks": [{"name": "Mutable metadata", "level": "danger"}], "lpLockedPct": 0}
+        self.assertIn("RugCheck", sn.rugcheck_reason(MINT, danger, curve=True))
+
+    def test_cycle_marks_curve_coins(self):
+        sn_set = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(tempfile.mkdtemp(), "w.json")})
+        sn_set.start()
+        self.addCleanup(sn_set.stop)
+        sn.set_mode(True, False)
+        get = lambda path: [] if "/tokens/" not in path else [pair(dexId="pumpfun")]
+        with patch.object(sn, "safety_reason", return_value="x") as safety:
+            sn.cycle(None, None, get=get, now=NOW, pump=([MINT], {}))
+        self.assertTrue(safety.call_args.kwargs["curve"])
+
+
 class StopLossTests(unittest.TestCase):
     def test_sniper_stop_is_40_percent(self):
         from live_exit_monitor import position_signal

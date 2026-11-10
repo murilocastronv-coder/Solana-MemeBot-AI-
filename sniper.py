@@ -56,6 +56,16 @@ START_SIM_USD = 100.0
 DEX = "https://api.dexscreener.com"
 FEEDS = ("/token-profiles/latest/v1", "/token-boosts/latest/v1", "/token-boosts/top/v1")
 RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
+# pump.fun: coins still on the launch curve and coins already on PumpSwap
+PUMPFUN_ENABLED = os.getenv("SNIPER_PUMPFUN", "true").strip().lower() != "false"
+PUMP_API = os.getenv("SNIPER_PUMP_API", "https://frontend-api-v3.pump.fun").rstrip("/")
+PUMP_FEEDS = ("/coins?offset=0&limit=50&sort=last_trade_timestamp&order=DESC&includeNsfw=false",
+              "/coins?offset=0&limit=50&sort=market_cap&order=DESC&includeNsfw=false")
+GECKO = "https://api.geckoterminal.com/api/v2"
+GECKO_FEEDS = ("/networks/solana/dexes/pump-fun/pools?page=1&sort=h24_tx_count_desc",
+               "/networks/solana/dexes/pumpswap/pools?page=1&sort=h24_tx_count_desc")
+PUMP_DEXES = {"pumpfun", "pumpswap"}
+SOURCES = {"dexscreener": 0, "pumpfun": 0, "geckoterminal": 0}
 BAD_EXTENSIONS = {"transferHook": "token com gatilho de transferência (pode travar a venda)",
                   "permanentDelegate": "criador pode tirar as moedas da sua carteira",
                   "nonTransferable": "token não pode ser transferido",
@@ -119,8 +129,41 @@ def _get(url):
     return r.json()
 
 
-def candidate_pairs(get=None):
-    """Young Solana pairs from DexScreener's new/boosted feeds (best pair per token)."""
+def pump_mints(fetch=None):
+    """pump.fun coins: (mints, {mint: has website/twitter/telegram}). Each source may fail alone."""
+    fetch = fetch or _get
+    mints, socials = [], {}
+    if not PUMPFUN_ENABLED:
+        return mints, socials
+    for feed in PUMP_FEEDS:
+        try:
+            rows = fetch(PUMP_API + feed)
+        except Exception:
+            continue
+        rows = rows.get("coins", []) if isinstance(rows, dict) else rows
+        for c in rows if isinstance(rows, list) else []:
+            if isinstance(c, dict) and c.get("mint"):
+                mints.append(c["mint"])
+                socials[c["mint"]] = bool(c.get("website") or c.get("twitter") or c.get("telegram"))
+    SOURCES["pumpfun"] = len(set(mints))
+    gecko = []
+    for feed in GECKO_FEEDS:
+        try:
+            rows = fetch(GECKO + feed)
+        except Exception:
+            continue
+        for pool in (rows or {}).get("data", []) if isinstance(rows, dict) else []:
+            base = ((((pool or {}).get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id", "")
+            if base.startswith("solana_"):
+                gecko.append(base[len("solana_"):])
+    SOURCES["geckoterminal"] = len(set(gecko))
+    return mints + gecko, socials
+
+
+def candidate_pairs(get=None, pump=None):
+    """Young Solana pairs from DexScreener's new/boosted feeds plus pump.fun coins (best pair per token).
+    Trading data always comes from DexScreener, so every coin goes through the same filters."""
+    custom = get is not None
     get = get or (lambda path: _get(DEX + path))
     mints = []
     for feed in FEEDS:
@@ -131,7 +174,11 @@ def candidate_pairs(get=None):
         for row in rows if isinstance(rows, list) else []:
             if isinstance(row, dict) and row.get("chainId") == "solana" and row.get("tokenAddress"):
                 mints.append(row["tokenAddress"])
-    mints = [m for m in dict.fromkeys(mints) if m not in QUOTES][:120]
+    SOURCES["dexscreener"] = len(set(mints))
+    if pump is None:
+        pump = pump_mints() if not custom else ([], {})
+    pmints, socials = pump
+    mints = [m for m in dict.fromkeys(mints + pmints) if m not in QUOTES][:240]
     best = {}
     for i in range(0, len(mints), 30):
         try:
@@ -144,6 +191,8 @@ def candidate_pairs(get=None):
                 continue
             liq = float((p.get("liquidity") or {}).get("usd") or 0)
             if mint not in best or liq > float((best[mint].get("liquidity") or {}).get("usd") or 0):
+                if socials.get(mint):
+                    p = dict(p, pump_socials=True)
                 best[mint] = p
     return list(best.values())
 
@@ -171,7 +220,7 @@ def filter_reason(p, now=None):
     if age > MAX_AGE_S:
         return "moeda velha demais"
     info = p.get("info") or {}
-    if REQUIRE_SOCIALS and not (info.get("websites") or info.get("socials")):
+    if REQUIRE_SOCIALS and not (info.get("websites") or info.get("socials") or p.get("pump_socials")):
         return "sem site/rede social"
     tx5 = (p.get("txns") or {}).get("m5") or {}
     buys, sells = int(tx5.get("buys") or 0), int(tx5.get("sells") or 0)
@@ -215,7 +264,7 @@ def token_program_reason(mint, rpc=None):
     return ""
 
 
-def rugcheck_reason(mint, get=None):
+def rugcheck_reason(mint, get=None, curve=False):
     get = get or _get
     try:
         r = get(RUGCHECK.format(mint))
@@ -227,7 +276,8 @@ def rugcheck_reason(mint, get=None):
     if danger:
         return "RugCheck: " + str(danger[0])
     locked = r.get("lpLockedPct")
-    if locked is not None and float(locked) < MIN_LP_LOCKED:
+    # pump.fun launch curve: the liquidity sits in the curve contract, the creator can't pull it
+    if not curve and locked is not None and float(locked) < MIN_LP_LOCKED:
         return "liquidez só " + format(float(locked), ".0f") + "% travada/queimada (risco de rug)"
     return ""
 
@@ -242,12 +292,12 @@ def impact_reason(mint):
     return ("impacto de preço " + format(impact, ".1f") + "%") if impact > MAX_IMPACT else ""
 
 
-def safety_reason(mint):
+def safety_reason(mint, curve=False):
     """All protections; '' = safe to buy."""
     import copy_trader as ct
     for check in (lambda: ct.safety_reason(mint),            # mint/freeze revoked, top 10 < 25%, sell test >= 92%
                   lambda: token_program_reason(mint),
-                  lambda: rugcheck_reason(mint),
+                  lambda: rugcheck_reason(mint, curve=curve),
                   lambda: impact_reason(mint)):
         try:
             why = check()
@@ -352,7 +402,7 @@ def sim_exits(send=None, chat=None):
                  " (" + label + "): " + format(pnl, "+.2f") + " USD")
 
 
-def cycle(send=None, chat=None, get=None, now=None):
+def cycle(send=None, chat=None, get=None, now=None, pump=None):
     """One scan: filter, protect, buy. Exits of real positions run in the live engine."""
     if not enabled():
         return
@@ -362,7 +412,10 @@ def cycle(send=None, chat=None, get=None, now=None):
     now = now or time.time()
     stats = {"at": now, "seen": 0, "passed_filters": 0, "bought": 0, "rejected": {}, "last_reject": ""}
     d = _load()
-    for p in candidate_pairs(get):
+    pairs = candidate_pairs(get, pump)
+    import logging
+    logging.info("sniper scan: %s pairs (sources %s)", len(pairs), SOURCES)
+    for p in pairs:
         stats["seen"] += 1
         mint = (p.get("baseToken") or {}).get("address")
         symbol = (p.get("baseToken") or {}).get("symbol") or mint[:6]
@@ -371,7 +424,7 @@ def cycle(send=None, chat=None, get=None, now=None):
         why = filter_reason(p, now)
         if not why:
             stats["passed_filters"] += 1
-            why = safety_reason(mint)
+            why = safety_reason(mint, curve=p.get("dexId") == "pumpfun")
             if why and "indisponível" not in why:
                 _mark_tried(mint, now)            # failed a protection: don't look at it again today
             else:
@@ -394,6 +447,9 @@ def status_text():
              "Liquidez US$ " + format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil · moeda com mais de " +
              _age_text(MIN_AGE_S) + " · US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " +
              str(MAX_POSITIONS) + " posições · opera o dia inteiro",
+             "Fontes: DexScreener " + str(SOURCES["dexscreener"]) + " · pump.fun " + str(SOURCES["pumpfun"]) +
+             " · GeckoTerminal (pump.fun/PumpSwap) " + str(SOURCES["geckoterminal"]) + " moedas" +
+             ("" if PUMPFUN_ENABLED else " (pump.fun desligada)"),
              "Entra com impulso: compras > vendas e preço subindo +" + format(MIN_CHANGE_5M, ".0f") + "% a +" +
              format(MAX_CHANGE_5M, ".0f") + "% em 5 min (sem pegar topo)",
              "🛡️ Anti-rug: criador sem poder de criar/congelar, liquidez travada ≥ " + format(MIN_LP_LOCKED, ".0f") +

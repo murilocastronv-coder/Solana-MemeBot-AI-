@@ -151,7 +151,11 @@ python -m unittest discover -p "test_*.py"
 - O 📊 Status do dono mostra quantos usuários estão copiando e o total de taxas recebidas.
 
 ## 🎯 Sniper (dono do bot, SIMULAÇÃO ou REAL)
-- Procura o dia inteiro (a cada 30 s) moedas novas e em alta na DexScreener e compra só as que passam em tudo:
+- Procura o dia inteiro (a cada 30 s) moedas novas e em alta na DexScreener **e na pump.fun** (moedas ainda na
+  curva de lançamento e já na PumpSwap, pela API da pump.fun e pela GeckoTerminal; `SNIPER_PUMPFUN=false`
+  desliga) e compra só as que passam em tudo. Os dados de negociação vêm sempre da DexScreener, então as
+  moedas da pump.fun passam pelos mesmos filtros e proteções. Na curva de lançamento a liquidez fica presa
+  no contrato (o criador não consegue tirar), então ali não se exige liquidez travada; o resto vale igual:
   - **liquidez entre US$ 10 mil e US$ 250 mil**, moeda com **pelo menos 1 hora** de criada (e até 24 h), par em SOL/USDC;
   - **estratégia de impulso**: nos últimos 5 min ≥ 15 compras, compras ≥ 1,3× vendas, volume ≥ US$ 5 mil,
     preço +2% a +25% (subindo, sem pegar topo) e positivo na última hora; valor de mercado ≤ 15× a liquidez;
