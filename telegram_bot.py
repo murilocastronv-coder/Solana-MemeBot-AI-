@@ -59,9 +59,9 @@ def is_trade_message(text):
 def fingerprint(text):
  """Same message with other numbers (prices, counts, minutes) counts as a repetition."""
  return re.sub(r"\s+"," ",re.sub(r"[0-9]+([.,][0-9]+)?","#",text or "")).strip()[:600]
-def should_send(text,now=None):
+def should_send(text,now=None,chat=None):
  if getattr(CTX,"interactive",False) or is_trade_message(text) or NOTIFY_REPEAT_S<=0:return True
- now=now or time.time();key=fingerprint(text)
+ now=now or time.time();key=str(chat)+"|"+fingerprint(text)
  with SENT_LOCK:
   if now-SENT_AT.get(key,0)<NOTIFY_REPEAT_S:return False
   SENT_AT[key]=now
@@ -69,7 +69,7 @@ def should_send(text,now=None):
    for k in sorted(SENT_AT,key=SENT_AT.get)[:1000]:SENT_AT.pop(k,None)
  return True
 def send(chat,text,keyboard=None):
- if not should_send(text):
+ if not should_send(text,chat=chat):
   logging.info("repeated notice held back (%.0f h): %s",NOTIFY_REPEAT_S/3600,(text or "")[:80].replace("\n"," "))
   return {}
  args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
@@ -96,8 +96,11 @@ def keyboard():
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def user_keyboard():
- """Menu of a Telegram account that is not the owner: only its own wallet."""
- return [[{"text":"👛 Minha carteira","callback_data":"wallet_create"}],
+ """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
+ return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
+  [{"text":"⏹️ Parar cópia","callback_data":"u_off"},{"text":"📊 Meu status","callback_data":"u_status"}],
+  [{"text":"📦 Minhas posições","callback_data":"u_pos"},{"text":"⚙️ Valor por cópia","callback_data":"u_size"}],
+  [{"text":"👛 Minha carteira","callback_data":"wallet_create"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
 def keyboard_for(chat):
@@ -117,8 +120,13 @@ def status_text():
    (wallet_holdings_line()+"\n" if get_address() else "")+
    "Perda do dia: US$ "+format(st["daily_loss_usd"],".2f")+(" / "+format(trade_state.daily_loss_limit(),".2f") if trade_state.DAILY_LOSS_LIMIT_ENABLED else " (sem limite diário)")+"\n"+
    "P/L real hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD · total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD · operações: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)\n"+
-   robot_alive_line())
+   users_line()+robot_alive_line())
  except Exception as exc:return "Status indisponível: "+type(exc).__name__
+def users_line():
+ try:
+  import user_copy
+  return user_copy.owner_summary()+"\n"
+ except Exception:return ""
 def last_cycle_line(c):
  if not c:return "Última rodada: aguardando a primeira (a cada 2 min)."
  ago=int(time.time()-c.get("at",0))
@@ -206,8 +214,10 @@ def handle(update):
    return
  if action=="/id":
   send(chat,"Seu chat ID privado: "+str(chat)+"\nIdentificação privada. O proprietário vinculado é mantido no disco persistente.");return
+ if not authorized(chat) and action.startswith("u_"):
+  user_copy_action(chat,action);return
  if action in WALLET_ACTIONS or not authorized(chat):
-  # every Telegram account has its own unique wallet; only the owner controls the copy trade
+  # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
  if action in ("audit","/auditar"):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
@@ -275,6 +285,40 @@ def handle(update):
   send(chat,"Esse controle foi removido. Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  else:menu(chat)
+def user_copy_action(chat,action):
+ """Copy trade of an account that is not the owner (its own wallet, 4% fee per buy and sell)."""
+ import user_copy as uc
+ kb=user_keyboard();fee=format(uc.FEE_RATE*100,".0f")+"%"
+ try:
+  if action=="u_sim":
+   uc.set_mode(chat,"sim")
+   send(chat,"🧪 Seu copy trade em SIMULAÇÃO (preços reais, US$ 100 de mentira, taxa de "+fee+" simulada).\n\n"+uc.status_text(chat),kb);return
+  if action=="u_real":
+   if not uc.load(chat).get("terms_at"):
+    send(chat,"💵 COPY TRADE REAL — LEIA ANTES DE LIGAR\n"
+     "• O bot compra e vende com a SUA carteira do bot, copiando as carteiras que ele encontrou e auditou.\n"
+     "• TAXA: "+fee+" do valor de CADA COMPRA e de CADA VENDA, enviada em SOL para a carteira do dono do bot.\n"
+     "• Valor por cópia: US$ "+format(uc.load(chat)["order_usd"],".0f")+" (mude em ⚙️ Valor por cópia). Máx. "+str(uc.MAX_POSITIONS)+" posições.\n"
+     "• Memecoins são de alto risco: você pode perder todo o valor. Copiar não garante lucro.\n"
+     "• Deixe ~0,01 SOL a mais para taxas da rede.",
+     [[{"text":"✅ Aceito a taxa de "+fee+" e ligo o REAL","callback_data":"u_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"u_status"}]]);return
+   action="u_real_ok"
+  if action=="u_real_ok":
+   uc.accept_terms(chat);uc.set_mode(chat,"real")
+   address,_=user_wallets.create_or_get(chat)
+   send(chat,"💵 SEU COPY TRADE REAL ESTÁ LIGADO (taxa "+fee+" por compra e por venda).\nCarteira: "+address+"\n\n"+uc.status_text(chat),kb);return
+  if action=="u_off":
+   uc.set_mode(chat,"off")
+   send(chat,"⏹️ Seu copy trade foi desligado: não abre novas cópias. As posições abertas são vendidas quando a carteira copiada vender.\n\n"+uc.status_text(chat),kb);return
+  if action=="u_pos":send_parts(chat,uc.positions_text(chat),kb);return
+  if action=="u_size":
+   send(chat,"⚙️ Quanto usar em cada cópia? (agora: US$ "+format(uc.load(chat)["order_usd"],".0f")+")",
+    [[{"text":"US$ "+str(v),"callback_data":"u_size_"+str(v)} for v in uc.ORDER_CHOICES],[{"text":"⬅️ Voltar","callback_data":"u_status"}]]);return
+  if action.startswith("u_size_"):
+   uc.set_order_usd(chat,int(action.split("_")[-1]))
+   send(chat,"✅ Valor por cópia: US$ "+action.split("_")[-1]+".\n\n"+uc.status_text(chat),kb);return
+  send(chat,uc.status_text(chat),kb)
+ except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],kb)
 WALLET_ACTIONS={"wallet_export","/exportar_chave","wallet_create","/criar_carteira","/carteira","/wallet","wallet_connect",
  "/depositar","/deposito","wallet_deposit","/sacar","wallet_withdraw","wallet_balance","/saldo"}
 def wallet_action(chat,action):
@@ -287,7 +331,8 @@ def wallet_action(chat,action):
   send(chat,"⚠️ Não foi possível abrir sua carteira agora. Tente de novo em instantes.",kb);return
  if created:
   send(chat,"🆕 CARTEIRA CRIADA SÓ PARA VOCÊ\nCada conta do Telegram recebe a sua própria carteira Solana, única e nova.\n\nEndereço (Solana mainnet):\n"+address+
-   "\n\n🔐 A chave privada fica criptografada no servidor. Toque em 🔑 Exportar carteira para criar sua senha forte e levar a chave para a Phantom.",kb)
+   "\n\n🔐 A chave privada fica criptografada no servidor. Toque em 🔑 Exportar carteira para criar sua senha forte e levar a chave para a Phantom."+
+   ("" if owner else "\n\n👥 Você também tem copy trade: teste em 👥 Copiar (SIMULAÇÃO) ou deposite SOL e ligue 💵 Copiar (REAL) (taxa de 4% por compra e por venda)."),kb)
   if action=="/start" and not owner:return
  if action=="/start" and not owner:
   send(chat,"👛 SUA CARTEIRA DO BOT\n"+address+"\n\nEla é só sua: cada conta do Telegram tem a própria carteira.",kb);return
@@ -388,6 +433,7 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
+USERS_UPKEEP={"next":0.0}
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -399,6 +445,12 @@ def copy_loop():
    if not chat:continue
    for m in copy_trader.cycle(send,chat):send(chat,m)   # also runs with copy off: sells open copies with the wallet
   except Exception as exc:logging.warning("copy cycle failed: %s",type(exc).__name__)
+  if time.monotonic()>=USERS_UPKEEP["next"]:
+   USERS_UPKEEP["next"]=time.monotonic()+60
+   try:
+    import user_copy
+    user_copy.upkeep(send)       # users: owed fees, unconfirmed buys, failed sells
+   except Exception as exc:logging.warning("users upkeep failed: %s",type(exc).__name__)
 
 def dex_rpc():
  import dex_wallets

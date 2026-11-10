@@ -134,3 +134,15 @@ python -m unittest discover -p "test_*.py"
   2. **entre com essa senha** para ver a chave privada e importar na Phantom.
   Só o hash da senha é guardado (`export_passwords.json`). 5 senhas erradas bloqueiam a exportação por 1 hora.
   O bot nunca pede senha nem chave no Telegram.
+
+## Copy trade para todos os usuários (taxa de 4%)
+- Toda conta do Telegram tem o **próprio copy trade**, com a **própria carteira**: 👥 Copiar (SIMULAÇÃO),
+  💵 Copiar (REAL), ⏹️ Parar cópia, 📊 Meu status, 📦 Minhas posições e ⚙️ Valor por cópia
+  (US$ 5, 10, 20, 32 ou 50; padrão `USER_ORDER_USD=10`; máx. `USER_MAX_POSITIONS=8` posições).
+- Copia as mesmas carteiras que o bot encontrou e auditou, com os mesmos filtros: quando elas compram,
+  todos os usuários ligados compram; quando vendem, eles vendem.
+- **Taxa: 4% (`USER_FEE_PERCENT`) de cada compra e de cada venda**, enviada em SOL para a carteira
+  principal do dono (a do `TELEGRAM_CHAT_ID`; ou `FEE_WALLET`). A taxa só é cobrada se a operação deu
+  certo; se a transferência falhar, fica pendente e o bot tenta de novo a cada minuto.
+  Para ligar o REAL, o usuário precisa tocar em "✅ Aceito a taxa de 4%".
+- O 📊 Status do dono mostra quantos usuários estão copiando e o total de taxas recebidas.
