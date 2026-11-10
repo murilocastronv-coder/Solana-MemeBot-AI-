@@ -86,5 +86,18 @@ class CopySellTests(unittest.TestCase):
         sell.assert_called_once_with("300", MINT, 1.0, None)
 
 
+class MonitorTests(unittest.TestCase):
+    def test_copy_position_is_monitored_without_error(self):
+        import live_exit_monitor as m
+        pos = {"mode": "copy", "token_amount_raw": 100, "cost_usd": 10.0, "opened_at": time.time()}
+        with patch.object(m, "_load", return_value={"positions": {MINT: pos}, "pending": {}}), \
+                patch.object(m, "quote_value_usd", return_value=12.0), patch.object(m.live_trade_state, "update_peak"), \
+                patch.object(m, "_jupiter_healthy") as healthy:
+            out = list(m._evaluate())
+        healthy.assert_not_called()                                   # no "failure" path, never written off as dead
+        self.assertEqual(out[0][2]["action"], "hold")
+        self.assertAlmostEqual(out[0][2]["peak_ratio"], 1.2)
+
+
 if __name__ == "__main__":
     unittest.main()
