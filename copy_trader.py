@@ -108,6 +108,8 @@ REPLACE_PNL_MARGIN = _env("COPY_REPLACE_PNL_MARGIN", 1.2)
 # Test period: a wallet that enters is copied for at least TEST_DAYS before any automatic removal
 # or replacement (only /deixar removes it earlier), so its real copy results can be seen.
 TEST_DAYS = _env("COPY_TEST_DAYS", 3)
+# During the test a wallet is only paused if its copies lost this much (US$) in total
+TEST_MAX_LOSS_USD = _env("COPY_TEST_MAX_LOSS_USD", 100)
 
 
 def _busy(d):
@@ -991,10 +993,35 @@ def _score(d, wallet, pnl):
     w["copies"] += 1
     w["wins"] += 1 if pnl > 0 else 0
     w["pnl_usd"] = round(w["pnl_usd"] + pnl, 4)
-    if w["copies"] >= MIN_COPIES_TO_JUDGE and w["pnl_usd"] < 0 and not w["paused"]:
+    if w["paused"]:
+        return None
+    if in_test(w):
+        # 3-day test: keep copying; pause only if its copies lost a lot
+        if w["pnl_usd"] <= -TEST_MAX_LOSS_USD:
+            w["paused"] = True
+            return ("⏸️ Parei de copiar " + wallet[:6] + "… no teste: perdeu muito (" + str(w["copies"]) +
+                    " cópias, P/L " + format(w["pnl_usd"], "+.2f") + " USD, limite −US$ " + format(TEST_MAX_LOSS_USD, ".0f") + ")")
+        return None
+    if w["copies"] >= MIN_COPIES_TO_JUDGE and w["pnl_usd"] < 0:
         w["paused"] = True
         return "⏸️ Parei de copiar " + wallet[:6] + "…: " + str(w["copies"]) + " cópias, P/L " + format(w["pnl_usd"], "+.2f") + " USD"
     return None
+
+
+def unpause_test_wallets():
+    """Wallets in the 3-day test that were paused without losing a lot go back to being copied."""
+    back = []
+    with _LOCK:
+        d = _load()
+        for a, w in d["wallets"].items():
+            if w.get("paused") and in_test(w) and float(w.get("pnl_usd", 0.0)) > -TEST_MAX_LOSS_USD:
+                w["paused"] = False
+                back.append(a)
+        if back:
+            _save(d)
+    for a in back:
+        _event("▶️ voltei a copiar " + a[:6] + "… (em teste, sem prejuízo grande)")
+    return back
 
 
 def _open(mint, wallet, send, chat):
@@ -1474,6 +1501,7 @@ def cycle(send=None, chat=None):
     active = owner_on or users_on        # signals are read while the owner or any user is copying
     msgs = []
     ensure_test_start()
+    unpause_test_wallets()
     adopt_orphans()
     drop_finished_leaving()
     msgs += sell_if_already_sold(send, chat)

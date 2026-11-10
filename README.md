@@ -105,8 +105,9 @@ python -m unittest discover -p "test_*.py"
   com lucro nos 9 dias pelo menos 20% maior (`COPY_REPLACE_PNL_MARGIN`) e sem posição aberta.
 - **Período de teste:** toda carteira que entra é copiada por pelo menos 3 dias (`COPY_TEST_DAYS`)
   antes de qualquer remoção ou troca automática (auditoria, top 10, saldo, carteira melhor). Durante
-  o teste ela continua sendo copiada mesmo que a auditoria mude; só `/deixar` tira antes, e o prejuízo
-  em 5 cópias continua pausando. Carteiras antigas começam o teste quando o bot reinicia.
+  o teste ela continua sendo copiada mesmo que a auditoria mude e **não é pausada**; só `/deixar` tira antes,
+  e ela só é pausada se as cópias perderem muito (US$ 100 ou mais no total, `COPY_TEST_MAX_LOSS_USD`).
+  Carteira em teste pausada sem esse prejuízo volta a ser copiada sozinha. Carteiras antigas começam o teste quando o bot reinicia.
 - **Depois do teste:** a carteira fica só se as **cópias feitas pelo bot** derem lucro (soma das
   cópias > 0) — "✅ aprovada no teste", e continua enquanto o resultado das cópias for positivo.
   Prejuízo, resultado zero ou nenhuma cópia nos 3 dias: sai, fica 3 dias sem voltar e a busca coloca

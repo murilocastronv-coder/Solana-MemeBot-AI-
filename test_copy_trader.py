@@ -117,12 +117,39 @@ class CopyTests(unittest.TestCase):
         self.sell_sol = int(c.ORDER_USD * 0.8 / 200 * 1e9)                            # -20%
         self.assertTrue(any("stop" in m for m in c.cycle()))
 
-    def test_losing_wallet_is_paused(self):
+    def test_wallet_in_test_is_not_paused_by_small_losses(self):
         d = c._load()
+        d["wallets"][WALLET]["followed_at"] = time.time()            # 3-day test running
+        for _ in range(10):
+            self.assertIsNone(c._score(d, WALLET, -5.0))             # -US$ 50: keeps copying
+        self.assertFalse(d["wallets"][WALLET]["paused"])
+
+    def test_wallet_in_test_paused_only_if_it_loses_a_lot(self):
+        d = c._load()
+        d["wallets"][WALLET]["followed_at"] = time.time()
+        for _ in range(3):
+            c._score(d, WALLET, -30.0)
+        self.assertIn("perdeu muito", c._score(d, WALLET, -30.0))     # -US$ 120 >= US$ 100
+        self.assertTrue(d["wallets"][WALLET]["paused"])
+
+    def test_after_the_test_losing_wallet_is_paused(self):
+        d = c._load()
+        d["wallets"][WALLET]["followed_at"] = time.time() - 4 * 86400
         for _ in range(4):
             c._score(d, WALLET, -1.0)
         self.assertIn("Parei de copiar", c._score(d, WALLET, -1.0))
         self.assertTrue(d["wallets"][WALLET]["paused"])
+
+    def test_paused_test_wallet_without_big_loss_is_copied_again(self):
+        d = c._load()
+        d["wallets"][WALLET].update(followed_at=time.time(), paused=True, copies=6, pnl_usd=-64.0)
+        c._save(d)
+        self.assertEqual(c.unpause_test_wallets(), [WALLET])
+        self.assertFalse(c._load()["wallets"][WALLET]["paused"])
+        d = c._load()
+        d["wallets"][WALLET].update(paused=True, pnl_usd=-759.0)
+        c._save(d)
+        self.assertEqual(c.unpause_test_wallets(), [])                 # lost a lot: stays paused
 
     def test_unsafe_token_not_copied(self):
         self.make_holder()
