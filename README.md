@@ -160,6 +160,7 @@ python -m unittest discover -p "test_*.py"
   - **anti-golpe**: token sem taxa de transferência, gatilho, delegado permanente ou contas congeladas
     (Token-2022), e com site/rede social;
   - **anti-honeypot**: teste de compra e venda na Jupiter devolve ≥ 92% e impacto da nossa ordem ≤ 3%.
-- US$ 20 por compra (`SNIPER_ORDER_USD`), máx. 3 posições (`SNIPER_MAX_POSITIONS`), nunca compra a mesma
+- **US$ 38 por compra** (`SNIPER_ORDER_USD`; nunca compra menos: sem saldo livre de US$ 38 + taxas não compra
+  e avisa), **só 3 ordens ao mesmo tempo** (`SNIPER_MAX_POSITIONS`), nunca compra a mesma
   moeda duas vezes em 24 h. Saída: **stop −40%** (`SNIPER_STOP_LOSS`), a partir de +25% vende 12% abaixo do topo, sai em 30 min se
   não decolar. Todos os limites podem ser ajustados por variáveis `SNIPER_*`.

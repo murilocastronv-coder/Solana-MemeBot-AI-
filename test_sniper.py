@@ -97,12 +97,12 @@ class CycleTests(unittest.TestCase):
         sent = []
         with patch.object(sn, "safety_reason", return_value=""), \
                 patch.object(ct, "_order", side_effect=lambda i, o, a: {"outAmount": "1000" if i == sn.SOL_MINT
-                                                                         else str(int(0.2e9))}):   # flat price
+                                                                         else str(int(0.38e9))}):  # flat price (US$ 38)
             sn.cycle(lambda c, t: sent.append(t), 1, get=self._get([pair()]), now=NOW)
             sn.cycle(lambda c, t: sent.append(t), 1, get=self._get([pair()]), now=NOW + 60)   # not twice
         self.assertEqual(len(sn._load()["positions"]), 1)
         self.assertEqual(sum("COMPROU" in t for t in sent), 1)
-        with patch.object(ct, "_order", return_value={"outAmount": str(int(0.11e9))}):     # US$ 11 of 20: -45%
+        with patch.object(ct, "_order", return_value={"outAmount": str(int(0.2e9))}):      # US$ 20 of 38: -47%
             sn.sim_exits(lambda c, t: sent.append(t), 1)
         self.assertEqual(sn._load()["positions"], {})
         self.assertIn("PREJUÍZO", sent[-1])
@@ -124,10 +124,38 @@ class CycleTests(unittest.TestCase):
                 patch.object(st, "can_open", return_value=(True, "")), \
                 patch.object(wallet_holdings, "can_buy", return_value=(True, "")), \
                 patch.object(live_engine, "get_address", return_value="W"), \
+                patch.object(ct, "wallet_usd", return_value=100.0), \
+                patch("live_order_bridge.MAX_ORDER_USD", 38.0), \
                 patch.object(live_engine, "_execute_buy") as buy:
             sn.cycle(None, 1, get=self._get([pair()]), now=NOW)
         self.assertEqual(buy.call_args.args[7], "sniper")
-        self.assertEqual(buy.call_args.kwargs["usd"], sn.ORDER_USD)
+        self.assertEqual(buy.call_args.kwargs["usd"], 38)
+
+    def test_real_never_buys_less_than_38(self):
+        sn.set_mode(True, True)
+        import live_engine
+        import live_trade_state as st
+        import wallet_holdings
+        sent = []
+        common = [patch.object(sn, "safety_reason", return_value=""), patch.object(live_engine, "ready", return_value=True),
+                  patch.object(st, "can_open", return_value=(True, "")),
+                  patch.object(wallet_holdings, "can_buy", return_value=(True, "")),
+                  patch.object(live_engine, "get_address", return_value="W")]
+        for c in common:
+            c.start()
+            self.addCleanup(c.stop)
+        with patch.object(ct, "wallet_usd", return_value=30.0), patch("live_order_bridge.MAX_ORDER_USD", 38.0), \
+                patch.object(live_engine, "_execute_buy") as buy:
+            sn.cycle(lambda c, t: sent.append(t), 1, get=self._get([pair()]), now=NOW)
+        buy.assert_not_called()
+        self.assertIn("Deposite SOL", sent[-1])
+        with patch.object(ct, "wallet_usd", return_value=100.0), patch("live_order_bridge.MAX_ORDER_USD", 32.0), \
+                patch.object(live_engine, "_execute_buy") as buy:
+            sn.cycle(None, 1, get=self._get([pair()]), now=NOW + 1)
+        buy.assert_not_called()                              # cap below 38: refuses instead of buying 32
+
+    def test_only_3_sniper_orders_at_a_time(self):
+        self.assertEqual((sn.ORDER_USD, sn.MAX_POSITIONS), (38, 3))
 
 
 if __name__ == "__main__":
