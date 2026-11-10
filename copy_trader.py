@@ -48,7 +48,7 @@ MIN_ROUNDTRIP = 0.92
 NETWORK_FEE_USD = 0.003
 START_USD = 100.0
 MAX_WALLETS = int(_env("COPY_MAX_WALLETS", 30))
-MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 10))
+MAX_AUTO_WALLETS = int(_env("COPY_AUTO_MAX_WALLETS", 20))
 # A new candidate replaces an unproven followed wallet only if its score is clearly better.
 REPLACE_MARGIN = _env("COPY_REPLACE_MARGIN", 1.5)
 # Only follow wallets holding at least this much (SOL balance in USD); remove them below it.
@@ -77,7 +77,7 @@ AUDIT_MAX_TX = int(_env("COPY_AUDIT_MAX_TX", 300))
 RESULT_DAYS = _env("COPY_RESULT_DAYS", 9)
 RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 40))   # at least 40 trades in the period
 # Keep only the TOP_WALLETS wallets with the highest profit in the period; the rest are removed.
-TOP_WALLETS = int(_env("COPY_TOP_WALLETS", 10))
+TOP_WALLETS = int(_env("COPY_TOP_WALLETS", 20))
 RESULT_MIN_WIN = _env("COPY_RESULT_MIN_WIN", 0.5)
 RESULT_MIN_USD = _env("COPY_RESULT_MIN_USD", 0)
 AUDIT_VALID_S = _env("COPY_AUDIT_VALID_HOURS", 24) * 3600
