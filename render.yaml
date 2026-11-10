@@ -18,7 +18,12 @@ services:
       - key: DAILY_LOSS_LIMIT_ENABLED
         value: "false"
       - key: MAX_ORDER_USD
-        value: "32"
+        value: "38"
+      # Sniper: US$ 38 por compra, no máximo 3 ordens ao mesmo tempo
+      - key: SNIPER_ORDER_USD
+        value: "38"
+      - key: SNIPER_MAX_POSITIONS
+        value: "3"
       - key: COPY_ORDER_USD
         value: "32"
       # No máximo 8 operações copiadas abertas ao mesmo tempo

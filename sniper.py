@@ -47,8 +47,9 @@ REQUIRE_SOCIALS = os.getenv("SNIPER_REQUIRE_SOCIALS", "true").strip().lower() !=
 REQUIRE_RUGCHECK = os.getenv("SNIPER_REQUIRE_RUGCHECK", "true").strip().lower() != "false"
 MIN_LP_LOCKED = _f("SNIPER_MIN_LP_LOCKED", 80)
 MAX_IMPACT = _f("SNIPER_MAX_IMPACT", 3)
-ORDER_USD = _f("SNIPER_ORDER_USD", 20)
-MAX_POSITIONS = int(_f("SNIPER_MAX_POSITIONS", 3))
+ORDER_USD = _f("SNIPER_ORDER_USD", 38)              # every sniper buy is US$ 38 (never less)
+MAX_POSITIONS = int(_f("SNIPER_MAX_POSITIONS", 3))  # only 3 sniper orders at a time
+SOL_RESERVE_USD = _f("SNIPER_RESERVE_USD", 2)       # left for network fees / token accounts
 COOLDOWN_S = _f("SNIPER_COOLDOWN_HOURS", 24) * 3600
 SCAN_EVERY_S = _f("SNIPER_SCAN_SECONDS", 30)
 START_SIM_USD = 100.0
@@ -286,6 +287,18 @@ def _open_real(p, mint, symbol, send, chat):
     ok, why = wallet_holdings.can_buy(mint, live_engine.get_address())
     if not ok:
         return why
+    import live_order_bridge as bridge
+    if bridge.MAX_ORDER_USD < ORDER_USD:
+        return "MAX_ORDER_USD (US$ " + format(bridge.MAX_ORDER_USD, ".0f") + ") menor que a compra de US$ " + format(ORDER_USD, ".0f")
+    import copy_trader as ct
+    free = ct.wallet_usd(live_engine.get_address(), max_age=0)
+    if free is None:
+        return "saldo indisponível"
+    if free < ORDER_USD + SOL_RESERVE_USD:
+        if send and chat:
+            send(chat, "💤 Sniper: saldo livre US$ " + format(free, ".2f") + ". Cada compra é de US$ " + format(ORDER_USD, ".0f") +
+                 " (+ US$ " + format(SOL_RESERVE_USD, ".0f") + " para taxas). Deposite SOL para o sniper comprar.")
+        return "saldo abaixo de US$ " + format(ORDER_USD, ".0f")
     live_engine._execute_buy({"baseToken": {"address": mint, "symbol": symbol}}, mint, symbol, send, chat,
                              live_engine.get_address(), None, "sniper", usd=ORDER_USD)
     return ""
