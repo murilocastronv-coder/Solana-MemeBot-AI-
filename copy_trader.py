@@ -18,6 +18,7 @@ balance, signed, sent, confirmed on-chain); its exits run in the existing
 exit monitor (mode "copy").
 """
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -582,6 +583,71 @@ def adopt_orphans():
 ADOPTED = []   # (mint, wallet) put back by adopt_orphans: check once whether the wallet already sold
 
 
+SELL_RETRY_S = 30
+WATCH_EVERY_S = 60
+_WATCH = {"at": 0.0}
+
+
+def _want_sell(mint, reason, why=""):
+    """Mark a copied position to be sold (the copied wallet already sold). True the first time."""
+    with _LOCK:
+        d = _load()
+        p = d["positions"].get(mint)
+        if not p:
+            return False
+        first = not p.get("sell_wanted")
+        p.setdefault("sell_wanted", time.time())
+        p["sell_reason"] = reason
+        p["sell_tried"] = time.time()
+        if why:
+            p["sell_error"] = why
+        _save(d)
+        return first
+
+
+def retry_wanted_sells(send=None, chat=None):
+    """Positions whose copied wallet already sold but our sale did not go through: try again."""
+    msgs = []
+    with _LOCK:
+        wanted = [(m, p) for m, p in _load()["positions"].items() if p.get("sell_wanted")]
+    for mint, p in wanted:
+        if time.time() - float(p.get("sell_tried") or 0) < SELL_RETRY_S:
+            continue
+        with _LOCK:
+            d = _load()
+            if mint in d["positions"]:
+                d["positions"][mint]["sell_tried"] = time.time()
+                _save(d)
+        msgs += _close(mint, p.get("sell_reason") or "copy_follow", send, chat)
+    return msgs
+
+
+def watch_copied_balances(send=None, chat=None, now=None):
+    """Every minute: if the copied wallet no longer holds the coin (sold in a way we missed, sold to
+    USDT, many transactions at once, or moved the coins away), sell ours too."""
+    now = now or time.time()
+    if now - _WATCH["at"] < WATCH_EVERY_S:
+        return []
+    _WATCH["at"] = now
+    msgs = []
+    with _LOCK:
+        positions = {m: p for m, p in _load()["positions"].items() if not p.get("sell_wanted") and not p.get("pending_buy")}
+    for mint, p in positions.items():
+        w = p.get("wallet")
+        if not w or now - float(p.get("opened_at") or now) < 90:      # give a fresh copy time to settle
+            continue
+        try:
+            held = wallet_token_balance(w, mint)
+        except Exception:
+            continue
+        if held == 0:
+            _event(w[:6] + "… não tem mais " + mint[:6] + ": vendendo a cópia")
+            logging.info("copied wallet %s no longer holds %s: selling", w[:6], mint[:8])
+            _want_sell(mint, "copy_follow")
+            msgs += _close(mint, "copy_follow", send, chat)
+    return msgs
+
+
 def wallet_token_balance(wallet, mint):
     from solana_settlement import get_token_balance
     return get_token_balance(wallet, mint)
@@ -694,6 +760,9 @@ def positions_text():
                  "⚠️ carteira fora da lista — volta a ser vigiada na próxima rodada")
         if info and info.get("leaving"):
             watch += " (só até esta venda)"
+        if p.get("sell_wanted"):
+            watch = "⏳ a carteira já vendeu — tentando vender a cada " + str(SELL_RETRY_S) + " s" + \
+                    (" (último erro: " + str(p.get("sell_error"))[:80] + ")" if p.get("sell_error") else "")
         held = (time.time() - float(p.get("opened_at") or time.time())) / 60
         lines.append("• " + mint[:6] + "… " + ("💵 REAL" if p.get("real") else "🧪 SIM") + " · aberta há " +
                      (format(held, ".0f") + " min" if held < 120 else format(held / 60, ".1f") + " h") +
@@ -815,7 +884,7 @@ def _parse_tx(tx, wallet):
             if sign < 0:
                 pre_amounts[b.get("mint")] = pre_amounts.get(b.get("mint"), 0) + amount
     keys = [k.get("pubkey") if isinstance(k, dict) else k
-            for k in ((tx.get("transaction") or {}).get("message") or {}).get("accountKeys") or []]
+            for k in (((tx or {}).get("transaction") or {}).get("message") or {}).get("accountKeys") or []]
     sol_delta = 0
     if wallet in keys:
         i = keys.index(wallet)
@@ -839,24 +908,34 @@ def _parse_tx(tx, wallet):
 
 def new_signals(wallet, info):
     """New BUY/SELL signals of one wallet since the last look (oldest first)."""
-    sigs = _rpc("getSignaturesForAddress", [wallet, {"limit": 15}]) or []
+    sigs = _rpc("getSignaturesForAddress", [wallet, {"limit": 50}]) or []
     if not sigs:
         return []
     newest = sigs[0]["signature"]
     if info.get("last_sig") is None:
         info["last_sig"] = newest    # first look: start from now
         return []
-    fresh = []
-    for s in sigs:
-        if s["signature"] == info["last_sig"]:
+    fresh, found = [], False
+    for _page in range(4):           # up to 200 transactions since the last look: busy wallets don't lose sells
+        for s in sigs:
+            if s["signature"] == info["last_sig"]:
+                found = True
+                break
+            if s.get("err") is None:
+                fresh.append(s["signature"])
+        if found or len(sigs) < 50:
             break
-        if s.get("err") is None:
-            fresh.append(s["signature"])
+        sigs = _rpc("getSignaturesForAddress", [wallet, {"limit": 50, "before": sigs[-1]["signature"]}]) or []
+        if not sigs:
+            break
     info["last_sig"] = newest
     out = []
     for sig in reversed(fresh):
         tx = _rpc("getTransaction", [sig, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1")),
                                            "commitment": "confirmed"}])
+        if not tx:
+            # not available on the node yet: read this wallet again next round (last_sig is not saved)
+            raise RuntimeError("transaction not available yet")
         signal = signal_from_tx(tx, wallet)
         if signal:
             out.append(signal + (buy_value_usd(tx, wallet) if signal[0] == "buy" else sell_fraction(tx, wallet),))
@@ -993,7 +1072,13 @@ def _close(mint, reason, send=None, chat=None):
         try:
             live_engine.sell_now(mint, "copy_follow" if reason == "copy_follow" else reason, send, chat)
         except Exception as exc:
-            LAST_ERROR["text"] = "venda real falhou: " + type(exc).__name__
+            why = type(exc).__name__ + ": " + str(exc)[:160]
+            LAST_ERROR["text"] = "venda real falhou: " + why
+            logging.warning("copy sell failed for %s: %s", mint[:8], why)
+            first = _want_sell(mint, reason, why)
+            if first:
+                msgs.append("⚠️ A carteira copiada vendeu " + mint[:6] + "…, mas a minha venda falhou (" + why[:120] +
+                            "). Vou tentar de novo a cada " + str(SELL_RETRY_S) + " s até vender.")
             return msgs
         pnl = st.pnl_summary()["total_pnl_usd"] - before
     else:
@@ -1382,6 +1467,8 @@ def cycle(send=None, chat=None):
     adopt_orphans()
     drop_finished_leaving()
     msgs += sell_if_already_sold(send, chat)
+    msgs += retry_wanted_sells(send, chat)
+    msgs += watch_copied_balances(send, chat)
     try:
         msgs += recover_real_orphans()
     except Exception as exc:
