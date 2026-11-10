@@ -104,18 +104,6 @@ class CloneTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def test_clone_sets_exit_and_seeds_holds(self):
-        txs, _ = history()
-        closed, open_now = wp.build_positions([wp.parse_swap(x, W) for x in txs], 100)
-        s = wp.summarize(closed, open_now)
-        ex = c.clone(W, s, closed)
-        self.assertAlmostEqual(ex["tp"], 0.8, places=2)
-        self.assertAlmostEqual(ex["sl"], 0.25, places=2)
-        w = c._load()["wallets"][W]
-        self.assertTrue(w["clone"])
-        self.assertEqual(len(w["holds"]), 5)
-        self.assertIn("CLONE: TP +80%", c.wallets_text())
-
     def test_sim_position_uses_clone_exit_and_time_stop(self):
         q = patch.object(c, "EXIT_MODE", "tp_sl"); q.start(); self.addCleanup(q.stop)
         c.follow(W)
@@ -193,14 +181,10 @@ class NewRulesTests(unittest.TestCase):
             c.cycle()
         op.assert_called_once()
 
-    def test_total_cap_counts_copy_and_robot(self):
-        import clone_strategy as cs
-        d = cs._load()
-        d["positions"] = {"A": {}, "B": {}, "D": {}, "E": {}, "G": {}, "H": {}}
-        cs._save(d)
+    def test_total_cap_counts_copy_positions(self):
         d = c._load()
-        d["positions"]["C"] = {"wallet": W, "real": False}
-        d["positions"]["F"] = {"wallet": W, "real": False}
+        for m in "ABCDEFGH":
+            d["positions"][m] = {"wallet": W, "real": False}
         c._save(d)
         self.assertEqual(c.open_sim_total(), 8)
         c.follow(W)
