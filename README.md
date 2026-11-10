@@ -121,3 +121,16 @@ python -m unittest discover -p "test_*.py"
 - **Carteiras novas automáticas:** enquanto a lista tiver vaga (limite de 20,
   `COPY_AUTO_MAX_WALLETS`), a busca audita até 3 candidatas por rodada
   (`COPY_PREAUDIT_FILL_PER_CYCLE`) e coloca sozinha as aprovadas. Com a lista cheia, volta a 1 por rodada.
+
+## Carteira única por conta do Telegram
+- **Cada conta do Telegram recebe a sua própria carteira Solana**, nova e única, assim que manda /start
+  (ou toca em qualquer botão de carteira). Fica criptografada no disco (`user_wallets/<chat_id>.json`,
+  chave derivada de `BOT_WALLET_ENCRYPTION_PASSPHRASE`). Nunca é reaproveitada nem compartilhada.
+- O **dono** do bot (`TELEGRAM_CHAT_ID`) continua com a carteira principal, que é a que o copy trade usa.
+  As outras contas só veem os botões da própria carteira: 👛 Minha carteira, 📥 Depositar, 💰 Saldo,
+  💸 Saque e 🔑 Exportar. Elas não ligam nem desligam o copy trade.
+- **Exportar para a Phantom** (🔑 Exportar carteira → link seguro de 5 min, uso único):
+  1. primeira vez: **crie uma senha forte** (12+ caracteres, maiúscula, minúscula, número e símbolo);
+  2. **entre com essa senha** para ver a chave privada e importar na Phantom.
+  Só o hash da senha é guardado (`export_passwords.json`). 5 senhas erradas bloqueiam a exportação por 1 hora.
+  O bot nunca pede senha nem chave no Telegram.
