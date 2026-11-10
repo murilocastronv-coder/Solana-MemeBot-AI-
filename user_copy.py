@@ -598,7 +598,9 @@ def positions_text(chat):
         lines.append("• " + mint[:6] + "… " + ("💵 REAL" if p.get("real") else "🧪 SIM") +
                      (" · confirmando" if p.get("pending") else "") + " · há " +
                      (format(held, ".0f") + " min" if held < 120 else format(held / 60, ".1f") + " h") +
-                     " · US$ " + format(float(p.get("cost_usd", 0.0)), ".2f") + "\n  solscan.io/token/" + mint)
+                     " · US$ " + format(float(p.get("cost_usd", 0.0)), ".2f") +
+                     ("\n  👛 Carteira copiada (toque para copiar):\n  " + p["leader"] if p.get("leader") else "") +
+                     "\n  solscan.io/token/" + mint)
     return "\n".join(lines)
 
 

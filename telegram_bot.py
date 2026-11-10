@@ -73,8 +73,18 @@ def send(chat,text,keyboard=None):
   logging.info("repeated notice held back (%.0f h): %s",NOTIFY_REPEAT_S/3600,(text or "")[:80].replace("\n"," "))
   return {}
  args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
+ ents=address_entities(text)
+ if ents:args["entities"]=ents     # full addresses in monospace: one tap copies them
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
+ADDRESS_RE=re.compile(r"(?<![/\w.])[1-9A-HJ-NP-Za-km-z]{32,44}(?![\w])")
+def address_entities(text):
+ """Telegram 'code' entities for every full Solana address that is not part of a link (UTF-16 offsets)."""
+ out=[]
+ for m in ADDRESS_RE.finditer(text or ""):
+  start=len(text[:m.start()].encode("utf-16-le"))//2
+  out.append({"type":"code","offset":start,"length":len(m.group(0).encode("utf-16-le"))//2})
+ return out[:100]
 def send_parts(chat,text,keyboard=None):
  """Send a long text in parts; the menu goes on the last part (one message less to wait for)."""
  parts=split_message(text) or [""]
@@ -226,7 +236,7 @@ def handle(update):
  if action in ("copy_positions","/posicoes_copy"):
   import copy_trader as ct
   try:
-   send_parts(chat,ct.positions_text(),keyboard())   # answer at once from the saved state
+   send_parts(chat,ct.positions_text(),ct.wallet_buttons(ct.positions_wallets())+keyboard())   # answer at once
   except Exception as exc:send(chat,"Posições indisponíveis: "+type(exc).__name__,keyboard());return
   def check_chain():
    """Blockchain check for coins the bot lost track of: off the tap, reports only if it found something."""
@@ -234,14 +244,14 @@ def handle(update):
     ct.adopt_orphans()
     found=ct.recover_real_orphans(force=True)
     for m in found:send(chat,m)
-    if found:send_parts(chat,ct.positions_text(),keyboard())
+    if found:send_parts(chat,ct.positions_text(),ct.wallet_buttons(ct.positions_wallets())+keyboard())
    except Exception as exc:logging.warning("orphan recovery failed: %s",type(exc).__name__)
   run_async(check_chain)
   return
  if action in ("copy_following","/copiadas"):
   import copy_trader as ct
   try:
-   send_parts(chat,ct.wallets_text(),keyboard())
+   send_parts(chat,ct.wallets_text(),ct.wallet_buttons(list(ct._load()["wallets"]))+keyboard())
   except Exception as exc:send(chat,"Lista indisponível: "+type(exc).__name__,keyboard())
   return
  if action in ("copy_wallets","/carteiras"):
@@ -310,7 +320,10 @@ def user_copy_action(chat,action):
   if action=="u_off":
    uc.set_mode(chat,"off")
    send(chat,"⏹️ Seu copy trade foi desligado: não abre novas cópias. As posições abertas são vendidas quando a carteira copiada vender.\n\n"+uc.status_text(chat),kb);return
-  if action=="u_pos":send_parts(chat,uc.positions_text(chat),kb);return
+  if action=="u_pos":
+   import copy_trader as ct
+   leaders=[p.get("leader") for p in uc.load(chat)["positions"].values()]
+   send_parts(chat,uc.positions_text(chat),ct.wallet_buttons(leaders)+kb);return
   if action=="u_size":
    send(chat,"⚙️ Quanto usar em cada cópia? (agora: US$ "+format(uc.load(chat)["order_usd"],".0f")+")",
     [[{"text":"US$ "+str(v),"callback_data":"u_size_"+str(v)} for v in uc.ORDER_CHOICES],[{"text":"⬅️ Voltar","callback_data":"u_status"}]]);return

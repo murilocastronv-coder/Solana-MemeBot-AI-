@@ -697,8 +697,27 @@ def positions_text():
         held = (time.time() - float(p.get("opened_at") or time.time())) / 60
         lines.append("• " + mint[:6] + "… " + ("💵 REAL" if p.get("real") else "🧪 SIM") + " · aberta há " +
                      (format(held, ".0f") + " min" if held < 120 else format(held / 60, ".1f") + " h") +
-                     " · de " + w[:6] + "…" + w[-4:] + "\n  " + watch + "\n  solscan.io/token/" + mint)
+                     " · de " + w[:6] + "…" + w[-4:] + "\n  " + watch +
+                     "\n  👛 Carteira copiada (toque para copiar):\n  " + w +
+                     "\n  solscan.io/token/" + mint)
     return "\n".join(lines)
+
+
+def wallet_buttons(addresses):
+    """One row per copied wallet: copy its address with one tap, or open it on Solscan."""
+    rows, seen = [], set()
+    for w in addresses:
+        if not w or w == "?" or w in seen:
+            continue
+        seen.add(w)
+        short = w[:4] + "…" + w[-4:]
+        rows.append([{"text": "📋 Copiar " + short, "copy_text": {"text": w}},
+                     {"text": "🔎 Ver " + short, "url": "https://solscan.io/account/" + w}])
+    return rows[:10]
+
+
+def positions_wallets():
+    return [p.get("wallet") for p in _load()["positions"].values()]
 
 
 def unfollow(address):
