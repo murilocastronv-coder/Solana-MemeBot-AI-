@@ -175,5 +175,23 @@ class MarketConsensusTests(unittest.TestCase):
         self.assertEqual(dex_wallets.sellers_of(sell, MINT), [w])
 
 
+class TrailNoticeTests(unittest.TestCase):
+    def test_owner_is_told_when_the_trailing_stop_starts(self):
+        import live_engine
+        import live_exit_monitor as m
+        pos = {"mode": "consensus", "symbol": "VEYL", "token_amount_raw": 100, "cost_usd": 32.0, "opened_at": time.time()}
+        sent = []
+        with patch.object(m, "_load", return_value={"positions": {MINT: pos}, "pending": {}}), \
+                patch.object(m, "quote_value_usd", return_value=42.2), \
+                patch.object(m.live_trade_state, "update_peak"), \
+                patch.object(m.live_trade_state, "set_position_fields") as mark, \
+                patch.object(live_engine.bridge, "preflight"), patch.object(live_engine, "get_address", return_value="W"):
+            live_engine.exit_cycle(lambda c, t: sent.append(t), 1)
+        self.assertIn("STOP MÓVEL ATIVADO — VEYL +32%", sent[0])
+        mark.assert_called_once_with(MINT, trail_armed=True)                    # told once, not every 20 s
+        import telegram_bot as tb
+        self.assertTrue(tb.is_trade_message(sent[0]))
+
+
 if __name__ == "__main__":
     unittest.main()
