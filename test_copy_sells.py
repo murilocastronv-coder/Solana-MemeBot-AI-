@@ -306,7 +306,7 @@ class ProportionalTests(unittest.TestCase):
                 patch.object(ct, "users_active", return_value=False), \
                 patch.object(ct, "_open", return_value=None) as buy:
             ct.cycle()
-        self.assertEqual(buy.call_args.kwargs["usd"], 10.0)            # 10% of the US$ 100 simulation wallet
+        self.assertEqual(buy.call_args.kwargs["usd"], 6.0)             # 10% -> capped at 6% of the US$ 100 wallet
         self.assertIn("📐", ct.wallets_text())
 
     def test_mirror_wallet_copies_even_a_fast_trader_without_audit(self):
@@ -336,12 +336,13 @@ class ProportionalTests(unittest.TestCase):
         ct._save(d)
         self.assertEqual(ct.unpause_test_wallets(), [W])
 
-    def test_mirror_wallet_between_5_and_22_percent(self):
+    def test_mirror_wallet_between_5_and_6_percent(self):
         lim = ct.fraction_limits(W)                                     # W is the mirror wallet in this test
-        self.assertEqual(lim, (0.05, 0.22))
+        self.assertEqual(lim, (0.05, 0.06))
         self.assertEqual(ct.proportional_usd(0.03, 1000, limits=lim), 50.0)     # 3% -> at least 5%
-        self.assertEqual(ct.proportional_usd(0.15, 1000, limits=lim), 150.0)    # 15% -> 15%
-        self.assertEqual(ct.proportional_usd(0.40, 1000, limits=lim), 220.0)    # 40% -> at most 22%
+        self.assertEqual(ct.proportional_usd(0.40, 1000, limits=lim), 60.0)     # 40% -> at most 6%
+        self.assertEqual(ct.add_on_room(60, 50, 1000, ct.MIRROR_MAX_COIN_FRACTION), 10.0)   # position up to 6%
+        self.assertIsNone(ct.add_on_room(60, 60, 1000, ct.MIRROR_MAX_COIN_FRACTION))        # already 6%: skip
         self.assertEqual(ct.fraction_limits("Other" + "x" * 39), (0.10, 0.30))  # other proportional wallets
 
     def test_buying_the_same_coin_again_stays_under_30_percent(self):
@@ -350,12 +351,16 @@ class ProportionalTests(unittest.TestCase):
         self.assertEqual(ct.add_on_room(300, 0, 1000), 300)            # first buy: 10%-30% rule only
 
     def test_cycle_cuts_the_rebuy_to_30_percent(self):
+        p = patch.dict(os.environ, {"COPY_PROPORTIONAL_WALLETS": ""})    # a resumed (proportional, not mirror) wallet
+        p.start()
+        self.addCleanup(p.stop)
         d = ct._load()
+        d["wallets"][W]["proportional"] = True
         d["positions"][MINT] = {"wallet": W, "real": False, "tokens": 1, "cost_usd": 25.0, "opened_at": time.time()}
         d["balance"] = 75.0                                            # wallet value = 75 free + 25 in the coin
         ct._save(d)
         ct.BUY_FRACTION[(W, MINT)] = 0.30
-        with patch.object(ct, "new_signals", return_value=[("buy", MINT, 12.0)]), \
+        with patch.object(ct, "new_signals", return_value=[("buy", MINT, 200.0)]), \
                 patch.object(ct, "users_active", return_value=False), \
                 patch.object(ct, "_open", return_value=None) as buy:
             ct.cycle()
