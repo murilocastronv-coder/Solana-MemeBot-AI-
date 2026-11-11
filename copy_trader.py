@@ -6,7 +6,7 @@
   turned into BUY/SELL signals from the wallet's own balance changes (a token
   goes up while SOL/USDC goes down = buy; the opposite = sell).
 - BUY: if the token passes the anti-scam checks (mint/freeze revoked, top 10
-  holders < 25%, sell test >= 92%), copy with a fixed size (US$ 10).
+  holders < 34%, sell test >= 92%), copy with a fixed size (US$ 10).
 - SELL: when the copied wallet sells, our position is sold too; before that,
   stop -15% / take profit +50%.
 - Scoring: every closed copy is credited to the wallet that triggered it. A
@@ -44,7 +44,7 @@ STOP_LOSS = _env("COPY_STOP_LOSS", 0.15)
 EXIT_MODE = os.getenv("COPY_EXIT_MODE", "wallet").strip().lower()
 TAKE_PROFIT = _env("COPY_TAKE_PROFIT", 0.50)
 MIN_COPIES_TO_JUDGE = int(_env("COPY_MIN_TRADES_TO_JUDGE", 5))
-MAX_TOP_HOLDERS = 0.25
+MAX_TOP_HOLDERS = _env("COPY_MAX_TOP_HOLDERS", 0.34)   # anti-scam: 10 biggest holders must have < 34%
 MIN_ROUNDTRIP = 0.92
 NETWORK_FEE_USD = 0.003
 START_USD = 100.0

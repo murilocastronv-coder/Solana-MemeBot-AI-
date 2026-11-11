@@ -4,7 +4,7 @@
   COPY_MIN_BUY_USD) is recorded here. When CONSENSUS_MIN_WALLETS different wallets (default 3)
   bought the same coin within CONSENSUS_WINDOW_MINUTES (60) - and, if CONSENSUS_MIN_SHARE is set,
   at least that share of the followed wallets (0.5 = the majority) - the robot buys it.
-- Protections: copy_trader.safety_reason (mint/freeze revoked, top 10 < 25%, buy/sell test >= 92%)
+- Protections: copy_trader.safety_reason (mint/freeze revoked, top 10 < 34%, buy/sell test >= 92%)
   and the sniper's Token-2022 trap check.
 - Exit (live engine mode "consensus"): stop -40%; from +25% a trailing stop sells 10% below the top.
 - Owner only, SIMULATION or REAL (main wallet). US$ 32 per buy, max 3 positions, never the same

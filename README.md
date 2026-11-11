@@ -36,7 +36,7 @@ compras e vendas delas, em simulação ou com dinheiro real.
    em menos de 5 min não é copiada.
 4. **Copiar**: quando uma carteira seguida compra **US$ 40 ou mais** numa moeda (compras menores
    são ignoradas), o bot checa anti-golpe (mint/freeze revogados,
-   10 maiores donos < 25%, teste de venda ≥ 92%) e compra US$ 32 por cópia (`COPY_ORDER_USD`; o limite por ordem real é `MAX_ORDER_USD`).
+   10 maiores donos < 34%, teste de venda ≥ 92%) e compra US$ 32 por cópia (`COPY_ORDER_USD`; o limite por ordem real é `MAX_ORDER_USD`).
 5. **Sair**: só quando a carteira vender, com o mesmo movimento: se ela vende uma parte, a
    simulação vende a mesma parte; no real, vende a posição inteira. Sem TP/SL fixo
    (`COPY_EXIT_MODE=tp_sl` liga de novo o stop −15% / alvo +50%).
@@ -160,7 +160,7 @@ python -m unittest discover -p "test_*.py"
   - **liquidez entre US$ 10 mil e US$ 250 mil**, moeda com **pelo menos 1 hora** de criada (e até 48 h), par em SOL/USDC;
   - **estratégia de impulso**: nos últimos 5 min ≥ 15 compras, compras ≥ 1,3× vendas, volume ≥ US$ 5 mil,
     preço +2% a +25% (subindo, sem pegar topo) e positivo na última hora; valor de mercado ≤ 15× a liquidez;
-  - **anti-rug**: criador sem poder de criar moedas nem congelar carteiras, 10 maiores donos < 25%,
+  - **anti-rug**: criador sem poder de criar moedas nem congelar carteiras, 10 maiores donos < 34%,
     liquidez travada/queimada ≥ 80% e sem risco grave na RugCheck (sem resposta da RugCheck = não compra);
   - **anti-golpe**: token sem taxa de transferência, gatilho, delegado permanente ou contas congeladas
     (Token-2022), e com site/rede social;
