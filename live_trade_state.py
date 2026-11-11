@@ -374,7 +374,8 @@ def update_peak(mint, ratio):
             position["peak_ratio"] = float(ratio)
             _save(state)
 
-def can_open():
+def can_open(mint=None):
+    """mint: a coin already held may be bought again without taking a new position slot."""
     with _LOCK:
         state = _load()
         if state["day"] != datetime.now(timezone.utc).date().isoformat():
@@ -389,7 +390,7 @@ def can_open():
             return False, "Trading disabled"
         if state["pending"]:
             return False, "Unreconciled transaction"
-        if len(state["positions"]) >= MAX_POSITIONS:
+        if len(state["positions"]) >= MAX_POSITIONS and not (mint and mint in state["positions"]):
             return False, "Position limit"
         if state["daily_loss_usd"] >= _loss_limit(state):
             return False, "Daily loss limit"
@@ -400,7 +401,7 @@ def reserve(order_id, mint, side):
     if side not in ("buy", "sell") or not order_id or not mint:
         raise ValueError("Invalid order")
     with _LOCK:
-        allowed, reason = can_open() if side == "buy" else (True, "")
+        allowed, reason = can_open(mint) if side == "buy" else (True, "")
         if not allowed:
             raise RuntimeError(reason)
         state = _load()
@@ -447,6 +448,15 @@ def record_settlement(order_id, signature, position=None, realized_loss_usd=0.0,
         if not pending or not signature:
             raise RuntimeError("No pending order or missing signature")
         if position is not None:
+            old = state["positions"].get(pending["mint"])
+            if old is not None and pending["side"] == "buy":
+                # another buy of a coin already held (the copied wallet bought it again): add to it
+                merged = dict(old)
+                merged["token_amount_raw"] = int(old.get("token_amount_raw") or 0) + int(position.get("token_amount_raw") or 0)
+                merged["cost_usd"] = float(old.get("cost_usd") or 0) + float(position.get("cost_usd") or 0)
+                merged["buy_signature"] = position.get("buy_signature", old.get("buy_signature"))
+                merged["buys"] = int(old.get("buys") or 1) + 1
+                position = merged
             state["positions"][pending["mint"]] = position
         if pending["side"] == "sell":
             closed = state["positions"].pop(pending["mint"], None)

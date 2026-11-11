@@ -119,7 +119,9 @@ LOSS_STREAK_TO_PAUSE = int(_env("COPY_LOSS_STREAK_TO_PAUSE", 6))
 PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.5)
 PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 100)
 PROPORTIONAL_MIN_USD = _env("COPY_PROPORTIONAL_MIN_USD", 3)
-BUY_FRACTION = {}   # (wallet, mint) -> share of its free balance the wallet used in its last buy
+BUY_FRACTION = {}
+# The copied wallet buys the same coin again: buy again too, up to this many buys per coin
+MAX_BUYS_PER_COIN = int(_env("COPY_MAX_BUYS_PER_COIN", 5))   # (wallet, mint) -> share of its free balance the wallet used in its last buy
 
 
 def proportional(address, w=None):
@@ -863,7 +865,8 @@ def positions_text():
             watch = "⏳ a carteira já vendeu — tentando vender a cada " + str(SELL_RETRY_S) + " s" + \
                     (" (último erro: " + str(p.get("sell_error"))[:80] + ")" if p.get("sell_error") else "")
         held = (time.time() - float(p.get("opened_at") or time.time())) / 60
-        lines.append("• " + mint[:6] + "… " + ("💵 REAL" if p.get("real") else "🧪 SIM") + " · aberta há " +
+        lines.append("• " + mint[:6] + "… " + ("💵 REAL" if p.get("real") else "🧪 SIM") +
+                     (" · " + str(p["buys"]) + " compras" if int(p.get("buys") or 1) > 1 else "") + " · aberta há " +
                      (format(held, ".0f") + " min" if held < 120 else format(held / 60, ".1f") + " h") +
                      " · de " + w[:6] + "…" + w[-4:] + "\n  " + watch +
                      "\n  👛 Carteira copiada (toque para copiar):\n  " + w +
@@ -1184,26 +1187,40 @@ def _open(mint, wallet, send, chat, usd=None):
     """Copy a buy (simulated or real). Returns a message or None. usd: custom size (proportional wallet)."""
     size = float(usd or ORDER_USD)
     real = real_enabled() and send is not None and chat is not None
+    with _LOCK:
+        mine = _load()["positions"].get(mint)
+    # same wallet buying the same coin again: buy again (add to our copy), up to MAX_BUYS_PER_COIN buys
+    add_on = bool(mine) and mine.get("wallet") == wallet and bool(mine.get("real")) == real
+    if mine and not add_on:
+        return None
+    if add_on and (int(mine.get("buys") or 1) >= MAX_BUYS_PER_COIN or mine.get("pending_buy")
+                   or mine.get("sell_wanted") or mine.get("selling_since")):
+        return None
     if real:
         import live_engine
         import live_trade_state as st
         if not live_engine.ready():
             return None
-        allowed, _ = st.can_open()
-        open_now = len(st._load()["positions"])
-        if (not allowed or open_now >= MAX_OPEN_TOTAL or st.positions_by_mode("copy") >= MAX_POSITIONS
-                or mint in st._load()["positions"]):
+        allowed, _ = st.can_open(mint if add_on else None)
+        live = st._load()["positions"]
+        open_now = len(live)
+        if not allowed:
+            return None
+        if add_on:
+            if mint not in live:
+                return None
+        elif open_now >= MAX_OPEN_TOTAL or st.positions_by_mode("copy") >= MAX_POSITIONS or mint in live:
             return None
         import wallet_holdings
-        ok, why = wallet_holdings.can_buy(mint, live_engine.get_address())
+        ok, why = wallet_holdings.can_buy(mint, live_engine.get_address(), add_on=add_on)
         if not ok:
             _event("não comprou " + mint[:6] + ": " + why)
             return None
-    with _LOCK:
-        d = _load()
-        if mint in d["positions"] or (not real and (len(d["positions"]) >= MAX_POSITIONS or
-                                                    open_sim_total() >= MAX_OPEN_TOTAL)):
-            return None
+    elif not add_on:
+        with _LOCK:
+            d = _load()
+            if len(d["positions"]) >= MAX_POSITIONS or open_sim_total() >= MAX_OPEN_TOTAL:
+                return None
     why = safety_reason(mint)
     if why:
         _event("recusou cópia de " + wallet[:6] + "…: " + why)
@@ -1218,9 +1235,12 @@ def _open(mint, wallet, send, chat, usd=None):
         pending = settled.get("status") != "settled_buy"
         with _LOCK:
             d = _load()
-            # also when the buy is still being confirmed: the live engine finishes it later, and we must
-            # remember which wallet to sell together with
-            d["positions"][mint] = {"wallet": wallet, "real": True, "opened_at": time.time(), "pending_buy": pending}
+            if add_on and mint in d["positions"]:
+                d["positions"][mint]["buys"] = int(d["positions"][mint].get("buys") or 1) + 1
+            else:
+                # also when the buy is still being confirmed: the live engine finishes it later, and we must
+                # remember which wallet to sell together with
+                d["positions"][mint] = {"wallet": wallet, "real": True, "opened_at": time.time(), "pending_buy": pending}
             _save(d)
         ex = _exit_for(wallet)
         try:
@@ -1229,7 +1249,8 @@ def _open(mint, wallet, send, chat, usd=None):
                                    copy_max_hold_s=ex["max_hold_s"])
         except Exception:
             pass
-        _event("REAL copiou compra de " + wallet[:6] + "… em " + mint[:6])
+        _event("REAL copiou " + ("nova compra (" + str(int(_load()["positions"].get(mint, {}).get("buys") or 1)) +
+               "ª) " if add_on else "compra ") + "de " + wallet[:6] + "… em " + mint[:6])
         return None   # the live engine already reported the buy
     try:
         lamports = int(size / _sol_usd() * 1e9)
@@ -1244,12 +1265,21 @@ def _open(mint, wallet, send, chat, usd=None):
             return None
         d["balance"] -= cost
         ex = d["wallets"].get(wallet, {}).get("exit") or {}
-        d["positions"][mint] = {"wallet": wallet, "real": False, "tokens": tokens, "cost_usd": cost,
-                                "opened_at": time.time(), "tp": ex.get("tp"), "sl": ex.get("sl"),
-                                "max_hold_s": ex.get("max_hold_s")}
+        q = d["positions"].get(mint)
+        if add_on and q:
+            q["tokens"] = int(q["tokens"]) + tokens
+            q["cost_usd"] = float(q["cost_usd"]) + cost
+            q["buys"] = int(q.get("buys") or 1) + 1
+            n = q["buys"]
+        else:
+            d["positions"][mint] = {"wallet": wallet, "real": False, "tokens": tokens, "cost_usd": cost,
+                                    "opened_at": time.time(), "tp": ex.get("tp"), "sl": ex.get("sl"),
+                                    "max_hold_s": ex.get("max_hold_s")}
+            n = 1
         _save(d)
-    _event("SIM copiou compra de " + wallet[:6] + "… em " + mint[:6])
-    return "👥 SIM copiou compra de " + wallet[:6] + "…: " + mint + " · US$ " + format(cost, ".2f")
+    _event("SIM copiou " + (str(n) + "ª compra" if n > 1 else "compra") + " de " + wallet[:6] + "… em " + mint[:6])
+    return ("👥 SIM copiou " + (str(n) + "ª compra da mesma moeda" if n > 1 else "compra") + " de " + wallet[:6] + "…: " +
+            mint + " · US$ " + format(cost, ".2f"))
 
 
 def _close(mint, reason, send=None, chat=None):
