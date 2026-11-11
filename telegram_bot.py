@@ -307,6 +307,15 @@ def handle(update):
   if ct.set_paused(addr,pause) is None:send(chat,"Essa carteira não está na lista de copiadas.",keyboard());return
   send(chat,("⏸️ Pausei "+addr[:6]+"…"+addr[-4:]+": não copio mais as compras dela. Posições abertas dela continuam e vendem quando ela vender." if pause
    else "▶️ Retomei "+addr[:6]+"…"+addr[-4:]+": volto a copiar as compras dela."),ct.manage_buttons()+keyboard());return
+ if action=="/proporcional":
+  import copy_trader as ct
+  parts=(msg or {}).get("text","").split()
+  if len(parts)!=2:send(chat,"Uso: /proporcional ENDERECO — liga/desliga copiar com a MESMA % do saldo que a carteira usa em cada compra.",keyboard());return
+  on=not ct.proportional(parts[1])
+  if ct.set_proportional(parts[1],on) is None:send(chat,"Essa carteira não está na lista de copiadas.",keyboard());return
+  send(chat,("📐 "+parts[1][:6]+"…"+parts[1][-4:]+": agora copio cada compra com a MESMA % do saldo que ela usa (10% → 10%, 30% → 30%), no máximo "+
+   format(ct.PROPORTIONAL_MAX_FRACTION*100,".0f")+"% e US$ "+format(ct.PROPORTIONAL_MAX_USD,".0f")+" por compra." if on else
+   "📐 "+parts[1][:6]+"…: voltou ao valor fixo de US$ "+format(ct.ORDER_USD,".0f")+" por cópia."),keyboard());return
  if action in ("copy_wallets","/carteiras"):
   try:send(chat,discovery_text(),keyboard())
   except Exception as exc:send(chat,"Busca indisponível: "+type(exc).__name__,keyboard())

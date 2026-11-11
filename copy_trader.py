@@ -114,6 +114,69 @@ TEST_MAX_LOSS_USD = _env("COPY_TEST_MAX_LOSS_USD", 100)
 FAST_TRADES_TO_PAUSE = int(_env("COPY_FAST_TRADES_TO_PAUSE", 2))
 # Pause a copied wallet after this many losing copies in a row (also during the test)
 LOSS_STREAK_TO_PAUSE = int(_env("COPY_LOSS_STREAK_TO_PAUSE", 6))
+# Proportional wallets: copy each buy with the SAME % of our free balance that the wallet used of its own
+# (10% -> 10%, 30% -> 30%), capped. List in COPY_PROPORTIONAL_WALLETS (comma) or toggle with /proporcional.
+PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.5)
+PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 100)
+PROPORTIONAL_MIN_USD = _env("COPY_PROPORTIONAL_MIN_USD", 3)
+BUY_FRACTION = {}   # (wallet, mint) -> share of its free balance the wallet used in its last buy
+
+
+def proportional(address, w=None):
+    env = {a.strip() for a in os.getenv("COPY_PROPORTIONAL_WALLETS", "").split(",") if a.strip()}
+    if w is None:
+        w = _load()["wallets"].get(address) or {}
+    return bool(w.get("proportional")) or address in env
+
+
+def set_proportional(address, on):
+    with _LOCK:
+        d = _load()
+        w = d["wallets"].get(address)
+        if w is None:
+            return None
+        w["proportional"] = bool(on)
+        _save(d)
+    return True
+
+
+def buy_fraction(tx, wallet):
+    """Share of its free balance (SOL + WSOL + USDC, before the buy) the wallet put in this buy."""
+    paid = buy_value_usd(tx, wallet)
+    if not paid:
+        return None
+    meta = (tx or {}).get("meta") or {}
+    keys = [k.get("pubkey") if isinstance(k, dict) else k
+            for k in (((tx or {}).get("transaction") or {}).get("message") or {}).get("accountKeys") or []]
+    pre_sol = 0
+    if wallet in keys:
+        i = keys.index(wallet)
+        pre = meta.get("preBalances") or []
+        pre_sol = int(pre[i]) if i < len(pre) else 0
+    pre_wsol = pre_usdc = 0
+    for b in meta.get("preTokenBalances") or []:
+        if b.get("owner") != wallet:
+            continue
+        amount = int(((b.get("uiTokenAmount") or {}).get("amount")) or 0)
+        if b.get("mint") == SOL_MINT:
+            pre_wsol += amount
+        elif b.get("mint") == USDC_MINT:
+            pre_usdc += amount
+    try:
+        price = _sol_usd()
+    except Exception:
+        return None
+    total = (pre_sol + pre_wsol) / 1e9 * price + pre_usdc / 1e6
+    return min(1.0, paid / total) if total > 0 else None
+
+
+def proportional_usd(fraction, free_usd):
+    """Our order for a proportional wallet: same share of our free balance, capped. None = too small."""
+    if not fraction or free_usd is None:
+        return None
+    usd = min(float(fraction), PROPORTIONAL_MAX_FRACTION) * float(free_usd)
+    usd = min(usd, PROPORTIONAL_MAX_USD)
+    return round(usd, 2) if usd >= PROPORTIONAL_MIN_USD else None
 
 
 def _busy(d):
@@ -530,6 +593,8 @@ def wallets_text():
         st = w.get("stats") or {}
         status, med = holder_status(w)
         icon = "⏸️" if w.get("paused") else ("✅" if status == "ok" else ("👀" if status == "watching" else "⚡"))
+        if proportional(addr, w):
+            icon += " 📐 mesma % da carteira"
         if w.get("paused"):
             icon += " pausada (" + {"fast": "trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min",
                                     "losses": str(w.get("loss_streak", LOSS_STREAK_TO_PAUSE)) + " perdas seguidas",
@@ -1004,6 +1069,8 @@ def new_signals(wallet, info):
             # not available on the node yet: read this wallet again next round (last_sig is not saved)
             raise RuntimeError("transaction not available yet")
         signal = signal_from_tx(tx, wallet)
+        if signal and signal[0] == "buy":
+            BUY_FRACTION[(wallet, signal[1])] = buy_fraction(tx, wallet)
         if signal:
             out.append(signal + (buy_value_usd(tx, wallet) if signal[0] == "buy" else sell_fraction(tx, wallet),))
     return out
@@ -1113,8 +1180,9 @@ def unpause_test_wallets():
     return back
 
 
-def _open(mint, wallet, send, chat):
-    """Copy a buy (simulated or real). Returns a message or None."""
+def _open(mint, wallet, send, chat, usd=None):
+    """Copy a buy (simulated or real). Returns a message or None. usd: custom size (proportional wallet)."""
+    size = float(usd or ORDER_USD)
     real = real_enabled() and send is not None and chat is not None
     if real:
         import live_engine
@@ -1144,7 +1212,7 @@ def _open(mint, wallet, send, chat):
         import live_engine
         pair = {"baseToken": {"address": mint, "symbol": mint[:6]}}
         settled = live_engine._execute_buy(pair, mint, mint[:6], send, chat, live_engine.get_address(), None, "copy",
-                                           usd=ORDER_USD)
+                                           usd=size)
         if not settled:
             return None
         pending = settled.get("status") != "settled_buy"
@@ -1164,12 +1232,12 @@ def _open(mint, wallet, send, chat):
         _event("REAL copiou compra de " + wallet[:6] + "… em " + mint[:6])
         return None   # the live engine already reported the buy
     try:
-        lamports = int(ORDER_USD / _sol_usd() * 1e9)
+        lamports = int(size / _sol_usd() * 1e9)
         tokens = int(_order(SOL_MINT, mint, lamports)["outAmount"])
     except Exception as exc:
         LAST_ERROR["text"] = "cotação de compra falhou: " + type(exc).__name__
         return None
-    cost = ORDER_USD + NETWORK_FEE_USD
+    cost = size + NETWORK_FEE_USD
     with _LOCK:
         d = _load()
         if d["balance"] < cost:
@@ -1687,12 +1755,13 @@ def cycle(send=None, chat=None):
                     _event("não copia " + wallet[:6] + "…: " + ("aguardando auditoria dos últimos " if result == "unknown"
                            else "sem bom resultado nos últimos ") + format(RESULT_DAYS, ".0f") + " dias")
                     continue
-                if MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
+                prop = proportional(wallet, wi)
+                if not prop and MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
                     _event("ignorou compra pequena de " + wallet[:6] + "…: " +
                            ("valor desconhecido" if paid_usd is None else "US$ " + format(paid_usd, ".0f")) +
                            " < US$ " + format(MIN_BUY_USD, ".0f"))
                     continue
-                if CONVICTION_MULT > 0:
+                if CONVICTION_MULT > 0 and not prop:
                     if typical and paid_usd < CONVICTION_MULT * typical:
                         _event("ignorou compra baixa de " + wallet[:6] + "…: US$ " + format(paid_usd, ".0f") +
                                " (ela costuma colocar US$ " + format(typical, ".0f") + ")")
@@ -1705,7 +1774,27 @@ def cycle(send=None, chat=None):
                         LAST_ERROR["text"] = "compra dos usuários falhou: " + type(exc).__name__
                 if not owner_on:
                     continue
-                m = _open(mint, wallet, send, chat)
+                size = None
+                if prop:
+                    frac = BUY_FRACTION.pop((wallet, mint), None)
+                    free = None
+                    try:
+                        if real_enabled():
+                            import live_engine
+                            free = wallet_usd(live_engine.get_address(), max_age=0)
+                        else:
+                            free = _load()["balance"]
+                    except Exception:
+                        free = None
+                    size = proportional_usd(frac, free)
+                    if size is None:
+                        _event("não copiou " + mint[:6] + " de " + wallet[:6] + "… (proporcional): " +
+                               ("valor da compra dela desconhecido" if not frac else "% dela dá menos de US$ " +
+                                format(PROPORTIONAL_MIN_USD, ".0f") + " no nosso saldo"))
+                        continue
+                    _event("proporcional " + wallet[:6] + "…: ela usou " + format(frac * 100, ".0f") + "% → compro US$ " +
+                           format(size, ".2f"))
+                m = _open(mint, wallet, send, chat, usd=size)
                 if m:
                     msgs.append(m)
     msgs += sim_exits()
