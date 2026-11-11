@@ -305,8 +305,14 @@ def handle(update):
    if len(parts)!=2:send(chat,"Uso: /pausar ENDERECO ou /retomar ENDERECO (ou use os botões em 👛 Carteiras copiadas)",keyboard());return
    addr=parts[1];pause=action=="/pausar"
   if ct.set_paused(addr,pause) is None:send(chat,"Essa carteira não está na lista de copiadas.",keyboard());return
+  if cb:   # the old list still shows the old status: remove it, the updated list is sent below
+   try:request_api("deleteMessage",chat_id=chat,message_id=cb.get("message",{}).get("message_id"))
+   except Exception:pass
+  w=ct._load()["wallets"].get(addr,{})
+  state=("⏸️ PAUSADA" if w.get("paused") else "✅ COPIANDO")
   send(chat,("⏸️ Pausei "+addr[:6]+"…"+addr[-4:]+": não copio mais as compras dela. Posições abertas dela continuam e vendem quando ela vender." if pause
-   else "▶️ Retomei "+addr[:6]+"…"+addr[-4:]+": volto a copiar as compras dela."),ct.manage_buttons()+keyboard());return
+   else "▶️ Retomei "+addr[:6]+"…"+addr[-4:]+": volto a copiar as compras dela.")+"\nStatus agora: "+state)
+  send_parts(chat,ct.wallets_text(),ct.manage_buttons()+keyboard());return
  if action=="/proporcional":
   import copy_trader as ct
   parts=(msg or {}).get("text","").split()

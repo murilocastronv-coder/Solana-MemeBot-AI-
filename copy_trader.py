@@ -612,8 +612,10 @@ def wallets_text():
              " (limite automático " + str(MAX_AUTO_WALLETS) + ")",
              "Cópias feitas: " + str(copies) + " · resultado das cópias: " + format(pnl, "+.2f") + " USD",
              "Ordenadas pela nota (lucro × acerto × experiência). Carteira sem resultado é trocada "
-             "por outra com nota " + format(REPLACE_MARGIN, "g") + "× maior; com " + str(MIN_COPIES_TO_JUDGE) +
-             " cópias no prejuízo, é pausada.",
+             "por outra com nota " + format(REPLACE_MARGIN, "g") + "× maior.",
+             "Pausa automática: " + str(FAST_TRADES_TO_PAUSE) + " trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") +
+             " min, " + str(LOSS_STREAK_TO_PAUSE) + " cópias seguidas no prejuízo, ou −US$ " + format(TEST_MAX_LOSS_USD, ".0f") +
+             " no teste. ▶️ Retomar volta a copiar na hora (📐 espelho nunca pausa sozinha).",
              "Saldo mínimo da carteira copiada: US$ " + format(MIN_WALLET_USD, ".0f") + " em SOL (abaixo disso é removida).",
              "Compra mínima: só copia quando a carteira coloca ≥ US$ " + format(MIN_BUY_USD, ".0f") + " na moeda.",
              ("Convicção: só copia quando ela coloca pelo menos " + format(CONVICTION_MULT, "g") +
@@ -623,7 +625,8 @@ def wallets_text():
     for i, (addr, w) in enumerate(rows, 1):
         st = w.get("stats") or {}
         status, med = holder_status(w)
-        icon = "⏸️" if w.get("paused") else ("✅" if status == "ok" else ("👀" if status == "watching" else "⚡"))
+        icon = "⏸️" if w.get("paused") else ("✅ copiando" if status == "ok" or proportional(addr, w) or in_test(w)
+                                              else ("👀 observando" if status == "watching" else "⚡ vende rápido"))
         if proportional(addr, w):
             icon += " 📐 espelho: copia tudo, mesma %"
         if w.get("paused"):
