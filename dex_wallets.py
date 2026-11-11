@@ -138,6 +138,12 @@ def _buyers(tx):
     return out
 
 
+def buyers_of(tx, mint):
+    """Wallets that paid SOL for `mint` in this transaction."""
+    tokens, sol = wallet_copy._tx_deltas(tx)
+    return [o for o, (delta, _) in (tokens.get(mint) or {}).items() if delta > 0 and int(sol.get(o, 0)) < 0]
+
+
 def _get_tx(rpc, signature):
     return rpc("getTransaction", [signature, {"encoding": "json", "commitment": "confirmed",
                                               "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1"))}])
@@ -238,6 +244,7 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         cursors = state.setdefault("dex_cursors", {})
         seen = set(state.get("dex_seen_sigs", []))
         buyers = []
+        market_buys = []          # (mint, wallet, time) for the consensus robot
         scanned = failed = 0
         errors_before = RPC_ERRORS["count"]
         for p in pairs:
@@ -263,6 +270,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
                     continue
                 seen.add(s["signature"])
                 buyers += _buyers(tx)
+                when = tx.get("blockTime") or s.get("blockTime") or time.time()
+                market_buys += [(p["mint"], w, when) for w in buyers_of(tx, p["mint"])]
                 block = {"blockTime": tx.get("blockTime") or s.get("blockTime"), "transactions": [tx]}
                 wallet_copy.process_confirmed_block(state, block, slot=tx.get("slot"))
                 scanned += 1
@@ -321,4 +330,10 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         state["dex_transactions_scanned"] = int(state.get("dex_transactions_scanned", 0)) + scanned
         state["updated_at"] = int(time.time())
         wallet_copy._save_state(path, state)
+    if market_buys:
+        try:
+            import consensus
+            consensus.record_market_buys(market_buys)
+        except Exception:
+            pass
     return scanned

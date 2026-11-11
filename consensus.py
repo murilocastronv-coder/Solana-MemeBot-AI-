@@ -24,6 +24,11 @@ def _f(name, default):
 
 
 MIN_WALLETS = int(_f("CONSENSUS_MIN_WALLETS", 3))
+# Market-wide: many different wallets buying the coin in the window, with some of them proven
+# (wallets the bot analysed with a profitable history), even if they are not copied.
+MARKET_MIN_BUYERS = int(_f("CONSENSUS_MARKET_MIN_BUYERS", 15))
+MARKET_MIN_GOOD = int(_f("CONSENSUS_MARKET_MIN_GOOD", 2))
+MARKET_ENABLED = os.getenv("CONSENSUS_MARKET", "true").strip().lower() != "false"
 MIN_SHARE = _f("CONSENSUS_MIN_SHARE", 0)            # 0.5 = the majority of the followed wallets
 WINDOW_S = _f("CONSENSUS_WINDOW_MINUTES", 60) * 60
 ORDER_USD = _f("CONSENSUS_ORDER_USD", 32)
@@ -47,7 +52,7 @@ def _path():
 
 def _default():
     return {"enabled": False, "real": False, "balance": START_SIM_USD, "positions": {}, "history": [],
-            "buys": {}, "tried": {}}
+            "buys": {}, "market": {}, "tried": {}}
 
 
 def _load():
@@ -95,6 +100,46 @@ def record_buy(mint, wallet, now=None):
         _save(d)
 
 
+def record_market_buys(rows, now=None):
+    """[(mint, wallet, time)] seen in the market by the wallet search (any wallet, copied or not)."""
+    now = now or time.time()
+    with _LOCK:
+        d = _load()
+        m = d.setdefault("market", {})
+        for mint, wallet, when in rows:
+            if now - float(when) < WINDOW_S:
+                m.setdefault(mint, {})[wallet] = float(when)
+        d["market"] = {mint: dict(sorted(((w, t) for w, t in ws.items() if now - t < WINDOW_S),
+                                         key=lambda kv: kv[1])[-500:])
+                       for mint, ws in m.items() if any(now - t < WINDOW_S for t in ws.values())}
+        _save(d)
+
+
+def good_wallets():
+    """Wallets the bot analysed with a profitable history (wallet search), copied or not."""
+    try:
+        import wallet_copy
+        st = wallet_copy._load_state(wallet_copy._state_path())
+        return {w for w, s in st.get("wallets", {}).items() if wallet_copy._qualifies(s)}
+    except Exception:
+        return set()
+
+
+def market_candidates(now=None, good=None):
+    """[(mint, buyers, good buyers)] with many buyers and some proven ones, most good first."""
+    if not MARKET_ENABLED:
+        return []
+    now = now or time.time()
+    good = good_wallets() if good is None else good
+    out = []
+    for mint, ws in _load().get("market", {}).items():
+        recent = [w for w, t in ws.items() if now - t < WINDOW_S]
+        smart = [w for w in recent if w in good]
+        if len(recent) >= MARKET_MIN_BUYERS and len(smart) >= MARKET_MIN_GOOD:
+            out.append((mint, recent, smart))
+    return sorted(out, key=lambda x: (-len(x[2]), -len(x[1])))
+
+
 def followed_count():
     import copy_trader as ct
     return sum(1 for w in ct._load()["wallets"].values() if not w.get("paused") and not w.get("leaving"))
@@ -138,7 +183,7 @@ def _mark_tried(mint, now):
         _save(d)
 
 
-def _open_real(mint, n, send, chat):
+def _open_real(mint, n, send, chat, why_text=None):
     import live_engine
     import live_order_bridge as bridge
     import live_trade_state as st
@@ -158,14 +203,14 @@ def _open_real(mint, n, send, chat):
     if bridge.MAX_ORDER_USD < ORDER_USD:
         return "MAX_ORDER_USD menor que a compra de US$ " + format(ORDER_USD, ".0f")
     if send and chat:
-        send(chat, "🤝 CONSENSO: " + str(n) + " carteiras compraram " + mint[:6] + "… na última " +
-             format(WINDOW_S / 3600, ".0f") + " h — comprando.")
+        send(chat, "🤝 CONSENSO: " + (why_text or (str(n) + " carteiras acompanhadas compraram")) + " " + mint[:6] +
+             "… na última " + format(WINDOW_S / 3600, ".0f") + " h — comprando.")
     live_engine._execute_buy({"baseToken": {"address": mint, "symbol": mint[:6]}}, mint, mint[:6], send, chat,
                              live_engine.get_address(), None, "consensus", usd=ORDER_USD)
     return ""
 
 
-def _open_sim(mint, n, send, chat):
+def _open_sim(mint, n, send, chat, why_text=None):
     import copy_trader as ct
     with _LOCK:
         d = _load()
@@ -179,7 +224,7 @@ def _open_sim(mint, n, send, chat):
                                 "peak_ratio": 0, "mode": "consensus", "wallets": n}
         _save(d)
     if send and chat:
-        send(chat, "🤝 SIM CONSENSO COMPROU " + mint[:6] + "… · " + str(n) + " carteiras comprando · US$ " +
+        send(chat, "🤝 SIM CONSENSO COMPROU " + mint[:6] + "… · " + (why_text or (str(n) + " carteiras acompanhadas comprando")) + " · US$ " +
              format(ORDER_USD, ".2f") + "\n" + mint)
     return ""
 
@@ -220,9 +265,13 @@ def cycle(send=None, chat=None, now=None):
     if d["positions"]:
         sim_exits(send, chat)
     real = bool(d["real"])
-    found = candidates(now)
-    LAST.update(at=now, candidates=[(m, len(ws)) for m, ws in found[:5]])
-    for mint, ws in found:
+    found = [(m, ws, str(len(ws)) + " carteiras acompanhadas compraram") for m, ws in candidates(now)]
+    market = market_candidates(now)
+    found += [(m, ws, "mercado: " + str(len(ws)) + " carteiras compraram, " + str(len(smart)) + " com histórico de lucro,")
+              for m, ws, smart in market if m not in {f[0] for f in found}]
+    LAST.update(at=now, candidates=[(m, len(ws)) for m, ws, _ in found[:5]],
+                market=[(m, len(ws), len(sm)) for m, ws, sm in market[:5]])
+    for mint, ws, label in found:
         if now - float(_load()["tried"].get(mint, 0)) < COOLDOWN_S:
             continue
         why = safety_reason(mint)
@@ -231,7 +280,7 @@ def cycle(send=None, chat=None, now=None):
             if "indisponível" not in why:
                 _mark_tried(mint, now)
             continue
-        why = _open_real(mint, len(ws), send, chat) if real else _open_sim(mint, len(ws), send, chat)
+        why = (_open_real(mint, len(ws), send, chat, label) if real else _open_sim(mint, len(ws), send, chat, label))
         if why:
             LAST["last_reject"] = mint[:6] + ": " + why
         else:
@@ -255,6 +304,19 @@ def status_text():
     hot = [(m, n) for m, n in hot if n >= 2]
     if hot:
         lines.append("Moedas com mais carteiras comprando agora: " + ", ".join(m[:6] + "… (" + str(n) + ")" for m, n in hot))
+    if MARKET_ENABLED:
+        lines.insert(2, "Mercado: também compra quando " + str(MARKET_MIN_BUYERS) + "+ carteiras quaisquer compram a moeda em " +
+                     format(WINDOW_S / 3600, ".0f") + " h e " + str(MARKET_MIN_GOOD) + "+ delas têm histórico de lucro (mesmo sem copiar)")
+        mk = LAST.get("market") or []
+        if not mk:
+            good = good_wallets()
+            mk = sorted(((m, len([t for t in ws.values() if now - t < WINDOW_S]),
+                          len([w for w, t in ws.items() if now - t < WINDOW_S and w in good]))
+                         for m, ws in d.get("market", {}).items()), key=lambda x: (-x[2], -x[1]))[:5]
+        mk = [x for x in mk if x[1] >= 3]
+        if mk:
+            lines.append("No mercado agora: " + ", ".join(m[:6] + "… (" + str(n) + " compradores, " + str(g) + " com lucro)"
+                                                         for m, n, g in mk))
     if LAST["last_reject"]:
         lines.append("Última recusa: " + LAST["last_reject"])
     if not d["real"]:
