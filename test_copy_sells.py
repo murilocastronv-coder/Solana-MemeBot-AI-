@@ -263,6 +263,51 @@ class OrphanExitTests(unittest.TestCase):
         self.assertEqual(position_signal(top, 32, 32 * 1.40)["reason"], "take_profit")  # 12.5% below: sells
 
 
+class ProportionalTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json"), "COPY_PROPORTIONAL_WALLETS": W})
+        p.start()
+        self.addCleanup(p.stop)
+        q = patch.object(ct, "_sol_usd", return_value=100.0)
+        q.start()
+        self.addCleanup(q.stop)
+        d = ct._load()
+        d["score_v2"] = True
+        d["enabled"] = True
+        d["wallets"][W] = {"last_sig": "s", "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False,
+                           "holds": [600, 700, 900], "open_buys": {}, "followed_at": time.time()}
+        ct._save(d)
+
+    def test_fraction_of_the_wallet_balance_used_in_a_buy(self):
+        tx = {"meta": {"err": None, "preBalances": [10_000_000_000], "postBalances": [7_000_000_000],
+                       "preTokenBalances": [], "postTokenBalances": [
+                           {"owner": W, "mint": MINT, "uiTokenAmount": {"amount": "500", "decimals": 6}}]},
+              "transaction": {"message": {"accountKeys": [W]}}}
+        self.assertAlmostEqual(ct.buy_fraction(tx, W), 0.30)          # spent 3 of 10 SOL
+
+    def test_same_percentage_capped(self):
+        self.assertEqual(ct.proportional_usd(0.10, 300), 30.0)          # 10% -> 10%
+        self.assertEqual(ct.proportional_usd(0.30, 300), 90.0)          # 30% -> 30%
+        self.assertEqual(ct.proportional_usd(0.90, 300), 100.0)         # max 50% and US$ 100
+        self.assertIsNone(ct.proportional_usd(0.005, 300))              # < US$ 3
+
+    def test_proportional_wallet_buys_same_share_even_small_buys(self):
+        ct.BUY_FRACTION[(W, MINT)] = 0.10
+        with patch.object(ct, "new_signals", return_value=[("buy", MINT, 12.0)]), \
+                patch.object(ct, "users_active", return_value=False), \
+                patch.object(ct, "_open", return_value=None) as buy:
+            ct.cycle()
+        self.assertEqual(buy.call_args.kwargs["usd"], 10.0)            # 10% of the US$ 100 simulation balance
+        self.assertIn("📐", ct.wallets_text())
+
+    def test_sim_copy_uses_the_custom_size(self):
+        with patch.object(ct, "safety_reason", return_value=""), \
+                patch.object(ct, "_order", return_value={"outAmount": "1000"}):
+            ct._open(MINT, W, None, None, usd=25.0)
+        self.assertAlmostEqual(ct._load()["positions"][MINT]["cost_usd"], 25.0 + ct.NETWORK_FEE_USD)
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m
