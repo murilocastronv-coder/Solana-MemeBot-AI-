@@ -103,6 +103,7 @@ def keyboard():
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
+  [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"🎯 Sniper SIM","callback_data":"snp_sim"},{"text":"🎯 Sniper REAL","callback_data":"snp_real"}],
   [{"text":"⏹️ Parar sniper","callback_data":"snp_off"},{"text":"📊 Status sniper","callback_data":"snp_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -239,12 +240,20 @@ def handle(update):
     send(chat,"🎯 SNIPER COM DINHEIRO REAL\nCompra US$ "+format(sn.ORDER_USD,".0f")+" por moeda (máx. "+str(sn.MAX_POSITIONS)+
      " ao mesmo tempo) com a carteira principal, o dia inteiro.\n⚠️ Memecoin nova é o tipo de moeda mais arriscado: as proteções reduzem golpes, mas não evitam perdas. Recomendo testar antes em 🎯 Sniper SIM.",
      [[{"text":"✅ Ligar sniper REAL","callback_data":"snp_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"snp_status"}]]);return
-   elif action=="snp_real_ok":live_engine.start();sn.set_mode(True,True);pre="💵 SNIPER REAL LIGADO.\n\n"
+   elif action=="snp_real_ok":
+    sn.set_mode(True,True)
+    pre="💵 SNIPER REAL LIGADO.\n\n" if start_real_or_wait(chat,"sniper") else "⏳ SNIPER REAL LIGADO: começa assim que a ordem pendente for conferida (~2 min).\n\n"
    elif action=="snp_off":sn.set_mode(False);pre="⏹️ Sniper desligado: não abre novas posições. As abertas continuam com stop e stop móvel.\n\n"
    else:pre=""
    send(chat,pre+sn.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
   return
+ if action in ("unstick","/destravar"):
+  send(chat,"🔧 Conferindo as ordens pendentes na blockchain…")
+  def run_unstick():
+   try:live_engine.unstick(send,chat)
+   except Exception as exc:send(chat,"⛔ Destravar: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
+  run_async(run_unstick);return
  if action in ("audit","/auditar"):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
@@ -288,7 +297,9 @@ def handle(update):
      "⏳ "+parts[1][:6]+"… tem uma posição copiada aberta: não copio mais compras dela, mas vendo junto quando ela vender e depois tiro da lista.\n\n")
    elif action=="copy_sim":ct.set_mode(True,False);pre="🧪 Copy trade em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
    elif action=="copy_real":
-    live_engine.start();ct.set_mode(True,True)
+    if not start_real_or_wait(chat,"copy trade"):
+     ct.set_mode(True,True);send(chat,"⏳ Copy trade REAL ligado. Tem 1 ordem sendo conferida na blockchain: o robô volta a comprar sozinho assim que ela for liberada (~2 min).",keyboard());return
+    ct.set_mode(True,True)
     pre="💵 COPY TRADE COM DINHEIRO REAL LIGADO — US$ "+format(ct.ORDER_USD,".0f")+" por cópia, anti-golpe e teste de venda antes de cada compra, ordem confirmada na blockchain. "+("Sai só quando a carteira vender (sem alvo/stop fixo). " if ct.EXIT_MODE=="wallet" else "Vende quando a carteira vender, ou no stop −"+format(ct.STOP_LOSS*100,".0f")+"% / alvo +"+format(ct.TAKE_PROFIT*100,".0f")+"%. ")+("Para de comprar se perder US$ "+format(trade_state.DAILY_LOSS_LIMIT_USD,".0f")+" no dia." if trade_state.DAILY_LOSS_LIMIT_ENABLED else "Sem limite de perda diária.")+"\n⚠️ Copiar não garante lucro: você entra depois da carteira copiada.\n\n"
    elif action=="copy_off":ct.set_mode(False);pre="⏹️ Copy trade desligado: não abre novas cópias. As posições abertas continuam sendo vendidas quando a carteira copiada vender.\n\n"
    else:pre=""
@@ -296,7 +307,7 @@ def handle(update):
   except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
   return
  legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","/btc_reset",
-  "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real","unstick","/destravar",
+  "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real",
   "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
   "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
   "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
@@ -395,6 +406,23 @@ def wallet_action(chat,action):
    send(chat,"👛 Sua carteira: "+address+"\nNão foi possível consultar o saldo agora.",kb)
   return
  send(chat,"👛 SUA CARTEIRA DO BOT\n"+address,kb)
+def start_real_or_wait(chat,what):
+ """Start the live engine. If an order is still being checked on-chain, wait for it in the background
+ and start then (instead of failing with 'Unreconciled transaction'). True = started now."""
+ try:
+  live_engine.start();return True
+ except Exception as exc:
+  if not trade_state.pending_orders():raise
+ def wait_and_start():
+  for _ in range(60):          # up to 10 min
+   time.sleep(10)
+   if not trade_state.pending_orders():
+    try:
+     live_engine.start();send(chat,"🟢 Ordem pendente conferida: robô real liberado e "+what+" operando.",keyboard())
+    except Exception as exc:send(chat,"⛔ Não consegui ligar o "+what+": "+str(exc)[:150],keyboard())
+    return
+  send(chat,"⚠️ A ordem pendente ainda não foi conferida depois de 10 min. Toque em 🔧 Destravar robô.",keyboard())
+ run_async(wait_and_start);return False
 def leftover_btc_warning():
  """The BTC breakout robot was removed: warn if its saved state still shows an open real position."""
  try:

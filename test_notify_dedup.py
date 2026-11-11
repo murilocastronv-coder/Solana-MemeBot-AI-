@@ -55,7 +55,7 @@ class MenuTests(unittest.TestCase):
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
         self.assertEqual(data, {"copy_sim", "copy_real", "copy_off", "copy_status", "copy_wallets", "copy_following",
                                 "copy_positions", "audit", "wallet_deposit", "wallet_balance", "wallet_withdraw",
-                                "wallet_export", "snp_sim", "snp_real", "snp_off", "snp_status"})
+                                "wallet_export", "snp_sim", "snp_real", "snp_off", "snp_status", "unstick"})
 
     def test_removed_buttons_answer_removed(self):
         tb.CTX.interactive = True
@@ -64,6 +64,23 @@ class MenuTests(unittest.TestCase):
             for action in ("brk_sim", "strat_real", "clone_help", "/clonar"):
                 tb.handle({"message": {"chat": {"id": 1, "type": "private"}, "text": action}})
         self.assertTrue(all("removido" in call.args[1] for call in send.call_args_list))
+
+
+class StartRealTests(unittest.TestCase):
+    def test_turning_real_on_while_an_order_is_checked_waits_instead_of_failing(self):
+        tb.CTX.interactive = True
+        sent = []
+        with patch.object(tb, "authorized", return_value=True), patch.object(tb, "request_api"), \
+                patch.object(tb.live_engine, "start", side_effect=RuntimeError("Unreconciled transaction: trading paused")), \
+                patch.object(tb.trade_state, "pending_orders", return_value={"o": {}}), \
+                patch.object(tb, "run_async") as later, \
+                patch.object(tb, "send", side_effect=lambda c, t, kb=None: sent.append(t)), \
+                patch("copy_trader.set_mode") as mode:
+            tb.handle({"callback_query": {"id": "1", "data": "copy_real", "message": {"chat": {"id": 1, "type": "private"}}}})
+        mode.assert_called_once_with(True, True)
+        later.assert_called_once()                                   # starts by itself once the order is checked
+        self.assertIn("volta a comprar sozinho", sent[-1])
+        self.assertFalse(any("Unreconciled" in t for t in sent))
 
 
 if __name__ == "__main__":
