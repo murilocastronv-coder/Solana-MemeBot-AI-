@@ -120,8 +120,8 @@ class CopyTests(unittest.TestCase):
     def test_wallet_in_test_is_not_paused_by_small_losses(self):
         d = c._load()
         d["wallets"][WALLET]["followed_at"] = time.time()            # 3-day test running
-        for _ in range(10):
-            self.assertIsNone(c._score(d, WALLET, -5.0))             # -US$ 50: keeps copying
+        for i in range(10):                                           # losses broken by a win: no 6 in a row
+            self.assertIsNone(c._score(d, WALLET, 1.0 if i == 4 else -5.0))   # ~-US$ 44: keeps copying
         self.assertFalse(d["wallets"][WALLET]["paused"])
 
     def test_wallet_in_test_paused_only_if_it_loses_a_lot(self):
@@ -131,6 +131,24 @@ class CopyTests(unittest.TestCase):
             c._score(d, WALLET, -30.0)
         self.assertIn("perdeu muito", c._score(d, WALLET, -30.0))     # -US$ 120 >= US$ 100
         self.assertTrue(d["wallets"][WALLET]["paused"])
+
+    def test_6_losing_copies_in_a_row_pause_even_in_test(self):
+        d = c._load()
+        d["wallets"][WALLET]["followed_at"] = time.time()
+        for _ in range(5):
+            self.assertIsNone(c._score(d, WALLET, -1.0))
+        self.assertIn("6 cópias seguidas no prejuízo", c._score(d, WALLET, -1.0))
+        self.assertEqual(d["wallets"][WALLET]["pause_reason"], "losses")
+        c._save(d)
+        self.assertEqual(c.unpause_test_wallets(), [])               # stays paused
+
+    def test_a_win_resets_the_losing_streak(self):
+        d = c._load()
+        d["wallets"][WALLET]["followed_at"] = time.time()
+        for pnl in (-1, -1, -1, -1, -1, 2, -1, -1, -1, -1, -1):
+            c._score(d, WALLET, float(pnl))
+        self.assertFalse(d["wallets"][WALLET]["paused"])
+        self.assertEqual(d["wallets"][WALLET]["loss_streak"], 5)
 
     def test_after_the_test_losing_wallet_is_paused(self):
         d = c._load()
