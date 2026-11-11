@@ -276,9 +276,19 @@ def handle(update):
  if action in ("copy_following","/copiadas"):
   import copy_trader as ct
   try:
-   send_parts(chat,ct.wallets_text(),ct.wallet_buttons(list(ct._load()["wallets"]))+keyboard())
+   send_parts(chat,ct.wallets_text(),ct.manage_buttons()+keyboard())
   except Exception as exc:send(chat,"Lista indisponível: "+type(exc).__name__,keyboard())
   return
+ if action.startswith(("cw_off:","cw_on:")) or action in ("/pausar","/retomar","/ativar"):
+  import copy_trader as ct
+  if ":" in action:addr=action.split(":",1)[1];pause=action.startswith("cw_off")
+  else:
+   parts=(msg or {}).get("text","").split()
+   if len(parts)!=2:send(chat,"Uso: /pausar ENDERECO ou /retomar ENDERECO (ou use os botões em 👛 Carteiras copiadas)",keyboard());return
+   addr=parts[1];pause=action=="/pausar"
+  if ct.set_paused(addr,pause) is None:send(chat,"Essa carteira não está na lista de copiadas.",keyboard());return
+  send(chat,("⏸️ Pausei "+addr[:6]+"…"+addr[-4:]+": não copio mais as compras dela. Posições abertas dela continuam e vendem quando ela vender." if pause
+   else "▶️ Retomei "+addr[:6]+"…"+addr[-4:]+": volto a copiar as compras dela."),ct.manage_buttons()+keyboard());return
  if action in ("copy_wallets","/carteiras"):
   try:send(chat,discovery_text(),keyboard())
   except Exception as exc:send(chat,"Busca indisponível: "+type(exc).__name__,keyboard())
@@ -310,7 +320,7 @@ def handle(update):
   "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real",
   "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
   "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
-  "positions","/posicoes","/simular","/remover","alerts","/alerts","/pausar","/ativar","settings","/settings","scan","/scan","latest","/latest",
+  "positions","/posicoes","/simular","/remover","alerts","/alerts","settings","/settings","scan","/scan","latest","/latest",
   "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off",
   "tsim_on","tsim_off","tsim_status","/tsim","/tsim_reset","tb_real_on","tb_real_off","sn_sim","sn_real","sn_off","sn_status","/sniper",
   "mm_on","mm_off","mm_status","/mm",
