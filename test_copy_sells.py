@@ -237,8 +237,10 @@ class ManualPauseTests(unittest.TestCase):
 
     def test_owner_pauses_and_resumes_a_wallet_with_buttons(self):
         buttons = ct.manage_buttons()
-        self.assertEqual(buttons[0][2]["callback_data"], "cw_off:" + W)
-        self.assertLessEqual(len(buttons[0][2]["callback_data"].encode()), 64)          # Telegram limit
+        self.assertEqual(buttons[0][0]["callback_data"], "cw_off:" + W)
+        self.assertEqual(buttons[0][0]["text"], "1. ✅ copiando · pausar")
+        self.assertEqual(buttons[0][1]["text"], "📋 endereço")
+        self.assertLessEqual(len(buttons[0][0]["callback_data"].encode()), 64)          # Telegram limit
         sent = self.tap("cw_off:" + W)
         self.assertIn("Pausei", sent[-2][0])
         self.assertIn("⏸️ pausada (por você)", sent[-1][0])           # updated list sent right away
@@ -246,7 +248,8 @@ class ManualPauseTests(unittest.TestCase):
         self.assertEqual((w["paused"], w["pause_reason"]), (True, "manual"))
         self.assertEqual(ct.unpause_test_wallets(), [])                                 # never undone by the bot
         self.assertIn("pausada (por você)", ct.wallets_text())
-        self.assertEqual(ct.manage_buttons()[0][2]["callback_data"], "cw_on:" + W)
+        self.assertEqual(ct.manage_buttons()[0][0]["callback_data"], "cw_on:" + W)
+        self.assertEqual(ct.manage_buttons()[0][0]["text"], "1. ▶️ COPIAR")
         sent = self.tap("cw_on:" + W)
         self.assertFalse(ct._load()["wallets"][W]["paused"])
         self.assertIn("Status agora: ✅ COPIANDO", sent[-2][0])
