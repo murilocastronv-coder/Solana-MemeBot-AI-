@@ -290,10 +290,10 @@ class ProportionalTests(unittest.TestCase):
               "transaction": {"message": {"accountKeys": [W]}}}
         self.assertAlmostEqual(ct.buy_fraction(tx, W), 0.30)          # spent 3 of 10 SOL
 
-    def test_between_10_and_45_percent_of_our_wallet(self):
-        self.assertEqual(ct.proportional_usd(0.30, 1000), 300.0)        # 30% -> 30% (no dollar cap)
+    def test_between_10_and_30_percent_of_our_wallet(self):
+        self.assertEqual(ct.proportional_usd(0.25, 1000), 250.0)        # 25% -> 25% (no dollar cap)
         self.assertEqual(ct.proportional_usd(0.02, 1000), 100.0)        # 2% -> at least 10%
-        self.assertEqual(ct.proportional_usd(0.90, 1000), 450.0)        # 90% -> at most 45%
+        self.assertEqual(ct.proportional_usd(0.90, 1000), 300.0)        # 90% -> at most 30%
         self.assertEqual(ct.proportional_usd(0.30, 1000, free_usd=150), 148.0)   # only what is free (- fees)
         self.assertIsNone(ct.proportional_usd(0.30, 1000, free_usd=3))   # nothing free
 
@@ -333,22 +333,22 @@ class ProportionalTests(unittest.TestCase):
         ct._save(d)
         self.assertEqual(ct.unpause_test_wallets(), [W])
 
-    def test_buying_the_same_coin_again_stays_under_35_percent(self):
-        self.assertEqual(ct.add_on_room(300, 200, 1000), 150.0)        # 20% + 30% -> only up to 35%
-        self.assertIsNone(ct.add_on_room(300, 350, 1000))              # already 35%: skip
-        self.assertEqual(ct.add_on_room(450, 0, 1000), 450)            # first buy: 10%-45% rule only
+    def test_buying_the_same_coin_again_stays_under_30_percent(self):
+        self.assertEqual(ct.add_on_room(250, 200, 1000), 100.0)        # 20% + 25% -> only up to 30%
+        self.assertIsNone(ct.add_on_room(300, 300, 1000))              # already 30%: skip
+        self.assertEqual(ct.add_on_room(300, 0, 1000), 300)            # first buy: 10%-30% rule only
 
-    def test_cycle_cuts_the_rebuy_to_35_percent(self):
+    def test_cycle_cuts_the_rebuy_to_30_percent(self):
         d = ct._load()
-        d["positions"][MINT] = {"wallet": W, "real": False, "tokens": 1, "cost_usd": 30.0, "opened_at": time.time()}
-        d["balance"] = 70.0                                            # wallet value = 70 free + 30 in the coin
+        d["positions"][MINT] = {"wallet": W, "real": False, "tokens": 1, "cost_usd": 25.0, "opened_at": time.time()}
+        d["balance"] = 75.0                                            # wallet value = 75 free + 25 in the coin
         ct._save(d)
         ct.BUY_FRACTION[(W, MINT)] = 0.30
         with patch.object(ct, "new_signals", return_value=[("buy", MINT, 12.0)]), \
                 patch.object(ct, "users_active", return_value=False), \
                 patch.object(ct, "_open", return_value=None) as buy:
             ct.cycle()
-        self.assertEqual(buy.call_args.kwargs["usd"], 5.0)             # 35% of 100 = 35, already 30 -> 5
+        self.assertEqual(buy.call_args.kwargs["usd"], 5.0)             # 30% of 100 = 30, already 25 -> 5
 
     def test_sim_copy_uses_the_custom_size(self):
         with patch.object(ct, "safety_reason", return_value=""), \
@@ -486,6 +486,30 @@ class PartialSellTests(unittest.TestCase):
         self.assertEqual(part.call_args.args[:2], (MINT, 0.3))
         close.assert_not_called()                                    # the rest stays open
         self.assertIn(MINT, ct._load()["positions"])
+
+
+class ResumeProportionalTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json"), "COPY_PROPORTIONAL_WALLETS": ""})
+        p.start()
+        self.addCleanup(p.stop)
+        d = ct._load()
+        d["score_v2"] = True
+        d["wallets"][W] = {"last_sig": "s", "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": True, "holds": [],
+                           "pause_reason": "manual", "followed_at": time.time()}
+        ct._save(d)
+
+    def test_resumed_wallet_copies_its_percentage_but_keeps_the_filters(self):
+        ct.set_paused(W, False)
+        w = ct._load()["wallets"][W]
+        self.assertTrue(ct.proportional(W, w))                    # same % it puts in each coin
+        self.assertFalse(ct.mirror(W, w))                         # not a mirror: filters and pauses still apply
+        self.assertIn("📐 copia a % dela", ct.wallets_text())
+        d = ct._load()
+        for _ in range(6):
+            ct._score(d, W, -1.0)
+        self.assertTrue(d["wallets"][W]["paused"])                # 6 losses in a row still pause it
 
 
 class MonitorTests(unittest.TestCase):

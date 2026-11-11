@@ -116,13 +116,13 @@ FAST_TRADES_TO_PAUSE = int(_env("COPY_FAST_TRADES_TO_PAUSE", 2))
 LOSS_STREAK_TO_PAUSE = int(_env("COPY_LOSS_STREAK_TO_PAUSE", 6))
 # Proportional wallets: copy each buy with the SAME % of our free balance that the wallet used of its own
 # (10% -> 10%, 30% -> 30%), capped. List in COPY_PROPORTIONAL_WALLETS (comma) or toggle with /proporcional.
-# each copy: between 10% and 45% of OUR wallet (free SOL + open positions), same % as the wallet inside that range
+# each copy: between 10% and 30% of OUR wallet (free SOL + open positions), same % as the wallet inside that range
 PROPORTIONAL_MIN_FRACTION = _env("COPY_PROPORTIONAL_MIN_FRACTION", 0.10)
-PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.45)
+PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.30)
 PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 0)      # 0 = no dollar cap (only the % limits)
 PROPORTIONAL_RESERVE_USD = _env("COPY_PROPORTIONAL_RESERVE_USD", 2)   # left in SOL for network fees
-# buying the same coin again: the whole position in that coin can't pass 35% of our wallet
-PROPORTIONAL_MAX_COIN_FRACTION = _env("COPY_PROPORTIONAL_MAX_COIN_FRACTION", 0.35)
+# buying the same coin again: the whole position in that coin can't pass 30% of our wallet
+PROPORTIONAL_MAX_COIN_FRACTION = _env("COPY_PROPORTIONAL_MAX_COIN_FRACTION", 0.30)
 
 
 def coin_cost_usd(mint, real):
@@ -146,11 +146,20 @@ BUY_FRACTION = {}
 MAX_BUYS_PER_COIN = int(_env("COPY_MAX_BUYS_PER_COIN", 5))   # (wallet, mint) -> share of its free balance the wallet used in its last buy
 
 
-def proportional(address, w=None):
+def mirror(address, w=None):
+    """Mirror wallet (COPY_PROPORTIONAL_WALLETS or flagged): copy EVERYTHING it does - no style/result/size
+    filters, never paused or removed automatically. Always proportional too."""
     env = {a.strip() for a in os.getenv("COPY_PROPORTIONAL_WALLETS", "").split(",") if a.strip()}
     if w is None:
         w = _load()["wallets"].get(address) or {}
-    return bool(w.get("proportional")) or address in env
+    return bool(w.get("mirror")) or address in env
+
+
+def proportional(address, w=None):
+    """Sizing only: copy each buy with the same % the wallet puts in the coin (10%-30% of our account)."""
+    if w is None:
+        w = _load()["wallets"].get(address) or {}
+    return bool(w.get("proportional")) or mirror(address, w)
 
 
 def set_proportional(address, on):
@@ -451,7 +460,7 @@ def prune_low_balance():
         d = _load()
         busy = _busy(d)
         auto = [a for a, w in d["wallets"].items() if w.get("auto_discovered") and a not in busy and not in_test(w)
-                and not proportional(a, w)]
+                and not mirror(a, w)]
     removed = []
     for a in auto:
         usd = wallet_usd(a)
@@ -526,7 +535,7 @@ def replace_worst(candidate):
             return False
         busy = _busy(d)
         bad = [(w.get("pnl_usd", 0.0), a) for a, w in d["wallets"].items()
-               if _bad_auto_wallet(w) and a not in busy and not in_test(w) and not proportional(a, w)]
+               if _bad_auto_wallet(w) and a not in busy and not in_test(w) and not mirror(a, w)]
         if bad:
             _, worst = min(bad)
         else:
@@ -535,7 +544,7 @@ def replace_worst(candidate):
             new_score = score(candidate)
             weak = [(w.get("score", 0.0), a) for a, w in d["wallets"].items()
                     if w.get("auto_discovered") and a not in busy and w.get("copies", 0) < MIN_COPIES_TO_JUDGE
-                    and not in_test(w) and not proportional(a, w)]
+                    and not in_test(w) and not mirror(a, w)]
             if not weak:
                 return False
             low, worst = min(weak)
@@ -625,10 +634,12 @@ def wallets_text():
     for i, (addr, w) in enumerate(rows, 1):
         st = w.get("stats") or {}
         status, med = holder_status(w)
-        icon = "⏸️" if w.get("paused") else ("✅ copiando" if status == "ok" or proportional(addr, w) or in_test(w)
+        icon = "⏸️" if w.get("paused") else ("✅ copiando" if status == "ok" or mirror(addr, w) or in_test(w)
                                               else ("👀 observando" if status == "watching" else "⚡ vende rápido"))
-        if proportional(addr, w):
+        if mirror(addr, w):
             icon += " 📐 espelho: copia tudo, mesma %"
+        elif proportional(addr, w):
+            icon += " 📐 copia a % dela"
         if w.get("paused"):
             icon += " pausada (" + {"fast": "trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min",
                                     "losses": str(w.get("loss_streak", LOSS_STREAK_TO_PAUSE)) + " perdas seguidas",
@@ -946,6 +957,7 @@ def set_paused(address, paused):
         else:
             w["paused"] = False
             w.pop("pause_reason", None)
+            w["proportional"] = True            # a wallet the owner resumes copies the same % it puts in each coin
             w["loss_streak"], w["live_holds"] = 0, []      # don't re-pause at once for old reasons
         _save(d)
     _event(("⏸️ pausei " if paused else "▶️ retomei ") + address[:6] + "… (escolha do dono)")
@@ -1178,7 +1190,7 @@ def _score(d, wallet, pnl):
     w["wins"] += 1 if pnl > 0 else 0
     w["pnl_usd"] = round(w["pnl_usd"] + pnl, 4)
     w["loss_streak"] = int(w.get("loss_streak", 0)) + 1 if pnl < 0 else 0
-    if w["paused"] or proportional(wallet, w):       # mirror wallet: never paused automatically
+    if w["paused"] or mirror(wallet, w):       # mirror wallet: never paused automatically
         return None
     if w["loss_streak"] >= LOSS_STREAK_TO_PAUSE:
         # too many losing copies in a row: pause, also during the 3-day test
@@ -1204,7 +1216,7 @@ def unpause_test_wallets():
     with _LOCK:
         d = _load()
         for a, w in d["wallets"].items():
-            if w.get("paused") and w.get("pause_reason") != "manual" and proportional(a, w):
+            if w.get("paused") and w.get("pause_reason") != "manual" and mirror(a, w):
                 w["paused"] = False
                 w.pop("pause_reason", None)
                 back.append(a)
@@ -1582,7 +1594,7 @@ def preaudit_and_follow(candidate, rpc, sol_usd):
         full = len(auto) >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS
         if full:
             free = sorted((pnl, a) for pnl, a in auto if a not in busy and not in_test(d["wallets"][a])
-                          and not proportional(a, d["wallets"][a])
+                          and not mirror(a, d["wallets"][a])
                           and not proven(d["wallets"][a]))
             if not free or audit["pnl_recent"] < REPLACE_PNL_MARGIN * max(free[0][0], 0.01):
                 return "full"            # good, but not clearly better than the weakest approved wallet
@@ -1635,7 +1647,7 @@ def remove_fast_wallets():
         d = _load()
         busy = _busy(d)
         for a, w in list(d["wallets"].items()):
-            if a in busy or in_test(w) or w.get("leaving") or proportional(a, w):
+            if a in busy or in_test(w) or w.get("leaving") or mirror(a, w):
                 continue
             if proven(w):
                 if not w.get("proven"):
@@ -1742,7 +1754,7 @@ def _track_hold(wallet, side, mint, now):
             w["holds"] = (w["holds"] + [held])[-30:]
             w["live_holds"] = ((w.get("live_holds") or []) + [round(held)])[-5:]      # trades seen live
             fast = [h for h in w["live_holds"] if h < MIN_HOLD_SECONDS]
-            if len(fast) >= FAST_TRADES_TO_PAUSE and not w.get("paused") and not proportional(wallet, w):
+            if len(fast) >= FAST_TRADES_TO_PAUSE and not w.get("paused") and not mirror(wallet, w):
                 w["paused"], w["pause_reason"] = True, "fast"
                 msg = ("⏸️ Pausei " + wallet[:6] + "…" + wallet[-4:] + ": fez " + str(len(fast)) + " trades de menos de " +
                        format(MIN_HOLD_SECONDS / 60, ".0f") + " min (último: " + format(held / 60, ".1f") +
@@ -1829,26 +1841,26 @@ def cycle(send=None, chat=None):
                     else:
                         msgs += _close(mint, "copy_follow", send, chat)
             elif (owner_on or users_on) and not info.get("paused") and not info.get("leaving"):
-                mirror = proportional(wallet, info)      # mirror wallet: copy EVERYTHING it does (anti-scam stays)
+                is_mirror = mirror(wallet, info)      # mirror wallet: copy EVERYTHING it does (anti-scam stays)
                 with _LOCK:
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
-                if status != "ok" and not mirror:
+                if status != "ok" and not is_mirror:
                     _event(("observando " if status == "watching" else "não copia (vende rápido) ") + wallet[:6] + "…")
                     continue
                 with _LOCK:
                     wi = _load()["wallets"].get(wallet, {})
-                    result = "ok" if in_test(wi) or mirror else result_status(wi)   # test period: keep copying
+                    result = "ok" if in_test(wi) or is_mirror else result_status(wi)   # test period: keep copying
                 if result != "ok":
                     _event("não copia " + wallet[:6] + "…: " + ("aguardando auditoria dos últimos " if result == "unknown"
                            else "sem bom resultado nos últimos ") + format(RESULT_DAYS, ".0f") + " dias")
                     continue
                 prop = proportional(wallet, wi)
-                if not prop and MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
+                if not is_mirror and MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
                     _event("ignorou compra pequena de " + wallet[:6] + "…: " +
                            ("valor desconhecido" if paid_usd is None else "US$ " + format(paid_usd, ".0f")) +
                            " < US$ " + format(MIN_BUY_USD, ".0f"))
                     continue
-                if CONVICTION_MULT > 0 and not prop:
+                if CONVICTION_MULT > 0 and not is_mirror:
                     if typical and paid_usd < CONVICTION_MULT * typical:
                         _event("ignorou compra baixa de " + wallet[:6] + "…: US$ " + format(paid_usd, ".0f") +
                                " (ela costuma colocar US$ " + format(typical, ".0f") + ")")
