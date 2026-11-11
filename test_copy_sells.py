@@ -214,6 +214,42 @@ class FastTraderTests(unittest.TestCase):
         close.assert_called_once()
 
 
+class ManualPauseTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        d = ct._load()
+        d["score_v2"] = True
+        d["wallets"][W] = {"last_sig": "s", "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False, "holds": [],
+                           "followed_at": time.time()}
+        ct._save(d)
+
+    def tap(self, data):
+        import telegram_bot as tb
+        sent = []
+        tb.CTX.interactive = True
+        with patch.object(tb, "authorized", return_value=True), patch.object(tb, "request_api"), \
+                patch.object(tb, "send", side_effect=lambda c, t, kb=None: sent.append((t, kb))):
+            tb.handle({"callback_query": {"id": "1", "data": data, "message": {"chat": {"id": 1, "type": "private"}}}})
+        return sent
+
+    def test_owner_pauses_and_resumes_a_wallet_with_buttons(self):
+        buttons = ct.manage_buttons()
+        self.assertEqual(buttons[0][2]["callback_data"], "cw_off:" + W)
+        self.assertLessEqual(len(buttons[0][2]["callback_data"].encode()), 64)          # Telegram limit
+        sent = self.tap("cw_off:" + W)
+        self.assertIn("Pausei", sent[-1][0])
+        w = ct._load()["wallets"][W]
+        self.assertEqual((w["paused"], w["pause_reason"]), (True, "manual"))
+        self.assertEqual(ct.unpause_test_wallets(), [])                                 # never undone by the bot
+        self.assertIn("pausada (por você)", ct.wallets_text())
+        self.assertEqual(ct.manage_buttons()[0][2]["callback_data"], "cw_on:" + W)
+        self.tap("cw_on:" + W)
+        self.assertFalse(ct._load()["wallets"][W]["paused"])
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m

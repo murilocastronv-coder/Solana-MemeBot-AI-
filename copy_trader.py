@@ -532,7 +532,8 @@ def wallets_text():
         icon = "⏸️" if w.get("paused") else ("✅" if status == "ok" else ("👀" if status == "watching" else "⚡"))
         if w.get("paused"):
             icon += " pausada (" + {"fast": "trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min",
-                                    "losses": str(w.get("loss_streak", LOSS_STREAK_TO_PAUSE)) + " perdas seguidas"
+                                    "losses": str(w.get("loss_streak", LOSS_STREAK_TO_PAUSE)) + " perdas seguidas",
+                                    "manual": "por você"
                                     }.get(w.get("pause_reason"), "prejuízo nas cópias") + ")"
         hist = ""
         if st:
@@ -812,6 +813,39 @@ def wallet_buttons(addresses):
     return rows[:10]
 
 
+def manage_buttons():
+    """Copied wallets list: copy / view / pause-or-resume, one row per wallet (in list order)."""
+    d = _load()
+    rows = sorted(d["wallets"].items(), key=lambda kv: kv[1].get("score", 0.0), reverse=True)
+    out = []
+    for i, (w, info) in enumerate(rows[:30], 1):
+        short = w[:4] + "…" + w[-4:]
+        toggle = ({"text": "▶️ Retomar", "callback_data": "cw_on:" + w} if info.get("paused")
+                  else {"text": "⏸️ Pausar", "callback_data": "cw_off:" + w})
+        out.append([{"text": str(i) + ". 📋 " + short, "copy_text": {"text": w}},
+                    {"text": "🔎 Ver", "url": "https://solscan.io/account/" + w}, toggle])
+    return out
+
+
+def set_paused(address, paused):
+    """Owner's choice: pause (no new copies; open copies still sell with it) or resume a wallet.
+    A manual pause is never undone automatically; resuming clears the automatic counters."""
+    with _LOCK:
+        d = _load()
+        w = d["wallets"].get(address)
+        if w is None:
+            return None
+        if paused:
+            w["paused"], w["pause_reason"] = True, "manual"
+        else:
+            w["paused"] = False
+            w.pop("pause_reason", None)
+            w["loss_streak"], w["live_holds"] = 0, []      # don't re-pause at once for old reasons
+        _save(d)
+    _event(("⏸️ pausei " if paused else "▶️ retomei ") + address[:6] + "… (escolha do dono)")
+    return True
+
+
 def positions_wallets():
     return [p.get("wallet") for p in _load()["positions"].values()]
 
@@ -1062,7 +1096,7 @@ def unpause_test_wallets():
     with _LOCK:
         d = _load()
         for a, w in d["wallets"].items():
-            if (w.get("paused") and w.get("pause_reason") not in ("fast", "losses") and in_test(w)
+            if (w.get("paused") and w.get("pause_reason") not in ("fast", "losses", "manual") and in_test(w)
                     and float(w.get("pnl_usd", 0.0)) > -TEST_MAX_LOSS_USD):
                 w["paused"] = False
                 back.append(a)
