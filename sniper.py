@@ -8,7 +8,7 @@ Entry (all must pass):
   >= SNIPER_MIN_BUYS_5M buys and buys/sells >= 1.3, 5-min volume >= SNIPER_MIN_VOL_5M,
   price +2%..+25% in 5 min and positive in 1 h, FDV <= 15x liquidity.
 - Anti-rug / anti-scam: mint and freeze authority revoked, no Token-2022 traps (transfer fee,
-  transfer hook, permanent delegate, frozen accounts, non-transferable), top 10 holders < 25%,
+  transfer hook, permanent delegate, frozen accounts, non-transferable), top 10 holders < 34%,
   RugCheck without "danger" risks and with liquidity locked/burned >= SNIPER_MIN_LP_LOCKED.
 - Anti-honeypot: Jupiter buy -> sell round trip returns >= 92% (copy_trader.safety_reason) and the
   order's price impact <= SNIPER_MAX_IMPACT.
@@ -312,7 +312,7 @@ def impact_reason(mint):
 def safety_reason(mint, curve=False):
     """All protections; '' = safe to buy."""
     import copy_trader as ct
-    for check in (lambda: ct.safety_reason(mint),            # mint/freeze revoked, top 10 < 25%, sell test >= 92%
+    for check in (lambda: ct.safety_reason(mint),            # mint/freeze revoked, top 10 < 34%, sell test >= 92%
                   lambda: token_program_reason(mint),
                   lambda: rugcheck_reason(mint, curve=curve),
                   lambda: impact_reason(mint)):
@@ -478,7 +478,7 @@ def status_text():
              "Entra com impulso: compras > vendas e preço subindo +" + format(MIN_CHANGE_5M, ".0f") + "% a +" +
              format(MAX_CHANGE_5M, ".0f") + "% em 5 min (sem pegar topo)",
              "🛡️ Anti-rug: criador sem poder de criar/congelar, liquidez travada ≥ " + format(MIN_LP_LOCKED, ".0f") +
-             "%, 10 maiores donos < 25%, RugCheck sem risco grave",
+             "%, 10 maiores donos < " + format(__import__("copy_trader").MAX_TOP_HOLDERS * 100, ".0f") + "%, RugCheck sem risco grave",
              "🛡️ Anti-golpe: sem taxa/gatilho escondido no token, com site/rede social",
              "🛡️ Anti-honeypot: teste de compra e venda devolve ≥ 92%, impacto ≤ " + format(MAX_IMPACT, ".0f") + "%",
              "Saída: stop −" + format(STOP_LOSS * 100, ".0f") + "% · a partir de +25% vende 12% abaixo do topo · sai em 30 min se não decolar"]

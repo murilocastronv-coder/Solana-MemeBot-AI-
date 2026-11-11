@@ -5,9 +5,8 @@
 - Every other Telegram account gets its own new wallet the first time it uses the bot,
   stored encrypted on the persistent disk (user_wallets/<chat_id>.json, key derived from
   BOT_WALLET_ENCRYPTION_PASSPHRASE with scrypt). A wallet is never shared or reused.
-- Export (web page): the first time, the person creates a strong export password; after
-  that the password is required to reveal the private key (to import into Phantom).
-  Only a scrypt hash of that password is stored.
+- Private keys are never exported (the export feature was removed); they are only used by the
+  bot to sign the account's own trades.
 Never log, print or send a private key or a password.
 """
 import base64
@@ -159,91 +158,3 @@ def _private_key(chat):
     if str(wallet.pubkey()) != data["public_address"]:
         raise ValueError("Wallet address mismatch")
     return str(wallet.pubkey()), str(wallet)
-
-
-# ---------------------------------------------------------------- export password
-def password_problem(password, confirm=None):
-    """None if the password is strong, else what is missing (Portuguese, for the page)."""
-    if confirm is not None and password != confirm:
-        return "As duas senhas não são iguais."
-    if len(password) < MIN_PASSWORD_LEN:
-        return "Use pelo menos " + str(MIN_PASSWORD_LEN) + " caracteres."
-    if len(password) > 256:
-        return "Senha longa demais."
-    if not re.search(r"[a-z]", password) or not re.search(r"[A-Z]", password):
-        return "Use letras maiúsculas e minúsculas."
-    if not re.search(r"[0-9]", password):
-        return "Use pelo menos um número."
-    if not re.search(r"[^A-Za-z0-9]", password):
-        return "Use pelo menos um símbolo (ex.: ! @ # $ %)."
-    if len(set(password)) < 6:
-        return "Senha repetitiva demais."
-    return None
-
-
-def _passwords():
-    path = _passwords_file()
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def has_export_password(chat):
-    return _chat(chat) in _passwords()
-
-
-def set_export_password(chat, password, confirm):
-    """First export: store a scrypt hash of the strong password. Returns a problem text or None."""
-    why = password_problem(password, confirm)
-    if why:
-        return why
-    with _LOCK:
-        data = _passwords()
-        if _chat(chat) in data:
-            return "Esta conta já tem senha de exportação."
-        salt = os.urandom(16)
-        data[_chat(chat)] = {"salt": base64.b64encode(salt).decode(),
-                             "hash": base64.b64encode(_kdf(salt, password)).decode(),
-                             "created_at": int(time.time())}
-        _write_atomic(_passwords_file(), data)
-    return None
-
-
-def locked(chat, now=None):
-    now = now or time.time()
-    recent = [t for t in _FAILS.get(_chat(chat), []) if now - t < LOCK_SECONDS]
-    _FAILS[_chat(chat)] = recent
-    return len(recent) >= MAX_FAILS
-
-
-def check_export_password(chat, password):
-    if locked(chat):
-        return False
-    entry = _passwords().get(_chat(chat))
-    if not entry or len(password) > 256:
-        return False
-    derived = _kdf(base64.b64decode(entry["salt"]), password)
-    ok = hmac.compare_digest(derived, base64.b64decode(entry["hash"]))
-    if not ok:
-        _FAILS.setdefault(_chat(chat), []).append(time.time())
-    return ok
-
-
-def export_with_password(chat, password, confirm=None, create=False):
-    """('ok', address, private_key), ('created', message, None) or ('error', message, None).
-    Creating the password does NOT reveal the key: the person then logs in with it."""
-    if create:
-        why = set_export_password(chat, password, confirm)
-        if why:
-            return "error", why, None
-        return "created", "Senha criada! Agora entre com a sua senha para ver a chave privada.", None
-    if locked(chat):
-        return "error", "Muitas senhas erradas. Tente de novo em 1 hora.", None
-    elif not check_export_password(chat, password):
-        return "error", "Senha incorreta.", None
-    address, private_key = _private_key(chat)
-    return "ok", address, private_key
