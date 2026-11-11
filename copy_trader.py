@@ -936,11 +936,11 @@ def manage_buttons():
     rows = sorted(d["wallets"].items(), key=lambda kv: kv[1].get("score", 0.0), reverse=True)
     out = []
     for i, (w, info) in enumerate(rows[:30], 1):
-        short = w[:4] + "…" + w[-4:]
-        toggle = ({"text": "▶️ Retomar", "callback_data": "cw_on:" + w} if info.get("paused")
-                  else {"text": "⏸️ Pausar", "callback_data": "cw_off:" + w})
-        out.append([{"text": str(i) + ". 📋 " + short, "copy_text": {"text": w}},
-                    {"text": "🔎 Ver", "url": "https://solscan.io/account/" + w}, toggle])
+        # the first button says the state AND what a tap does: paused -> "▶️ COPIAR", active -> "✅ copiando · pausar"
+        toggle = ({"text": str(i) + ". ▶️ COPIAR", "callback_data": "cw_on:" + w} if info.get("paused")
+                  else {"text": str(i) + ". ✅ copiando · pausar", "callback_data": "cw_off:" + w})
+        out.append([toggle, {"text": "📋 endereço", "copy_text": {"text": w}},
+                    {"text": "🔎 Ver", "url": "https://solscan.io/account/" + w}])
     return out
 
 
