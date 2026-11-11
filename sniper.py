@@ -66,6 +66,7 @@ GECKO_FEEDS = tuple("/networks/solana/dexes/" + dex + "/pools?page=" + str(page)
                     for dex in ("pump-fun", "pumpswap") for page in (1, 2))
 PUMP_DEXES = {"pumpfun", "pumpswap"}
 SOURCES = {"dexscreener": 0, "pumpfun": 0, "geckoterminal": 0}
+LAST_PAIRS = {"at": 0.0, "pairs": []}
 BAD_EXTENSIONS = {"transferHook": "token com gatilho de transferência (pode travar a venda)",
                   "permanentDelegate": "criador pode tirar as moedas da sua carteira",
                   "nonTransferable": "token não pode ser transferido",
@@ -429,6 +430,7 @@ def cycle(send=None, chat=None, get=None, now=None, pump=None):
     stats = {"at": now, "seen": 0, "passed_filters": 0, "bought": 0, "rejected": {}, "last_reject": ""}
     d = _load()
     pairs = candidate_pairs(get, pump)
+    LAST_PAIRS.update(at=time.time(), pairs=pairs)      # shared with the consensus robot
     import logging
     logging.info("sniper scan: %s pairs (sources %s)", len(pairs), SOURCES)
     for p in pairs:
