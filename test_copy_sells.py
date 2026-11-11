@@ -329,6 +329,23 @@ class ProportionalTests(unittest.TestCase):
         ct._save(d)
         self.assertEqual(ct.unpause_test_wallets(), [W])
 
+    def test_buying_the_same_coin_again_stays_under_35_percent(self):
+        self.assertEqual(ct.add_on_room(300, 200, 1000), 150.0)        # 20% + 30% -> only up to 35%
+        self.assertIsNone(ct.add_on_room(300, 350, 1000))              # already 35%: skip
+        self.assertEqual(ct.add_on_room(450, 0, 1000), 450)            # first buy: 10%-45% rule only
+
+    def test_cycle_cuts_the_rebuy_to_35_percent(self):
+        d = ct._load()
+        d["positions"][MINT] = {"wallet": W, "real": False, "tokens": 1, "cost_usd": 30.0, "opened_at": time.time()}
+        d["balance"] = 70.0                                            # wallet value = 70 free + 30 in the coin
+        ct._save(d)
+        ct.BUY_FRACTION[(W, MINT)] = 0.30
+        with patch.object(ct, "new_signals", return_value=[("buy", MINT, 12.0)]), \
+                patch.object(ct, "users_active", return_value=False), \
+                patch.object(ct, "_open", return_value=None) as buy:
+            ct.cycle()
+        self.assertEqual(buy.call_args.kwargs["usd"], 5.0)             # 35% of 100 = 35, already 30 -> 5
+
     def test_sim_copy_uses_the_custom_size(self):
         with patch.object(ct, "safety_reason", return_value=""), \
                 patch.object(ct, "_order", return_value={"outAmount": "1000"}):

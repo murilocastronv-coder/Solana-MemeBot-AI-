@@ -121,6 +121,25 @@ PROPORTIONAL_MIN_FRACTION = _env("COPY_PROPORTIONAL_MIN_FRACTION", 0.10)
 PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.45)
 PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 0)      # 0 = no dollar cap (only the % limits)
 PROPORTIONAL_RESERVE_USD = _env("COPY_PROPORTIONAL_RESERVE_USD", 2)   # left in SOL for network fees
+# buying the same coin again: the whole position in that coin can't pass 35% of our wallet
+PROPORTIONAL_MAX_COIN_FRACTION = _env("COPY_PROPORTIONAL_MAX_COIN_FRACTION", 0.35)
+
+
+def coin_cost_usd(mint, real):
+    """What we already put in this coin (all buys of the copy)."""
+    if real:
+        import live_trade_state as st
+        return float((st._load()["positions"].get(mint) or {}).get("cost_usd") or 0)
+    return float((_load()["positions"].get(mint) or {}).get("cost_usd") or 0)
+
+
+def add_on_room(size, already_usd, wallet_value_usd):
+    """Buying the same coin again: cut the buy so the coin stays <= 35% of the wallet. None = no room."""
+    if not already_usd:
+        return size
+    room = PROPORTIONAL_MAX_COIN_FRACTION * float(wallet_value_usd) - float(already_usd)
+    size = min(float(size), room)
+    return round(size, 2) if size >= PROPORTIONAL_MIN_USD else None
 PROPORTIONAL_MIN_USD = _env("COPY_PROPORTIONAL_MIN_USD", 3)
 BUY_FRACTION = {}
 # The copied wallet buys the same coin again: buy again too, up to this many buys per coin
@@ -1858,6 +1877,14 @@ def cycle(send=None, chat=None):
                     except Exception:
                         free = value = None
                     size = proportional_usd(frac, value, free)
+                    already = coin_cost_usd(mint, real_enabled()) if size else 0
+                    if size and already:
+                        size = add_on_room(size, already, value)
+                        if size is None:
+                            _event("não recomprou " + mint[:6] + " de " + wallet[:6] + "…: já tenho " +
+                                   format(already / value * 100, ".0f") + "% da carteira nela (máx. " +
+                                   format(PROPORTIONAL_MAX_COIN_FRACTION * 100, ".0f") + "%)")
+                            continue
                     if size is None:
                         _event("não copiou " + mint[:6] + " de " + wallet[:6] + "… (proporcional): " +
                                ("valor da compra dela desconhecido" if not frac else "% dela dá menos de US$ " +
