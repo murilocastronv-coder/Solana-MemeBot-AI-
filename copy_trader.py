@@ -422,7 +422,8 @@ def prune_low_balance():
     with _LOCK:
         d = _load()
         busy = _busy(d)
-        auto = [a for a, w in d["wallets"].items() if w.get("auto_discovered") and a not in busy and not in_test(w)]
+        auto = [a for a, w in d["wallets"].items() if w.get("auto_discovered") and a not in busy and not in_test(w)
+                and not proportional(a, w)]
     removed = []
     for a in auto:
         usd = wallet_usd(a)
@@ -497,7 +498,7 @@ def replace_worst(candidate):
             return False
         busy = _busy(d)
         bad = [(w.get("pnl_usd", 0.0), a) for a, w in d["wallets"].items()
-               if _bad_auto_wallet(w) and a not in busy and not in_test(w)]
+               if _bad_auto_wallet(w) and a not in busy and not in_test(w) and not proportional(a, w)]
         if bad:
             _, worst = min(bad)
         else:
@@ -506,7 +507,7 @@ def replace_worst(candidate):
             new_score = score(candidate)
             weak = [(w.get("score", 0.0), a) for a, w in d["wallets"].items()
                     if w.get("auto_discovered") and a not in busy and w.get("copies", 0) < MIN_COPIES_TO_JUDGE
-                    and not in_test(w)]
+                    and not in_test(w) and not proportional(a, w)]
             if not weak:
                 return False
             low, worst = min(weak)
@@ -596,7 +597,7 @@ def wallets_text():
         status, med = holder_status(w)
         icon = "⏸️" if w.get("paused") else ("✅" if status == "ok" else ("👀" if status == "watching" else "⚡"))
         if proportional(addr, w):
-            icon += " 📐 mesma % da carteira"
+            icon += " 📐 espelho: copia tudo, mesma %"
         if w.get("paused"):
             icon += " pausada (" + {"fast": "trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min",
                                     "losses": str(w.get("loss_streak", LOSS_STREAK_TO_PAUSE)) + " perdas seguidas",
@@ -1146,7 +1147,7 @@ def _score(d, wallet, pnl):
     w["wins"] += 1 if pnl > 0 else 0
     w["pnl_usd"] = round(w["pnl_usd"] + pnl, 4)
     w["loss_streak"] = int(w.get("loss_streak", 0)) + 1 if pnl < 0 else 0
-    if w["paused"]:
+    if w["paused"] or proportional(wallet, w):       # mirror wallet: never paused automatically
         return None
     if w["loss_streak"] >= LOSS_STREAK_TO_PAUSE:
         # too many losing copies in a row: pause, also during the 3-day test
@@ -1172,7 +1173,11 @@ def unpause_test_wallets():
     with _LOCK:
         d = _load()
         for a, w in d["wallets"].items():
-            if (w.get("paused") and w.get("pause_reason") not in ("fast", "losses", "manual") and in_test(w)
+            if w.get("paused") and w.get("pause_reason") != "manual" and proportional(a, w):
+                w["paused"] = False
+                w.pop("pause_reason", None)
+                back.append(a)
+            elif (w.get("paused") and w.get("pause_reason") not in ("fast", "losses", "manual") and in_test(w)
                     and float(w.get("pnl_usd", 0.0)) > -TEST_MAX_LOSS_USD):
                 w["paused"] = False
                 back.append(a)
@@ -1546,6 +1551,7 @@ def preaudit_and_follow(candidate, rpc, sol_usd):
         full = len(auto) >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS
         if full:
             free = sorted((pnl, a) for pnl, a in auto if a not in busy and not in_test(d["wallets"][a])
+                          and not proportional(a, d["wallets"][a])
                           and not proven(d["wallets"][a]))
             if not free or audit["pnl_recent"] < REPLACE_PNL_MARGIN * max(free[0][0], 0.01):
                 return "full"            # good, but not clearly better than the weakest approved wallet
@@ -1598,7 +1604,7 @@ def remove_fast_wallets():
         d = _load()
         busy = _busy(d)
         for a, w in list(d["wallets"].items()):
-            if a in busy or in_test(w) or w.get("leaving"):
+            if a in busy or in_test(w) or w.get("leaving") or proportional(a, w):
                 continue
             if proven(w):
                 if not w.get("proven"):
@@ -1705,7 +1711,7 @@ def _track_hold(wallet, side, mint, now):
             w["holds"] = (w["holds"] + [held])[-30:]
             w["live_holds"] = ((w.get("live_holds") or []) + [round(held)])[-5:]      # trades seen live
             fast = [h for h in w["live_holds"] if h < MIN_HOLD_SECONDS]
-            if len(fast) >= FAST_TRADES_TO_PAUSE and not w.get("paused"):
+            if len(fast) >= FAST_TRADES_TO_PAUSE and not w.get("paused") and not proportional(wallet, w):
                 w["paused"], w["pause_reason"] = True, "fast"
                 msg = ("⏸️ Pausei " + wallet[:6] + "…" + wallet[-4:] + ": fez " + str(len(fast)) + " trades de menos de " +
                        format(MIN_HOLD_SECONDS / 60, ".0f") + " min (último: " + format(held / 60, ".1f") +
@@ -1792,14 +1798,15 @@ def cycle(send=None, chat=None):
                     else:
                         msgs += _close(mint, "copy_follow", send, chat)
             elif (owner_on or users_on) and not info.get("paused") and not info.get("leaving"):
+                mirror = proportional(wallet, info)      # mirror wallet: copy EVERYTHING it does (anti-scam stays)
                 with _LOCK:
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
-                if status != "ok":
+                if status != "ok" and not mirror:
                     _event(("observando " if status == "watching" else "não copia (vende rápido) ") + wallet[:6] + "…")
                     continue
                 with _LOCK:
                     wi = _load()["wallets"].get(wallet, {})
-                    result = "ok" if in_test(wi) else result_status(wi)      # test period: keep copying
+                    result = "ok" if in_test(wi) or mirror else result_status(wi)   # test period: keep copying
                 if result != "ok":
                     _event("não copia " + wallet[:6] + "…: " + ("aguardando auditoria dos últimos " if result == "unknown"
                            else "sem bom resultado nos últimos ") + format(RESULT_DAYS, ".0f") + " dias")
