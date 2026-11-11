@@ -130,12 +130,8 @@ python -m unittest discover -p "test_*.py"
 - O **dono** do bot (`TELEGRAM_CHAT_ID`) continua com a carteira principal, que é a que o copy trade usa.
   As outras contas só veem os botões da própria carteira: 👛 Minha carteira, 📥 Depositar, 💰 Saldo,
   💸 Saque e 🔑 Exportar. Elas não ligam nem desligam o copy trade.
-- **Exportar para a Phantom** (🔑 Exportar carteira → link seguro de 5 min, uso único):
-  1. primeira vez: **crie uma senha forte** (12+ caracteres, maiúscula, minúscula, número e símbolo);
-  2. **entre com essa senha** para ver a chave privada e importar na Phantom.
-  Só o hash da senha é guardado (`export_passwords.json`). 5 senhas erradas bloqueiam a exportação por 1 hora.
-  O bot nunca pede senha nem chave no Telegram.
-
+- **Exportação de chave privada: DESATIVADA** para todas as contas (botão, comando e página removidos).
+  As chaves ficam criptografadas no servidor e só são usadas pelo bot para assinar as operações.
 ## Copy trade para todos os usuários (taxa de 4%)
 - Toda conta do Telegram tem o **próprio copy trade**, com a **própria carteira**: 👥 Copiar (SIMULAÇÃO),
   💵 Copiar (REAL), ⏹️ Parar cópia, 📊 Meu status, 📦 Minhas posições e ⚙️ Valor por cópia

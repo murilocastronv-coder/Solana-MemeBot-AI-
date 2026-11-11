@@ -17,9 +17,6 @@ logging.basicConfig(level=logging.INFO)
 TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
 CHAT=os.getenv("TELEGRAM_CHAT_ID","")
 PRIVATE_CHAT=None  # First private /start after process startup; resets on restart.
-EXPORT_TOKENS={}
-EXPORT_LOCK=threading.Lock()
-EXPORT_URL=os.getenv("PUBLIC_BASE_URL","https://solana-memebot-telegram.onrender.com").rstrip("/")+"/exportar"
 LIVE_FAIL_NOTICES={}
 INTERVAL=max(30,int(os.getenv("SCAN_INTERVAL_SECONDS","30")))
 TP=float(os.getenv("TP_PERCENT","15"))
@@ -109,7 +106,7 @@ def keyboard():
   [{"text":"🎯 Sniper SIM","callback_data":"snp_sim"},{"text":"🎯 Sniper REAL","callback_data":"snp_real"}],
   [{"text":"⏹️ Parar sniper","callback_data":"snp_off"},{"text":"📊 Status sniper","callback_data":"snp_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
-  [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
+  [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -117,7 +114,7 @@ def user_keyboard():
   [{"text":"📦 Minhas posições","callback_data":"u_pos"},{"text":"⚙️ Valor por cópia","callback_data":"u_size"}],
   [{"text":"👛 Minha carteira","callback_data":"wallet_create"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
-  [{"text":"💸 Saque manual","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar carteira","callback_data":"wallet_export"}]]
+  [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
 def keyboard_for(chat):
  return keyboard() if authorized(chat) else user_keyboard()
 def robot_alive_line():
@@ -414,26 +411,15 @@ def wallet_action(chat,action):
   send(chat,"⚠️ Não foi possível abrir sua carteira agora. Tente de novo em instantes.",kb);return
  if created:
   send(chat,"🆕 CARTEIRA CRIADA SÓ PARA VOCÊ\nCada conta do Telegram recebe a sua própria carteira Solana, única e nova.\n\nEndereço (Solana mainnet):\n"+address+
-   "\n\n🔐 A chave privada fica criptografada no servidor. Toque em 🔑 Exportar carteira para criar sua senha forte e levar a chave para a Phantom."+
+   "\n\n🔐 A chave privada fica criptografada no servidor e não é exportada."+
    ("" if owner else "\n\n👥 Você também tem copy trade: teste em 👥 Copiar (SIMULAÇÃO) ou deposite SOL e ligue 💵 Copiar (REAL) (taxa de 4% por compra e por venda)."),kb)
   if action=="/start" and not owner:return
  if action=="/start" and not owner:
   send(chat,"👛 SUA CARTEIRA DO BOT\n"+address+"\n\nEla é só sua: cada conta do Telegram tem a própria carteira.",kb);return
  if action in ("wallet_export","/exportar_chave"):
-  token=secrets.token_urlsafe(32)
-  with EXPORT_LOCK:
-   for t in [t for t,v in EXPORT_TOKENS.items() if v["chat"]==str(chat) or time.monotonic()>v["expires"]]:EXPORT_TOKENS.pop(t,None)
-   EXPORT_TOKENS[token]={"expires":time.monotonic()+300,"attempts":0,"chat":str(chat)}
-  first=not user_wallets.has_export_password(chat)
-  url=EXPORT_URL+"?token="+token
-  send(chat,"🔑 EXPORTAR SUA CARTEIRA\n"+address+"\n\n"+
-   ("Primeira vez: no navegador você CRIA UMA SENHA FORTE (12+ caracteres, maiúscula, minúscula, número e símbolo) e depois ENTRA com ela para ver a chave privada e importar na Phantom.\n"
-    if first else "No navegador, entre com a sua senha de exportação para ver a chave privada.\n")+
-   "🔒 O bot nunca pede senha nem chave aqui no Telegram: quem pedir é golpe.\n"+
-   "\nLink válido por 5 minutos e uma única vez. Não encaminhe. Depois de importar na Phantom, confira se o endereço é o mesmo.",
-   [[{"text":"🔐 Abrir exportação segura","url":url}]]);return
+  send(chat,"🔒 A exportação de chave privada foi DESATIVADA no bot, para todas as contas.",kb);return
  if action in ("/sacar","wallet_withdraw"):
-  send(chat,"💸 SAQUE — modo seguro\nExporte a carteira (🔑 Exportar carteira), importe na Phantom e envie o SOL por lá: toque em Enviar, escolha SOL e confira o destino e a taxa.\nO bot não faz saques automáticos.",kb);return
+  send(chat,"💸 SAQUE\nA exportação de chave privada está desativada e o bot ainda não faz saques automáticos.\nPara sacar, fale com o dono do bot.\nSua carteira: "+address,kb);return
  if action in ("/depositar","/deposito","wallet_deposit"):
   send(chat,"📥 DEPÓSITO SOLANA\nEnvie SOL pela rede Solana para a SUA carteira do bot:\n"+address+"\nConfira o endereço antes de transferir. Veja o saldo em 💰 Ver saldo.",kb);return
  if action in ("wallet_balance","/saldo","/wallet","/carteira","wallet_connect"):
@@ -691,74 +677,11 @@ def loop():
    time.sleep(15)
   except Exception:logging.exception("telegram worker error");time.sleep(10)
 
-EXPORT_HEADERS={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"}
-def export_html(body):
- return Response('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Exportar carteira</title><style>body{background:#101626;color:#fff;font:16px system-ui;margin:20px auto;padding:16px;max-width:500px}input,button,textarea{display:block;box-sizing:border-box;width:100%;margin:14px 0;padding:14px;border-radius:8px}input,textarea{background:#26314a;color:#fff;border:1px solid #65728e}button{background:#6c86ff;color:#fff;border:0}textarea{height:130px;overflow-wrap:anywhere}small{color:#e6c77b}</style><h2>🔐 Exportar carteira Solana</h2>'+body+'</html>',mimetype="text/html",headers=EXPORT_HEADERS)
-KEY_PAGE="""<p><small>⚠️ Não compartilhe sua chave privada com ninguém. Importe na Phantom e feche esta página.</small></p>
-<p>Endereço público:</p><textarea readonly>{address}</textarea>
-<p>Chave privada (Phantom → Adicionar carteira → Importar chave privada):</p><textarea id="private-key" readonly>{key}</textarea>
-<button type="button" onclick="copyKey()">📋 Copiar chave privada</button><p id="copy-status" role="status"></p>
-<script>
-async function copyKey() {{
- const el = document.getElementById('private-key');
- try {{
-  await navigator.clipboard.writeText(el.value);
-  document.getElementById('copy-status').textContent = 'Chave copiada. Importe na Phantom e limpe a área de transferência depois.';
- }} catch (e) {{
-  el.focus(); el.select();
-  document.getElementById('copy-status').textContent = 'Selecione Copiar no menu do celular.';
- }}
-}}
-</script>"""
-CREATE_FORM="""<p><b>1/2 · Crie sua senha forte.</b> Sua carteira é nova e só sua. Esta senha protege a exportação: depois você entra com ela para ver a chave privada.</p>
-{error}<form method="post"><input type="hidden" name="mode" value="create">
-<label>Nova senha</label><input id="p1" type="password" name="password" required autocomplete="new-password" minlength="12" maxlength="256">
-<label>Repita a senha</label><input id="p2" type="password" name="confirm" required autocomplete="new-password" minlength="12" maxlength="256">
-<ul id="rules" style="padding-left:18px;line-height:1.7">
-<li data-r="len">12 ou mais caracteres</li><li data-r="case">maiúscula e minúscula</li>
-<li data-r="num">um número</li><li data-r="sym">um símbolo (! @ # $ %…)</li><li data-r="eq">as duas senhas iguais</li></ul>
-<button type="submit">Criar minha senha</button></form>
-<small>Guarde a senha num lugar seguro. Ela não pode ser recuperada pelo bot.</small>
-<script>
-const p1=document.getElementById('p1'),p2=document.getElementById('p2');
-function check(){{const v=p1.value,t={{len:v.length>=12,case:/[a-z]/.test(v)&&/[A-Z]/.test(v),num:/[0-9]/.test(v),sym:/[^A-Za-z0-9]/.test(v),eq:v.length>0&&v===p2.value}};
-document.querySelectorAll('#rules li').forEach(li=>{{const ok=t[li.dataset.r];li.style.color=ok?'#6be39b':'#e6c77b';li.textContent=(ok?'✅ ':'• ')+li.textContent.replace(/^(✅ |• )/,'');}});}}
-p1.oninput=check;p2.oninput=check;check();
-</script>"""
-UNLOCK_FORM="""<p><b>2/2 · Entrar:</b> digite a sua <b>senha de exportação</b> (a que você criou) para ver a chave privada.</p>
-{error}<form method="post"><input type="hidden" name="mode" value="unlock">
-<label>Senha de exportação</label><input type="password" name="password" required autocomplete="current-password" maxlength="256">
-<button type="submit">Entrar e mostrar minha chave</button></form>
-<small>🔒 Página segura (HTTPS), link de uso único. O bot nunca pede sua senha nem sua chave no Telegram: quem pedir é golpe. A chave nunca é enviada ao Telegram. Confira o endereço depois de importar na Phantom.</small>"""
 @app.route("/exportar",methods=["GET","POST"])
 def export_page():
- token=request.args.get("token","")
- with EXPORT_LOCK:
-  state=EXPORT_TOKENS.get(token)
-  if not state or time.monotonic()>state["expires"] or state["attempts"]>=5:
-   EXPORT_TOKENS.pop(token,None)
-   return export_html("<p>Link expirado ou inválido. Gere outro no Telegram em 🔑 Exportar carteira.</p>"),403
-  chat=state["chat"]
-  if request.method=="POST":state["attempts"]+=1
- try:first=not user_wallets.has_export_password(chat)
- except Exception:return export_html("<p>Carteira indisponível agora. Tente de novo.</p>"),503
- form=CREATE_FORM if first else UNLOCK_FORM
- if request.method=="GET":return export_html(form.format(error=""))
- password=request.form.get("password","");confirm=request.form.get("confirm","")
- create=first and request.form.get("mode")=="create"
- try:status,address,key=user_wallets.export_with_password(chat,password,confirm,create=create)
- except Exception:
-  logging.warning("export failed for an account (details hidden)")
-  return export_html("<p>Carteira indisponível agora. Tente de novo.</p>"),503
- if status=="created":   # step 2: log in with the new password
-  return export_html(UNLOCK_FORM.format(error='<p style="color:#6be39b">✅ '+html.escape(address)+'</p>'))
- if status!="ok":
-  return export_html(form.format(error='<p style="color:#ff8a8a">⛔ '+html.escape(address)+'</p>')),400
- with EXPORT_LOCK:EXPORT_TOKENS.pop(token,None)   # one use only
- return export_html(KEY_PAGE.format(address=html.escape(address),key=html.escape(key)))
-@app.get("/carteira")
-def wallet_page():
- return Response("""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Carteira de teste</title><style>body{background:#101626;color:#f5f7ff;font:16px system-ui;margin:0;padding:25px}main{max-width:460px;margin:auto}input,button{box-sizing:border-box;width:100%;padding:14px;margin:10px 0;border-radius:9px;border:1px solid #576179;background:#202a40;color:white}button{background:#4669ef;border:0;font-weight:bold}small{color:#b7c5da}#result{padding:12px}</style></head><body><main><h2>🔐 Carteira — teste local</h2><p>Este campo aceita texto de uma chave apenas para testar a interface. <b>Não conecta sua Phantom nem autoriza operações.</b></p><label for="secret">Chave privada de carteira de teste</label><input id="secret" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Não use a chave da carteira principal"><button id="check">Verificar campo localmente</button><button id="clear">Apagar campo</button><p id="result" role="status"></p><small>O conteúdo nunca é enviado ao servidor, nem guardado no navegador. Não insira frases de recuperação ou chaves com fundos. Trading real desativado.</small></main><script>const input=document.getElementById('secret'),result=document.getElementById('result');document.getElementById('check').onclick=()=>{result.textContent=input.value.trim()?'Campo preenchido localmente. Nenhuma chave foi importada, validada ou enviada.':'Campo vazio.'};document.getElementById('clear').onclick=()=>{input.value='';result.textContent='Campo apagado.'};</script></body></html>""",mimetype="text/html",headers={"Cache-Control":"no-store","Content-Security-Policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'","Referrer-Policy":"no-referrer","X-Content-Type-Options":"nosniff"})
+ """Private key export was removed from the bot (for every account)."""
+ return Response("<!doctype html><meta charset='utf-8'><p>Exportação de chave privada desativada.</p>",status=410,
+  mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY"})
 @app.get("/")
 def health():return {"service":"solana-memecoin-copytrade","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":live_engine.ready()}
 if __name__=="__main__":

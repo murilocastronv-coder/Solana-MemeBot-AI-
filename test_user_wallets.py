@@ -8,7 +8,6 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "")
 import telegram_bot as tb
 import user_wallets as uw
 
-STRONG = "Forte#Senha2026"
 
 
 class UserWalletTests(unittest.TestCase):
@@ -30,32 +29,6 @@ class UserWalletTests(unittest.TestCase):
         self.assertNotIn(owner, (a, b))
         self.assertEqual(uw.get_address(100), tb.get_address())
 
-    def test_strong_password_rules(self):
-        for weak in ("curta1!A", "semnumero!Aaaa", "SEMMINUSCULA1!", "semsimbolo1Aaa", "aaaaaaaaaaaA1!"):
-            self.assertIsNotNone(uw.password_problem(weak), weak)
-        self.assertIsNone(uw.password_problem(STRONG, STRONG))
-        self.assertIsNotNone(uw.password_problem(STRONG, STRONG + "x"))
-
-    def test_first_export_creates_password_then_requires_it(self):
-        address, _ = uw.create_or_get(301)
-        self.assertEqual(uw.export_with_password(301, "fraca", "fraca", create=True)[0], "error")
-        self.assertEqual(uw.export_with_password(301, STRONG, STRONG, create=True)[0], "created")   # no key yet
-        status, addr, key = uw.export_with_password(301, STRONG)                                     # log in
-        self.assertEqual((status, addr), ("ok", address))
-        from solders.keypair import Keypair
-        self.assertEqual(str(Keypair.from_base58_string(key).pubkey()), address)
-        self.assertEqual(uw.export_with_password(301, "Errada#Senha99")[0], "error")
-        self.assertEqual(uw.export_with_password(301, STRONG)[:2], ("ok", address))
-        self.assertEqual(uw.export_with_password(301, STRONG, STRONG, create=True)[0], "error")   # can't overwrite
-        self.assertNotIn(STRONG, uw._passwords_file().read_text())                              # only a hash
-
-    def test_too_many_wrong_passwords_lock_export(self):
-        uw.create_or_get(401)
-        uw.export_with_password(401, STRONG, STRONG, create=True)
-        for _ in range(uw.MAX_FAILS):
-            uw.export_with_password(401, "Errada#Senha99")
-        self.assertEqual(uw.export_with_password(401, STRONG)[0], "error")
-
     def test_other_accounts_only_get_wallet_menu(self):
         sent = []
         with patch.object(tb, "request_api"), patch.object(tb, "CHAT", "100"), \
@@ -68,31 +41,23 @@ class UserWalletTests(unittest.TestCase):
         import copy_trader
         self.assertFalse(copy_trader.real_enabled())                  # a stranger can't switch trading on
 
-    def test_export_page_create_then_unlock(self):
+
+    def test_private_key_export_is_disabled_for_everyone(self):
         sent = []
         with patch.object(tb, "request_api"), patch.object(tb, "CHAT", "100"), \
-                patch.object(tb, "send", side_effect=lambda c, t, kb=None: sent.append(kb)):
-            tb.handle({"callback_query": {"id": "1", "data": "wallet_export", "message": {"chat": {"id": 777, "type": "private"}}}})
-        url = sent[-1][0][0]["url"]
-        token = re.search(r"token=(.+)$", url).group(1)
+                patch.object(tb, "send", side_effect=lambda c, t, kb=None: sent.append((t, kb))):
+            for chat in (100, 777):                                     # owner and another account
+                tb.handle({"callback_query": {"id": "1", "data": "wallet_export",
+                                              "message": {"chat": {"id": chat, "type": "private"}}}})
+        self.assertEqual(sum("exportação de chave privada foi DESATIVADA" in t for t, _ in sent), 2)
+        self.assertFalse(any("url" in b for _, kb in sent if kb for row in kb for b in row))   # no export link
+        for kb in (tb.keyboard(), tb.user_keyboard()):
+            self.assertNotIn("wallet_export", {b.get("callback_data") for row in kb for b in row})
         client = tb.app.test_client()
-        page = client.get("/exportar?token=" + token).get_data(as_text=True)
-        self.assertIn("Crie sua senha forte", page)
-        bad = client.post("/exportar?token=" + token, data={"mode": "create", "password": "fraca", "confirm": "fraca"})
-        self.assertEqual(bad.status_code, 400)
-        made = client.post("/exportar?token=" + token, data={"mode": "create", "password": STRONG, "confirm": STRONG})
-        self.assertIn("Senha criada", made.get_data(as_text=True))
-        self.assertNotIn("Chave privada", made.get_data(as_text=True))               # step 2: log in first
-        ok = client.post("/exportar?token=" + token, data={"mode": "unlock", "password": STRONG})
-        self.assertIn("Chave privada", ok.get_data(as_text=True))
-        self.assertEqual(client.get("/exportar?token=" + token).status_code, 403)   # one use only
-        with patch.object(tb, "request_api"), patch.object(tb, "CHAT", "100"), \
-                patch.object(tb, "send", side_effect=lambda c, t, kb=None: sent.append(kb)):
-            tb.handle({"callback_query": {"id": "1", "data": "wallet_export", "message": {"chat": {"id": 777, "type": "private"}}}})
-        token = re.search(r"token=(.+)$", sent[-1][0][0]["url"]).group(1)
-        self.assertIn("senha de exportação", client.get("/exportar?token=" + token).get_data(as_text=True))
-        ok = client.post("/exportar?token=" + token, data={"mode": "unlock", "password": STRONG})
-        self.assertIn("Chave privada", ok.get_data(as_text=True))
+        self.assertEqual(client.get("/exportar?token=x").status_code, 410)
+        self.assertEqual(client.post("/exportar?token=x", data={"password": "x"}).status_code, 410)
+        self.assertEqual(client.get("/carteira").status_code, 404)        # key test page removed
+        self.assertFalse(hasattr(uw, "export_with_password"))
 
 
 if __name__ == "__main__":
