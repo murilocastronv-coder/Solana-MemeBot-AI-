@@ -751,9 +751,15 @@ def recover_real_orphans(force=False):
         else:
             st.set_position_fields(mint, mode="copy", copy_orphan=True, copy_recovered=True)
             msgs.append("⚠️ " + str(lp.get("symbol") or mint[:6]) + " está na carteira sem carteira de origem conhecida "
-                        "(nenhuma carteira seguida ainda tem essa moeda). Saída de segurança: alvo +" +
-                        format(TAKE_PROFIT * 100, ".0f") + "% / stop −" + format(STOP_LOSS * 100, ".0f") + "%.")
+                        "(nenhuma carteira seguida ainda tem essa moeda). Saída de segurança: " + orphan_exit_text() + ".")
     return msgs
+
+
+def orphan_exit_text():
+    from live_exit_monitor import ORPHAN_EXIT
+    return ("stop −" + format(float(ORPHAN_EXIT["stop_loss"]) * 100, ".0f") + "% · a partir de +" +
+            format((float(ORPHAN_EXIT["arm"]) - 1) * 100, ".0f") + "% stop móvel (vende " +
+            format(float(ORPHAN_EXIT["drop"]) * 100, ".0f") + "% abaixo do topo)")
 
 
 def positions_text():
@@ -769,8 +775,8 @@ def positions_text():
         return "📦 Nenhuma posição copiada aberta."
     lines = ["📦 POSIÇÕES COPIADAS ABERTAS: " + str(len(d["positions"]) + len(extra))]
     for m, lp in extra:
-        how = ("🛟 saída de segurança: alvo +" + format(TAKE_PROFIT * 100, ".0f") + "% / stop −" +
-               format(STOP_LOSS * 100, ".0f") + "%" if lp.get("copy_orphan") else
+        how = ("🛟 saída de segurança: " + orphan_exit_text() +
+               (" · 🚀 stop móvel ATIVO" if lp.get("trail_armed") else "") if lp.get("copy_orphan") else
                "🔎 procurando a carteira de origem (até 5 min)")
         lines.append("• " + str(lp.get("symbol") or m[:6]) + " 💵 REAL · sem carteira de origem registrada\n  " + how +
                      "\n  solscan.io/token/" + m)

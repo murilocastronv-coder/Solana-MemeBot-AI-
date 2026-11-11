@@ -20,12 +20,18 @@ def trail_text(position):
     if position.get("mode") == "consensus":
         import consensus
         return format(consensus.TRAIL_DROP * 100, ".0f")
+    if position.get("copy_orphan"):
+        return format(float(ORPHAN_EXIT["drop"]) * 100, ".0f")
     return format(float(SNIPER_EXIT["drop"]) * 100, ".0f")
 DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
 SNIPER_MAX_HOLD_SECONDS = 30 * 60  # sniper trade that never took off is closed
 
 SNIPER_STOP_LOSS = os.getenv("SNIPER_STOP_LOSS", "0.40")      # sniper: stop -40%
+# Copy positions with no known origin wallet: stop -40%, trailing stop from +25% selling 10% below the top
+ORPHAN_EXIT = {"stop_loss": os.getenv("COPY_ORPHAN_STOP_LOSS", "0.40"),
+               "arm": str(1 + float(os.getenv("COPY_ORPHAN_TRAIL_ARM", "0.25"))),
+               "drop": os.getenv("COPY_ORPHAN_TRAIL_DROP", "0.10")}
 SNIPER_EXIT = {"stop_loss": SNIPER_STOP_LOSS, "arm": "1.25", "drop": "0.12"}
 PUMPFUN_EXIT = {"stop_loss": "0.12", "arm": "1.25", "drop": "0.12"}  # old pump.fun positions only
 HOT_EXIT = {"stop_loss": "0.06", "arm": "1.08", "drop": "0.05"}
@@ -52,6 +58,8 @@ def position_signal(position, cost, proceeds):
     if position.get("mode") == "consensus":
         import consensus      # stop -40%; from +25% a trailing stop 10% below the top
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **consensus.EXIT_RULES)
+    if position.get("mode") == "copy" and position.get("copy_orphan"):
+        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **ORPHAN_EXIT)
     if (position.get("mode") == "copy" and not position.get("copy_orphan")
             and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet"):
         # Copy trade: no fixed TP/SL; copy_trader sells when the copied wallet sells.

@@ -360,7 +360,8 @@ class RealRecoveryTests(unittest.TestCase):
         self.assertIn("Saída de segurança", msgs[0])
         pos = st._load()["positions"][MINT]
         self.assertTrue(pos["copy_orphan"])
-        self.assertEqual(m.position_signal(pos, 10, 17.0)["action"], "sell")    # +70% >= target 50%
+        self.assertEqual(m.position_signal(pos, 10, 5.9)["action"], "sell")     # -41%: stop -40%
+        self.assertEqual(m.position_signal(dict(pos, peak_ratio=1.7), 10, 15.0)["action"], "sell")  # trailing
         self.assertIn("saída de segurança", c.positions_text())
 
     def test_pending_real_buy_is_remembered(self):
