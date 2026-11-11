@@ -529,6 +529,58 @@ class ResumeProportionalTests(unittest.TestCase):
         self.assertTrue(d["wallets"][W]["paused"])                # 6 losses in a row still pause it
 
 
+class BuyQueueTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        ct._BUY_Q.clear()
+        self.addCleanup(ct._BUY_Q.clear)
+
+    def test_buy_waits_while_another_order_is_in_progress_then_goes(self):
+        import live_trade_state as st
+        with patch.object(st, "pending_orders", return_value={"o": {}}), patch.object(ct, "_open") as buy:
+            ct.queue_real_buy(MINT, W, "send", 1, usd=50.0)
+            ct.queue_real_buy("Mint2" + "x" * 39, W, "send", 1, usd=40.0)     # she bought another coin
+        buy.assert_not_called()                                              # not lost: waiting in the queue
+        self.assertEqual(len(ct._BUY_Q), 2)
+        with patch.object(st, "pending_orders", return_value={}), patch.object(ct, "_open", return_value=None) as buy:
+            ct.process_buy_queue(wait=False)
+        self.assertEqual([c.args[0] for c in buy.call_args_list], [MINT, "Mint2" + "x" * 39])   # both, in order
+        self.assertTrue(all(c.kwargs["direct"] for c in buy.call_args_list))
+
+    def test_queued_buy_dropped_if_the_wallet_already_sold(self):
+        import live_trade_state as st
+        with ct._BUY_QLOCK:
+            ct._BUY_Q.append((MINT, W, None, None, 50.0, time.time() - 60))
+        with patch.object(st, "pending_orders", return_value={}), patch.object(ct, "wallet_token_balance", return_value=0), \
+                patch.object(ct, "_open") as buy:
+            ct.process_buy_queue(wait=False)
+        buy.assert_not_called()
+
+    def test_too_old_queued_buy_is_dropped_with_a_notice(self):
+        import live_trade_state as st
+        sent = []
+        with ct._BUY_QLOCK:
+            ct._BUY_Q.append((MINT, W, lambda c, t: sent.append(t), 1, 50.0, time.time() - 999))
+        with patch.object(st, "pending_orders", return_value={}), patch.object(ct, "_open") as buy:
+            ct.process_buy_queue(wait=False)
+        buy.assert_not_called()
+        self.assertIn("Não consegui copiar", sent[0])
+
+    def test_background_check_leaves_an_order_still_being_sent(self):
+        import live_trade_state as st
+        s = st._load()
+        s.update(enabled=True, halted=False)
+        st._save(s)
+        st.reserve("o9", MINT, "buy")                                         # marked in flight
+        with patch.object(st, "_reconcile_by_balance") as by_balance:
+            self.assertEqual(st.auto_reconcile("OWNER", min_age_seconds=0), [])
+        by_balance.assert_not_called()
+        st.IN_FLIGHT.pop("o9", None)
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m
