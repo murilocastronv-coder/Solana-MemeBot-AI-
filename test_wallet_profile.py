@@ -154,7 +154,7 @@ class NewRulesTests(unittest.TestCase):
 
     def test_defaults_three_orders(self):
         import live_trade_state
-        self.assertEqual((c.MAX_POSITIONS, c.MAX_OPEN_TOTAL, live_trade_state.MAX_POSITIONS), (8, 8, 8))
+        self.assertEqual((c.MAX_POSITIONS, c.MAX_OPEN_TOTAL, live_trade_state.MAX_POSITIONS), (12, 12, 12))
 
     def test_cloned_fast_wallet_never_opens(self):
         c.set_mode(True)
@@ -183,10 +183,10 @@ class NewRulesTests(unittest.TestCase):
 
     def test_total_cap_counts_copy_positions(self):
         d = c._load()
-        for m in "ABCDEFGH":
+        for m in "ABCDEFGHIJKL":
             d["positions"][m] = {"wallet": W, "real": False}
         c._save(d)
-        self.assertEqual(c.open_sim_total(), 8)
+        self.assertEqual(c.open_sim_total(), 12)
         c.follow(W)
         with patch.object(c, "safety_reason", return_value=""), patch.object(c, "_sol_usd", return_value=200.0), \
                 patch.object(c, "_order", return_value={"outAmount": "1000"}):

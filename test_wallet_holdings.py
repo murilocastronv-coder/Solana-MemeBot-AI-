@@ -50,4 +50,4 @@ class HoldingsTests(unittest.TestCase):
         self.assertIn("conferindo", wh.status_line("W"))
         wh._cache.update(at=time.monotonic(), wallet="W", coins={"AAAAxyz": 31.0})
         with patch.object(wh, "raw_balances", side_effect=AssertionError("no network from the button")):
-            self.assertIn("1/8", wh.status_line("W"))
+            self.assertIn("1/12", wh.status_line("W"))
