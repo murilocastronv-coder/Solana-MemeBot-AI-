@@ -301,6 +301,33 @@ class ProportionalTests(unittest.TestCase):
         self.assertEqual(buy.call_args.kwargs["usd"], 10.0)            # 10% of the US$ 100 simulation balance
         self.assertIn("📐", ct.wallets_text())
 
+    def test_mirror_wallet_copies_even_a_fast_trader_without_audit(self):
+        d = ct._load()
+        d["wallets"][W].update(holds=[30, 40, 50], followed_at=time.time() - 10 * 86400)   # fast, test over, no audit
+        ct._save(d)
+        ct.BUY_FRACTION[(W, MINT)] = 0.2
+        with patch.object(ct, "new_signals", return_value=[("buy", MINT, 1.0)]), \
+                patch.object(ct, "users_active", return_value=False), \
+                patch.object(ct, "_open", return_value=None) as buy:
+            ct.cycle()
+        buy.assert_called_once()
+
+    def test_mirror_wallet_is_never_paused_or_removed_automatically(self):
+        d = ct._load()
+        for _ in range(10):
+            ct._score(d, W, -50.0)
+        self.assertFalse(d["wallets"][W]["paused"])
+        d["wallets"][W]["followed_at"] = time.time() - 10 * 86400                    # test over, no profit
+        ct._save(d)
+        self.assertEqual(ct.remove_fast_wallets(), [])
+        self.assertIn(W, ct._load()["wallets"])
+        ct.set_paused(W, True)                                                       # the owner can still pause it
+        self.assertEqual(ct.unpause_test_wallets(), [])
+        d = ct._load()
+        d["wallets"][W]["pause_reason"] = "fast"                                     # paused before by an automatic rule
+        ct._save(d)
+        self.assertEqual(ct.unpause_test_wallets(), [W])
+
     def test_sim_copy_uses_the_custom_size(self):
         with patch.object(ct, "safety_reason", return_value=""), \
                 patch.object(ct, "_order", return_value={"outAmount": "1000"}):
