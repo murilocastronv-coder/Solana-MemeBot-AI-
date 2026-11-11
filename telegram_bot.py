@@ -135,7 +135,7 @@ def status_text():
    (wallet_holdings_line()+"\n" if get_address() else "")+
    "Perda do dia: US$ "+format(st["daily_loss_usd"],".2f")+(" / "+format(trade_state.daily_loss_limit(),".2f") if trade_state.DAILY_LOSS_LIMIT_ENABLED else " (sem limite diário)")+"\n"+
    "P/L real hoje: "+format(pnl["day_pnl_usd"],"+.2f")+" USD · total: "+format(pnl["total_pnl_usd"],"+.2f")+" USD · operações: "+str(pnl["trades_closed"])+" ("+str(pnl["trades_won"])+" no lucro)\n"+
-   users_line()+robot_alive_line())
+   users_line()+copy_beat_line()+"\n"+robot_alive_line())
  except Exception as exc:return "Status indisponível: "+type(exc).__name__
 def users_line():
  try:
@@ -543,6 +543,11 @@ def sniper_loop():
    if chat:sniper.cycle(send,chat)
   except Exception as exc:logging.warning("sniper cycle failed: %s",type(exc).__name__)
 USERS_UPKEEP={"next":0.0}
+COPY_BEAT={"at":0.0,"took":0.0,"error":""}
+def copy_beat_line():
+ if not COPY_BEAT["at"]:return "⏳ Copy trade: primeira rodada ainda não terminou"
+ ago=int(time.time()-COPY_BEAT["at"])
+ return ("🚨 " if ago>120 else "🔁 ")+"Copy trade: última rodada há "+str(ago)+" s (levou "+format(COPY_BEAT["took"],".0f")+" s)"+(" · erro "+COPY_BEAT["error"] if COPY_BEAT.get("error") else "")
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -552,8 +557,14 @@ def copy_loop():
    import copy_trader
    chat=active_chat()
    if not chat:continue
+   started=time.time()
    for m in copy_trader.cycle(send,chat):send(chat,m)   # also runs with copy off: sells open copies with the wallet
-  except Exception as exc:logging.warning("copy cycle failed: %s",type(exc).__name__)
+   took=time.time()-started
+   COPY_BEAT.update(at=time.time(),took=took)
+   if took>30:logging.warning("copy cycle slow: %.0f s",took)
+  except Exception as exc:
+   COPY_BEAT.update(at=time.time(),error=type(exc).__name__)
+   logging.warning("copy cycle failed: %s: %s",type(exc).__name__,str(exc)[:200])
   try:
    import consensus
    chat=active_chat()

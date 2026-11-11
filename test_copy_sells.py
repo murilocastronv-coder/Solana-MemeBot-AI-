@@ -581,6 +581,40 @@ class BuyQueueTests(unittest.TestCase):
         st.IN_FLIGHT.pop("o9", None)
 
 
+class MirrorSkipNoticeTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json"), "COPY_PROPORTIONAL_WALLETS": W})
+        p.start()
+        self.addCleanup(p.stop)
+        d = ct._load()
+        d["score_v2"] = True
+        d["wallets"][W] = {"last_sig": "s", "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False, "holds": []}
+        ct._save(d)
+        self.sent = []
+        self.send = lambda c, t: self.sent.append(t)
+
+    def test_owner_is_told_why_a_mirror_buy_was_not_copied(self):
+        d = ct._load()
+        d.update(enabled=True, real=True)
+        ct._save(d)
+        import live_engine
+        with patch.object(live_engine, "ready", return_value=False), \
+                patch.object(live_engine, "why_stopped", return_value="desligado"):
+            ct._open(MINT, W, self.send, 1, usd=50.0, direct=True)
+        self.assertIn("NÃO COPIEI", self.sent[-1])
+        self.assertIn("robô real parado: desligado", self.sent[-1])
+        self.assertIn("última recusa", ct.status_text())
+
+    def test_mirror_buy_with_copy_trade_off_is_reported(self):
+        with patch.object(ct, "new_signals", return_value=[("buy", MINT, 100.0)]), \
+                patch.object(ct, "users_active", return_value=False), \
+                patch("consensus.enabled", return_value=True):
+            ct.cycle(self.send, 1)
+        self.assertIn("copy trade está DESLIGADO", self.sent[-1])
+        self.assertIn("COPY DESLIGADO", ct.status_text())
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m

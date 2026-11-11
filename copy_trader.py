@@ -1333,6 +1333,25 @@ def _buy_worker():
             logging.warning("copy buy worker: %s", type(exc).__name__)
 
 
+MIRROR_INFO = {}   # mirror wallet -> {"read": time, "signal": text, "skip": text} (shown in the status)
+
+
+def _skip(mint, wallet, reason, send=None, chat=None):
+    """A buy of a copied wallet was not copied: log it and, for a mirror wallet, tell the owner why."""
+    text = "não copiei a compra de " + wallet[:6] + "…" + wallet[-4:] + " em " + mint[:6] + "…: " + reason
+    _event(text)
+    logging.warning("copy skipped %s from %s: %s", mint[:8], wallet[:6], reason)
+    if mirror(wallet):
+        MIRROR_INFO.setdefault(wallet, {})["skip"] = time.strftime("%H:%M") + " " + mint[:6] + "…: " + reason
+        if send and chat:
+            try:
+                send(chat, "⚠️ NÃO COPIEI uma compra da carteira espelho " + wallet[:6] + "…" + wallet[-4:] +
+                     "\nMoeda: " + mint + "\nMotivo: " + reason)
+            except Exception:
+                pass
+    return None
+
+
 def _open(mint, wallet, send, chat, usd=None, direct=False):
     """Copy a buy (simulated or real). Returns a message or None. usd: custom size (proportional wallet).
     Real buys are queued for the buy worker unless direct=True (the worker itself)."""
@@ -1346,46 +1365,48 @@ def _open(mint, wallet, send, chat, usd=None, direct=False):
     # same wallet buying the same coin again: buy again (add to our copy), up to MAX_BUYS_PER_COIN buys
     add_on = bool(mine) and mine.get("wallet") == wallet and bool(mine.get("real")) == real
     if mine and not add_on:
-        return None
-    if add_on and (int(mine.get("buys") or 1) >= MAX_BUYS_PER_COIN or mine.get("pending_buy")
-                   or mine.get("sell_wanted") or mine.get("selling_since")):
-        return None
+        return _skip(mint, wallet, "essa moeda já está aberta copiada de outra carteira", send, chat)
+    if add_on and int(mine.get("buys") or 1) >= MAX_BUYS_PER_COIN:
+        return _skip(mint, wallet, "já fiz " + str(MAX_BUYS_PER_COIN) + " compras dessa moeda (máximo)", send, chat)
+    if add_on and (mine.get("pending_buy") or mine.get("sell_wanted") or mine.get("selling_since")):
+        return _skip(mint, wallet, "a compra/venda anterior dessa moeda ainda está confirmando", send, chat)
     if real:
         import live_engine
         import live_trade_state as st
         if not live_engine.ready():
-            return None
-        allowed, _ = st.can_open(mint if add_on else None)
+            return _skip(mint, wallet, "robô real parado: " + str(live_engine.why_stopped() or "?"), send, chat)
+        allowed, why_not = st.can_open(mint if add_on else None)
         live = st._load()["positions"]
         open_now = len(live)
         if not allowed:
-            return None
+            return _skip(mint, wallet, "robô real não pode abrir agora (" + str(why_not) + ")", send, chat)
         if add_on:
             if mint not in live:
-                return None
-        elif open_now >= MAX_OPEN_TOTAL or st.positions_by_mode("copy") >= MAX_POSITIONS or mint in live:
-            return None
+                return _skip(mint, wallet, "a posição dessa moeda não está mais aberta no robô", send, chat)
+        elif open_now >= MAX_OPEN_TOTAL or st.positions_by_mode("copy") >= MAX_POSITIONS:
+            return _skip(mint, wallet, "limite de " + str(MAX_OPEN_TOTAL) + " posições abertas atingido (" +
+                         str(open_now) + " abertas)", send, chat)
+        elif mint in live:
+            return _skip(mint, wallet, "essa moeda já está aberta por outro robô (sniper/consenso)", send, chat)
         import wallet_holdings
         ok, why = wallet_holdings.can_buy(mint, live_engine.get_address(), add_on=add_on)
         if not ok:
-            _event("não comprou " + mint[:6] + ": " + why)
-            return None
+            return _skip(mint, wallet, why, send, chat)
     elif not add_on:
         with _LOCK:
             d = _load()
             if len(d["positions"]) >= MAX_POSITIONS or open_sim_total() >= MAX_OPEN_TOTAL:
-                return None
+                return _skip(mint, wallet, "limite de posições da simulação", send, chat)
     why = safety_reason(mint)
     if why:
-        _event("recusou cópia de " + wallet[:6] + "…: " + why)
-        return None
+        return _skip(mint, wallet, "anti-golpe: " + why, send, chat)
     if real:
         import live_engine
         pair = {"baseToken": {"address": mint, "symbol": mint[:6]}}
         settled = live_engine._execute_buy(pair, mint, mint[:6], send, chat, live_engine.get_address(), None, "copy",
                                            usd=size, add_on=add_on)
         if not settled:
-            return None
+            return _skip(mint, wallet, "a compra na Jupiter falhou (veja a mensagem de erro da compra)", send, chat)
         pending = settled.get("status") != "settled_buy"
         with _LOCK:
             d = _load()
@@ -1917,8 +1938,14 @@ def cycle(send=None, chat=None):
             if wallet in d["wallets"]:
                 d["wallets"][wallet]["last_sig"] = info.get("last_sig")
                 _save(d)
+        if mirror(wallet, info):
+            MIRROR_INFO.setdefault(wallet, {})["read"] = time.time()
         for side, mint, extra in signals:
             paid_usd = extra if side == "buy" else None
+            if mirror(wallet, info):
+                MIRROR_INFO.setdefault(wallet, {})["signal"] = (time.strftime("%H:%M") + " " +
+                                                               ("comprou " if side == "buy" else "vendeu ") + mint[:6] + "…")
+                logging.info("mirror %s %s %s", wallet[:6], side, mint[:8])
             fast_msg = _track_hold(wallet, side, mint, time.time())
             if fast_msg:
                 msgs.append(fast_msg)
@@ -1948,6 +1975,8 @@ def cycle(send=None, chat=None):
                         msgs += _sell_part_real(mint, frac, send, chat)   # took part of the profit: same part
                     else:
                         msgs += _close(mint, "copy_follow", send, chat)
+            elif (mirror(wallet, info) and not owner_on and not info.get("paused")):
+                _skip(mint, wallet, "o copy trade está DESLIGADO (toque em 💵 Copiar (REAL))", send, chat)
             elif (owner_on or users_on) and not info.get("paused") and not info.get("leaving"):
                 is_mirror = mirror(wallet, info)      # mirror wallet: copy EVERYTHING it does (anti-scam stays)
                 with _LOCK:
@@ -2005,14 +2034,13 @@ def cycle(send=None, chat=None):
                     if size and already:
                         size = add_on_room(size, already, value, coin_cap)
                         if size is None:
-                            _event("não recomprou " + mint[:6] + " de " + wallet[:6] + "…: já tenho " +
-                                   format(already / value * 100, ".0f") + "% da carteira nela (máx. " +
-                                   format(coin_cap * 100, ".0f") + "%)")
+                            _skip(mint, wallet, "recompra: já tenho " + format(already / value * 100, ".0f") +
+                                  "% da conta nessa moeda (máx. " + format(coin_cap * 100, ".0f") + "%)", send, chat)
                             continue
                     if size is None:
-                        _event("não copiou " + mint[:6] + " de " + wallet[:6] + "… (proporcional): " +
-                               ("valor da compra dela desconhecido" if not frac else "% dela dá menos de US$ " +
-                                format(PROPORTIONAL_MIN_USD, ".0f") + " no nosso saldo"))
+                        _skip(mint, wallet, ("não consegui medir quanto ela pagou" if not frac else
+                                             "sem saldo livre (o tamanho da compra deu menos de US$ " +
+                                             format(PROPORTIONAL_MIN_USD, ".0f") + ")"), send, chat)
                         continue
                     _event("proporcional " + wallet[:6] + "…: ela usou " + format(frac * 100, ".0f") + "% → compro US$ " +
                            format(size, ".2f") + " (" + format(size / value * 100, ".0f") + "% da carteira)")
@@ -2051,6 +2079,15 @@ def status_text():
         origin = " auto" if w.get("auto_discovered") else " manual"
         lines.append(icon + addr[:4] + "…" + addr[-4:] + origin + " · " + hold + " · cópias " + str(w["copies"]) +
                      " (" + str(w["wins"]) + " no lucro) · P/L " + format(w["pnl_usd"], "+.2f") + " USD")
+    for addr, w in d["wallets"].items():
+        if mirror(addr, w):
+            info = MIRROR_INFO.get(addr, {})
+            ago = int(time.time() - info["read"]) if info.get("read") else None
+            lines.append("📐 Espelho " + addr[:4] + "…" + addr[-4:] + ": " +
+                         ("lida há " + str(ago) + " s" if ago is not None else "ainda não lida desde o reinício") +
+                         (" · último sinal " + info["signal"] if info.get("signal") else "") +
+                         (" · última recusa " + info["skip"] if info.get("skip") else "") +
+                         ("" if d["enabled"] else " · ⚠️ COPY DESLIGADO"))
     for t, text in list(EVENTS)[-3:]:
         lines.append("• " + text)
     if LAST_ERROR["text"]:
