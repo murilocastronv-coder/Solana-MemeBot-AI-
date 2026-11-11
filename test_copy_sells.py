@@ -341,8 +341,9 @@ class ProportionalTests(unittest.TestCase):
         self.assertEqual(lim, (0.05, 0.06))
         self.assertEqual(ct.proportional_usd(0.03, 1000, limits=lim), 50.0)     # 3% -> at least 5%
         self.assertEqual(ct.proportional_usd(0.40, 1000, limits=lim), 60.0)     # 40% -> at most 6%
-        self.assertEqual(ct.add_on_room(60, 50, 1000, ct.MIRROR_MAX_COIN_FRACTION), 10.0)   # position up to 6%
-        self.assertIsNone(ct.add_on_room(60, 60, 1000, ct.MIRROR_MAX_COIN_FRACTION))        # already 6%: skip
+        self.assertEqual(ct.add_on_room(60, 60, 1000, ct.MIRROR_MAX_COIN_FRACTION), 60.0)   # 6% + 6% = 12%: ok
+        self.assertEqual(ct.add_on_room(60, 100, 1000, ct.MIRROR_MAX_COIN_FRACTION), 20.0)  # only up to 12%
+        self.assertIsNone(ct.add_on_room(60, 120, 1000, ct.MIRROR_MAX_COIN_FRACTION))       # already 12%: skip
         self.assertEqual(ct.fraction_limits("Other" + "x" * 39), (0.10, 0.30))  # other proportional wallets
 
     def test_buying_the_same_coin_again_stays_under_30_percent(self):
