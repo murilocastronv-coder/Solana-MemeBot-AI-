@@ -119,6 +119,9 @@ LOSS_STREAK_TO_PAUSE = int(_env("COPY_LOSS_STREAK_TO_PAUSE", 6))
 # each copy: between 10% and 30% of OUR wallet (free SOL + open positions), same % as the wallet inside that range
 PROPORTIONAL_MIN_FRACTION = _env("COPY_PROPORTIONAL_MIN_FRACTION", 0.10)
 PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.30)
+# mirror wallet (4x5Uti...zTJ): each copied buy between 5% and 22% of our account
+MIRROR_MIN_FRACTION = _env("COPY_MIRROR_MIN_FRACTION", 0.05)
+MIRROR_MAX_FRACTION = _env("COPY_MIRROR_MAX_FRACTION", 0.22)
 PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 0)      # 0 = no dollar cap (only the % limits)
 PROPORTIONAL_RESERVE_USD = _env("COPY_PROPORTIONAL_RESERVE_USD", 2)   # left in SOL for network fees
 # buying the same coin again: the whole position in that coin can't pass 30% of our wallet
@@ -203,13 +206,21 @@ def buy_fraction(tx, wallet):
     return min(1.0, paid / total) if total > 0 else None
 
 
-def proportional_usd(fraction, wallet_value_usd, free_usd=None):
-    """Our order for a proportional wallet: the wallet's % of its balance, kept between 10% and 45% of
-    our wallet value (free SOL + open positions); never more than the free SOL (minus fees reserve).
+def fraction_limits(address, w=None):
+    """(min, max) share of our account per buy: mirror wallets 5%-22%, other proportional ones 10%-30%."""
+    if mirror(address, w):
+        return MIRROR_MIN_FRACTION, MIRROR_MAX_FRACTION
+    return PROPORTIONAL_MIN_FRACTION, PROPORTIONAL_MAX_FRACTION
+
+
+def proportional_usd(fraction, wallet_value_usd, free_usd=None, limits=None):
+    """Our order for a proportional wallet: the wallet's % of its balance, kept between the min and max
+    share of our wallet value (free SOL + open positions); never more than the free SOL (minus fees reserve).
     None = too small or nothing free."""
     if not fraction or wallet_value_usd is None:
         return None
-    share = min(max(float(fraction), PROPORTIONAL_MIN_FRACTION), PROPORTIONAL_MAX_FRACTION)
+    lo, hi = limits or (PROPORTIONAL_MIN_FRACTION, PROPORTIONAL_MAX_FRACTION)
+    share = min(max(float(fraction), lo), hi)
     usd = share * float(wallet_value_usd)
     if PROPORTIONAL_MAX_USD > 0:
         usd = min(usd, PROPORTIONAL_MAX_USD)
@@ -637,7 +648,8 @@ def wallets_text():
         icon = "⏸️" if w.get("paused") else ("✅ copiando" if status == "ok" or mirror(addr, w) or in_test(w)
                                               else ("👀 observando" if status == "watching" else "⚡ vende rápido"))
         if mirror(addr, w):
-            icon += " 📐 espelho: copia tudo, mesma %"
+            icon += (" 📐 espelho: copia tudo, mesma % (" + format(MIRROR_MIN_FRACTION * 100, ".0f") + "%–" +
+                     format(MIRROR_MAX_FRACTION * 100, ".0f") + "% da conta)")
         elif proportional(addr, w):
             icon += " 📐 copia a % dela"
         if w.get("paused"):
@@ -1891,7 +1903,7 @@ def cycle(send=None, chat=None):
                                                if not p.get("real"))
                     except Exception:
                         free = value = None
-                    size = proportional_usd(frac, value, free)
+                    size = proportional_usd(frac, value, free, limits=fraction_limits(wallet, wi))
                     already = coin_cost_usd(mint, real_enabled()) if size else 0
                     if size and already:
                         size = add_on_room(size, already, value)
