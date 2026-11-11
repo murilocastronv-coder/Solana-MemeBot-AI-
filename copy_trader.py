@@ -122,8 +122,8 @@ PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.30)
 # mirror wallet (4x5Uti...zTJ): each copied buy between 5% and 6% of our account
 MIRROR_MIN_FRACTION = _env("COPY_MIRROR_MIN_FRACTION", 0.05)
 MIRROR_MAX_FRACTION = _env("COPY_MIRROR_MAX_FRACTION", 0.06)
-# ... and the whole position in one coin (all its buys) at most 6% of our account
-MIRROR_MAX_COIN_FRACTION = _env("COPY_MIRROR_MAX_COIN_FRACTION", 0.06)
+# ... and the whole position in one coin (all its buys, rebuys included) at most 12% of our account
+MIRROR_MAX_COIN_FRACTION = _env("COPY_MIRROR_MAX_COIN_FRACTION", 0.12)
 PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 0)      # 0 = no dollar cap (only the % limits)
 PROPORTIONAL_RESERVE_USD = _env("COPY_PROPORTIONAL_RESERVE_USD", 2)   # left in SOL for network fees
 # buying the same coin again: the whole position in that coin can't pass 30% of our wallet
