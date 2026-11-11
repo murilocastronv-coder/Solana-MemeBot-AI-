@@ -116,8 +116,11 @@ FAST_TRADES_TO_PAUSE = int(_env("COPY_FAST_TRADES_TO_PAUSE", 2))
 LOSS_STREAK_TO_PAUSE = int(_env("COPY_LOSS_STREAK_TO_PAUSE", 6))
 # Proportional wallets: copy each buy with the SAME % of our free balance that the wallet used of its own
 # (10% -> 10%, 30% -> 30%), capped. List in COPY_PROPORTIONAL_WALLETS (comma) or toggle with /proporcional.
-PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.5)
-PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 100)
+# each copy: between 10% and 45% of OUR wallet (free SOL + open positions), same % as the wallet inside that range
+PROPORTIONAL_MIN_FRACTION = _env("COPY_PROPORTIONAL_MIN_FRACTION", 0.10)
+PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.45)
+PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 0)      # 0 = no dollar cap (only the % limits)
+PROPORTIONAL_RESERVE_USD = _env("COPY_PROPORTIONAL_RESERVE_USD", 2)   # left in SOL for network fees
 PROPORTIONAL_MIN_USD = _env("COPY_PROPORTIONAL_MIN_USD", 3)
 BUY_FRACTION = {}
 # The copied wallet buys the same coin again: buy again too, up to this many buys per coin
@@ -172,12 +175,18 @@ def buy_fraction(tx, wallet):
     return min(1.0, paid / total) if total > 0 else None
 
 
-def proportional_usd(fraction, free_usd):
-    """Our order for a proportional wallet: same share of our free balance, capped. None = too small."""
-    if not fraction or free_usd is None:
+def proportional_usd(fraction, wallet_value_usd, free_usd=None):
+    """Our order for a proportional wallet: the wallet's % of its balance, kept between 10% and 45% of
+    our wallet value (free SOL + open positions); never more than the free SOL (minus fees reserve).
+    None = too small or nothing free."""
+    if not fraction or wallet_value_usd is None:
         return None
-    usd = min(float(fraction), PROPORTIONAL_MAX_FRACTION) * float(free_usd)
-    usd = min(usd, PROPORTIONAL_MAX_USD)
+    share = min(max(float(fraction), PROPORTIONAL_MIN_FRACTION), PROPORTIONAL_MAX_FRACTION)
+    usd = share * float(wallet_value_usd)
+    if PROPORTIONAL_MAX_USD > 0:
+        usd = min(usd, PROPORTIONAL_MAX_USD)
+    if free_usd is not None:
+        usd = min(usd, float(free_usd) - PROPORTIONAL_RESERVE_USD)
     return round(usd, 2) if usd >= PROPORTIONAL_MIN_USD else None
 
 
@@ -1833,23 +1842,29 @@ def cycle(send=None, chat=None):
                 size = None
                 if prop:
                     frac = BUY_FRACTION.pop((wallet, mint), None)
-                    free = None
+                    free = value = None
                     try:
                         if real_enabled():
                             import live_engine
+                            import live_trade_state as st
                             free = wallet_usd(live_engine.get_address(), max_age=0)
+                            value = None if free is None else free + sum(
+                                float(p.get("cost_usd") or 0) for p in st._load()["positions"].values())
                         else:
-                            free = _load()["balance"]
+                            dd = _load()
+                            free = dd["balance"]
+                            value = free + sum(float(p.get("cost_usd") or 0) for p in dd["positions"].values()
+                                               if not p.get("real"))
                     except Exception:
-                        free = None
-                    size = proportional_usd(frac, free)
+                        free = value = None
+                    size = proportional_usd(frac, value, free)
                     if size is None:
                         _event("não copiou " + mint[:6] + " de " + wallet[:6] + "… (proporcional): " +
                                ("valor da compra dela desconhecido" if not frac else "% dela dá menos de US$ " +
                                 format(PROPORTIONAL_MIN_USD, ".0f") + " no nosso saldo"))
                         continue
                     _event("proporcional " + wallet[:6] + "…: ela usou " + format(frac * 100, ".0f") + "% → compro US$ " +
-                           format(size, ".2f"))
+                           format(size, ".2f") + " (" + format(size / value * 100, ".0f") + "% da carteira)")
                 m = _open(mint, wallet, send, chat, usd=size)
                 if m:
                     msgs.append(m)
