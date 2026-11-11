@@ -174,10 +174,13 @@ python -m unittest discover -p "test_*.py"
 - Compra uma moeda quando **3 ou mais das carteiras acompanhadas** (não pausadas, compra ≥ US$ 40) compram
   **a mesma moeda dentro de 1 hora** (`CONSENSUS_MIN_WALLETS`, `CONSENSUS_WINDOW_MINUTES`). Para exigir a
   maioria das carteiras, use `CONSENSUS_MIN_SHARE=0.5`.
-- **Também olha o mercado inteiro:** a busca automática lê as negociações das moedas em alta e anota quem compra
-  cada uma. Se **15+ carteiras quaisquer** compraram a moeda na última hora e **2+ delas** têm histórico de
-  lucro analisado pelo bot (mesmo sem estarem sendo copiadas), o robô compra também
-  (`CONSENSUS_MARKET_MIN_BUYERS`, `CONSENSUS_MARKET_MIN_GOOD`; `CONSENSUS_MARKET=false` desliga).
+- **Também olha o mercado (carteiras de fora do copy):** compra quando **a maioria das pessoas está comprando**:
+  - na blockchain (moedas em alta lidas pela busca): **15+ carteiras** negociaram a moeda na última hora e
+    **65%+ delas estão comprando** (`CONSENSUS_MARKET_MIN_BUYERS`, `CONSENSUS_MARKET_MIN_BUY_SHARE`);
+  - na DexScreener (muito mais moedas, inclusive pump.fun): **150+ compras na última hora**, **65%+ das
+    negociações são compras**, ainda comprando nos últimos 5 min e liquidez ≥ US$ 10 mil
+    (`CONSENSUS_DEX_MIN_BUYS_1H`, `CONSENSUS_DEX_MIN_LIQUIDITY_USD`).
+  Nenhuma carteira precisa estar no copy. `CONSENSUS_MARKET=false` / `CONSENSUS_DEX=false` desligam.
 - Proteções: anti-golpe e teste de venda (honeypot) do copy trade + armadilhas Token-2022 do sniper.
 - **Stop −40%**; a partir de **+25%** entra o **stop móvel** (vende 10% abaixo do topo)
   (`CONSENSUS_STOP_LOSS`, `CONSENSUS_TRAIL_ARM`, `CONSENSUS_TRAIL_DROP`).

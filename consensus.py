@@ -27,7 +27,13 @@ MIN_WALLETS = int(_f("CONSENSUS_MIN_WALLETS", 3))
 # Market-wide: many different wallets buying the coin in the window, with some of them proven
 # (wallets the bot analysed with a profitable history), even if they are not copied.
 MARKET_MIN_BUYERS = int(_f("CONSENSUS_MARKET_MIN_BUYERS", 15))
-MARKET_MIN_GOOD = int(_f("CONSENSUS_MARKET_MIN_GOOD", 2))
+MARKET_MIN_GOOD = int(_f("CONSENSUS_MARKET_MIN_GOOD", 0))         # wallets with profit history (0 = not needed)
+MARKET_MIN_BUY_SHARE = _f("CONSENSUS_MARKET_MIN_BUY_SHARE", 0.65)  # "most people are buying": 65%+ of traders buy
+# DexScreener (many more coins): trades in the last hour
+DEX_ENABLED = os.getenv("CONSENSUS_DEX", "true").strip().lower() != "false"
+DEX_MIN_BUYS_1H = int(_f("CONSENSUS_DEX_MIN_BUYS_1H", 150))
+DEX_MIN_LIQ = _f("CONSENSUS_DEX_MIN_LIQUIDITY_USD", 10_000)
+_DEX_CACHE = {"at": 0.0, "pairs": []}
 MARKET_ENABLED = os.getenv("CONSENSUS_MARKET", "true").strip().lower() != "false"
 MIN_SHARE = _f("CONSENSUS_MIN_SHARE", 0)            # 0.5 = the majority of the followed wallets
 WINDOW_S = _f("CONSENSUS_WINDOW_MINUTES", 60) * 60
@@ -101,17 +107,25 @@ def record_buy(mint, wallet, now=None):
 
 
 def record_market_buys(rows, now=None):
-    """[(mint, wallet, time)] seen in the market by the wallet search (any wallet, copied or not)."""
+    """[(mint, wallet, time, 'b'|'s')] traded in the market, seen by the wallet search (any wallet,
+    copied or not). 3-item rows count as buys."""
     now = now or time.time()
     with _LOCK:
         d = _load()
-        m = d.setdefault("market", {})
-        for mint, wallet, when in rows:
-            if now - float(when) < WINDOW_S:
-                m.setdefault(mint, {})[wallet] = float(when)
-        d["market"] = {mint: dict(sorted(((w, t) for w, t in ws.items() if now - t < WINDOW_S),
-                                         key=lambda kv: kv[1])[-500:])
-                       for mint, ws in m.items() if any(now - t < WINDOW_S for t in ws.values())}
+        m = d.setdefault("market2", {})
+        for row in rows:
+            mint, wallet, when = row[0], row[1], float(row[2])
+            side = row[3] if len(row) > 3 else "b"
+            if now - when < WINDOW_S:
+                m.setdefault(mint, {"b": {}, "s": {}})[side][wallet] = when
+        keep = {}
+        for mint, sides in m.items():
+            b = dict(sorted(((w, t) for w, t in sides.get("b", {}).items() if now - t < WINDOW_S), key=lambda kv: kv[1])[-500:])
+            sl = dict(sorted(((w, t) for w, t in sides.get("s", {}).items() if now - t < WINDOW_S), key=lambda kv: kv[1])[-500:])
+            if b or sl:
+                keep[mint] = {"b": b, "s": sl}
+        d["market2"] = keep
+        d.pop("market", None)
         _save(d)
 
 
@@ -126,18 +140,59 @@ def good_wallets():
 
 
 def market_candidates(now=None, good=None):
-    """[(mint, buyers, good buyers)] with many buyers and some proven ones, most good first."""
+    """On-chain (hot coins read by the wallet search): [(mint, buyers, sellers, proven buyers)] where many
+    different wallets traded the coin in the window and most of them are buying."""
     if not MARKET_ENABLED:
         return []
     now = now or time.time()
-    good = good_wallets() if good is None else good
+    if good is None:
+        good = good_wallets() if MARKET_MIN_GOOD > 0 else set()
     out = []
-    for mint, ws in _load().get("market", {}).items():
-        recent = [w for w, t in ws.items() if now - t < WINDOW_S]
-        smart = [w for w in recent if w in good]
-        if len(recent) >= MARKET_MIN_BUYERS and len(smart) >= MARKET_MIN_GOOD:
-            out.append((mint, recent, smart))
-    return sorted(out, key=lambda x: (-len(x[2]), -len(x[1])))
+    for mint, sides in _load().get("market2", {}).items():
+        buyers = {w for w, t in sides.get("b", {}).items() if now - t < WINDOW_S}
+        sellers = {w for w, t in sides.get("s", {}).items() if now - t < WINDOW_S}
+        smart = buyers & good
+        share = len(buyers) / (len(buyers) + len(sellers)) if buyers else 0
+        if len(buyers) >= MARKET_MIN_BUYERS and share >= MARKET_MIN_BUY_SHARE and len(smart) >= MARKET_MIN_GOOD:
+            out.append((mint, sorted(buyers), sorted(sellers), sorted(smart)))
+    return sorted(out, key=lambda x: -len(x[1]))
+
+
+def dex_pairs(now=None):
+    """Pairs from DexScreener (+ pump.fun via the sniper's sources), refreshed every 2 min."""
+    now = now or time.time()
+    try:
+        import sniper
+        if sniper.LAST_PAIRS.get("pairs") and now - sniper.LAST_PAIRS["at"] < 90:
+            return sniper.LAST_PAIRS["pairs"]
+    except Exception:
+        pass
+    if now - _DEX_CACHE["at"] >= 120:
+        _DEX_CACHE["at"] = now
+        try:
+            import sniper
+            _DEX_CACHE["pairs"] = sniper.candidate_pairs(None, pump=([], {}))
+        except Exception:
+            pass
+    return _DEX_CACHE["pairs"]
+
+
+def dex_candidates(pairs):
+    """DexScreener: [(mint, buys 1h, sells 1h)] where most trades of the last hour are buys and it is
+    still being bought in the last 5 min."""
+    if not DEX_ENABLED:
+        return []
+    out = []
+    for p in pairs or []:
+        mint = ((p or {}).get("baseToken") or {}).get("address")
+        tx = p.get("txns") or {}
+        h1, m5 = tx.get("h1") or {}, tx.get("m5") or {}
+        b, sl = int(h1.get("buys") or 0), int(h1.get("sells") or 0)
+        liq = float((p.get("liquidity") or {}).get("usd") or 0)
+        if (mint and b >= DEX_MIN_BUYS_1H and b / max(b + sl, 1) >= MARKET_MIN_BUY_SHARE
+                and int(m5.get("buys") or 0) >= int(m5.get("sells") or 0) and liq >= DEX_MIN_LIQ):
+            out.append((mint, b, sl))
+    return sorted(out, key=lambda x: -x[1] / max(x[1] + x[2], 1))
 
 
 def followed_count():
@@ -267,10 +322,15 @@ def cycle(send=None, chat=None, now=None):
     real = bool(d["real"])
     found = [(m, ws, str(len(ws)) + " carteiras acompanhadas compraram") for m, ws in candidates(now)]
     market = market_candidates(now)
-    found += [(m, ws, "mercado: " + str(len(ws)) + " carteiras compraram, " + str(len(smart)) + " com histórico de lucro,")
-              for m, ws, smart in market if m not in {f[0] for f in found}]
+    found += [(m, b, "mercado: " + str(len(b)) + " carteiras comprando x " + str(len(sl)) + " vendendo (" +
+               format(len(b) / (len(b) + len(sl)) * 100, ".0f") + "% compram) em")
+              for m, b, sl, _ in market if m not in {f[0] for f in found}]
+    dex = dex_candidates(dex_pairs(now))
+    found += [(m, [None] * b, "DEX: " + str(b) + " compras x " + str(sl) + " vendas (" +
+               format(b / (b + sl) * 100, ".0f") + "% compras) em")
+              for m, b, sl in dex if m not in {f[0] for f in found}]
     LAST.update(at=now, candidates=[(m, len(ws)) for m, ws, _ in found[:5]],
-                market=[(m, len(ws), len(sm)) for m, ws, sm in market[:5]])
+                market=[(m, len(b), len(sl)) for m, b, sl, _ in market[:5]], dex=dex[:5])
     for mint, ws, label in found:
         if now - float(_load()["tried"].get(mint, 0)) < COOLDOWN_S:
             continue
@@ -304,19 +364,25 @@ def status_text():
     hot = [(m, n) for m, n in hot if n >= 2]
     if hot:
         lines.append("Moedas com mais carteiras comprando agora: " + ", ".join(m[:6] + "… (" + str(n) + ")" for m, n in hot))
-    if MARKET_ENABLED:
-        lines.insert(2, "Mercado: também compra quando " + str(MARKET_MIN_BUYERS) + "+ carteiras quaisquer compram a moeda em " +
-                     format(WINDOW_S / 3600, ".0f") + " h e " + str(MARKET_MIN_GOOD) + "+ delas têm histórico de lucro (mesmo sem copiar)")
-        mk = LAST.get("market") or []
-        if not mk:
-            good = good_wallets()
-            mk = sorted(((m, len([t for t in ws.values() if now - t < WINDOW_S]),
-                          len([w for w, t in ws.items() if now - t < WINDOW_S and w in good]))
-                         for m, ws in d.get("market", {}).items()), key=lambda x: (-x[2], -x[1]))[:5]
-        mk = [x for x in mk if x[1] >= 3]
+    if MARKET_ENABLED or DEX_ENABLED:
+        lines.insert(2, "Mercado (carteiras de fora do copy): compra quando a MAIORIA está comprando — na blockchain " +
+                     str(MARKET_MIN_BUYERS) + "+ carteiras e " + format(MARKET_MIN_BUY_SHARE * 100, ".0f") +
+                     "%+ comprando; na DexScreener " + str(DEX_MIN_BUYS_1H) + "+ compras/h e " +
+                     format(MARKET_MIN_BUY_SHARE * 100, ".0f") + "%+ das negociações são compras")
+        mk = []
+        for m, sides in d.get("market2", {}).items():
+            b = len([t for t in sides.get("b", {}).values() if now - t < WINDOW_S])
+            sl = len([t for t in sides.get("s", {}).values() if now - t < WINDOW_S])
+            if b >= 3:
+                mk.append((m, b, sl))
+        mk = sorted(mk, key=lambda x: -x[1])[:4]
         if mk:
-            lines.append("No mercado agora: " + ", ".join(m[:6] + "… (" + str(n) + " compradores, " + str(g) + " com lucro)"
-                                                         for m, n, g in mk))
+            lines.append("Na blockchain agora: " + ", ".join(m[:6] + "… (" + str(b) + " comprando x " + str(sl) + " vendendo)"
+                                                            for m, b, sl in mk))
+        dx = LAST.get("dex") or []
+        if dx:
+            lines.append("Na DexScreener (maioria comprando): " + ", ".join(m[:6] + "… (" + str(b) + "/" + str(sl) + ")"
+                                                                           for m, b, sl in dx[:4]))
     if LAST["last_reject"]:
         lines.append("Última recusa: " + LAST["last_reject"])
     if not d["real"]:

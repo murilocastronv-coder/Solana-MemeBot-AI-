@@ -144,6 +144,12 @@ def buyers_of(tx, mint):
     return [o for o, (delta, _) in (tokens.get(mint) or {}).items() if delta > 0 and int(sol.get(o, 0)) < 0]
 
 
+def sellers_of(tx, mint):
+    """Wallets that sold `mint` for SOL in this transaction."""
+    tokens, sol = wallet_copy._tx_deltas(tx)
+    return [o for o, (delta, _) in (tokens.get(mint) or {}).items() if delta < 0 and int(sol.get(o, 0)) > 0]
+
+
 def _get_tx(rpc, signature):
     return rpc("getTransaction", [signature, {"encoding": "json", "commitment": "confirmed",
                                               "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1"))}])
@@ -271,7 +277,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
                 seen.add(s["signature"])
                 buyers += _buyers(tx)
                 when = tx.get("blockTime") or s.get("blockTime") or time.time()
-                market_buys += [(p["mint"], w, when) for w in buyers_of(tx, p["mint"])]
+                market_buys += [(p["mint"], w, when, "b") for w in buyers_of(tx, p["mint"])]
+                market_buys += [(p["mint"], w, when, "s") for w in sellers_of(tx, p["mint"])]
                 block = {"blockTime": tx.get("blockTime") or s.get("blockTime"), "transactions": [tx]}
                 wallet_copy.process_confirmed_block(state, block, slot=tx.get("slot"))
                 scanned += 1
