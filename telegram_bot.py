@@ -51,7 +51,7 @@ NOTIFY_REPEAT_S=float(os.getenv("NOTIFY_REPEAT_HOURS","2"))*3600
 SENT_AT={}
 SENT_LOCK=threading.Lock()
 CTX=threading.local()   # CTX.interactive=True while answering the owner (button/command)
-TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada")
+TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL")
 def is_trade_message(text):
  """A buy/sell notice: always sent, never held back (errors and warnings are not trades)."""
  t=(text or "").lstrip()

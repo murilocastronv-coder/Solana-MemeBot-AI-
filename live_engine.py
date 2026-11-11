@@ -274,7 +274,13 @@ def exit_cycle(send, chat):
     if not wallet:
         return
     now = time.monotonic()
-    for mint, position, signal in sell_signals():
+    signals = sell_signals()
+    from live_exit_monitor import ARMED, trail_text
+    while ARMED:
+        m, p, sig = ARMED.pop(0)
+        send(chat, "🚀 STOP MÓVEL ATIVADO — " + str(p.get("symbol") or m[:6]) + " " + format(sig["change_pct"], "+.0f") +
+             "%\nAgora vendo se cair " + trail_text(p) + "% abaixo do topo (o stop sobe junto com o preço).\n" + m)
+    for mint, position, signal in signals:
         symbol = position.get("symbol") or mint[:6]
         if signal["action"] == "write_off" or _sell_fail_count.get(mint, 0) >= MAX_SELL_FAILURES:
             _write_off(send, chat, mint, symbol, signal["action"] == "write_off")

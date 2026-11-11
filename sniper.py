@@ -406,6 +406,9 @@ def sim_exits(send=None, chat=None):
             if not q:
                 continue
             q["peak_ratio"] = max(float(q.get("peak_ratio") or 0), sig["peak_ratio"])
+            armed_now = sig.get("reason") == "trailing" and not q.get("trail_armed")
+            if armed_now:
+                q["trail_armed"] = True
             if sig["action"] == "sell":
                 d["positions"].pop(mint)
                 d["balance"] = round(d["balance"] + value, 6)
@@ -413,6 +416,10 @@ def sim_exits(send=None, chat=None):
                 d["history"] = (d["history"] + [{"mint": mint, "symbol": pos.get("symbol"), "pnl_usd": round(pnl, 4),
                                                  "reason": sig["reason"], "closed_at": time.time()}])[-200:]
             _save(d)
+        if armed_now and send and chat:
+            from live_exit_monitor import trail_text
+            send(chat, "🎯 SIM 🚀 STOP MÓVEL ATIVADO — " + str(pos.get("symbol") or mint[:6]) + " " +
+                 format(sig["change_pct"], "+.0f") + "%: vendo se cair " + trail_text(pos) + "% abaixo do topo.")
         if sig["action"] == "sell" and send and chat:
             label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO"}.get(sig["reason"], "🛑 STOP")
             send(chat, "🎯 SIM " + ("💰 LUCRO" if pnl > 0 else "🔻 PREJUÍZO") + " — VENDEU " + str(pos.get("symbol")) +

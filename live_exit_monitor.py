@@ -12,6 +12,15 @@ from jupiter_v2_executor import order, SOL_MINT, USDC_MINT
 _last_alert = {}
 _quote_fail_since = {}  # mint -> monotonic time quotes started failing
 _quote_err_logged = {}  # mint -> last time the reason was logged
+ARMED = []  # (mint, position, signal) whose trailing stop just started: live_engine tells the owner
+
+
+def trail_text(position):
+    """'sells X% below the top' for the position's trailing rule."""
+    if position.get("mode") == "consensus":
+        import consensus
+        return format(consensus.TRAIL_DROP * 100, ".0f")
+    return format(float(SNIPER_EXIT["drop"]) * 100, ".0f")
 DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
 SNIPER_MAX_HOLD_SECONDS = 30 * 60  # sniper trade that never took off is closed
@@ -100,6 +109,9 @@ def _evaluate():
             signal = position_signal(position, cost, proceeds)
             if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
                 live_trade_state.update_peak(mint, signal["peak_ratio"])
+            if signal.get("reason") == "trailing" and not position.get("trail_armed"):
+                live_trade_state.set_position_fields(mint, trail_armed=True)
+                ARMED.append((mint, position, signal))
             _quote_fail_since.pop(mint, None)
             yield mint, position, signal
         except Exception as exc:
