@@ -149,7 +149,7 @@ def add_on_room(size, already_usd, wallet_value_usd, max_coin=None):
 PROPORTIONAL_MIN_USD = _env("COPY_PROPORTIONAL_MIN_USD", 3)
 BUY_FRACTION = {}
 # The copied wallet buys the same coin again: buy again too, up to this many buys per coin
-MAX_BUYS_PER_COIN = int(_env("COPY_MAX_BUYS_PER_COIN", 5))   # (wallet, mint) -> share of its free balance the wallet used in its last buy
+MAX_BUYS_PER_COIN = int(_env("COPY_MAX_BUYS_PER_COIN", 4))   # (wallet, mint) -> share of its free balance the wallet used in its last buy
 
 
 def mirror(address, w=None):

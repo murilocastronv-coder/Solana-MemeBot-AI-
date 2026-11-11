@@ -403,7 +403,7 @@ class RepeatBuyTests(unittest.TestCase):
         with patch.object(ct, "safety_reason", return_value=""), patch.object(ct, "_order", return_value={"outAmount": "1000"}):
             for _ in range(8):
                 ct._open(MINT, W, None, None, usd=5.0)
-        self.assertEqual(ct._load()["positions"][MINT]["buys"], ct.MAX_BUYS_PER_COIN)
+        self.assertEqual(ct._load()["positions"][MINT]["buys"], 4)            # max 4 buys of the same coin
 
     def test_other_wallet_buying_a_coin_we_hold_is_not_added(self):
         other = "Other" + "x" * 39
