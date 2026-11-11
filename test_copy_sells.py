@@ -286,11 +286,12 @@ class ProportionalTests(unittest.TestCase):
               "transaction": {"message": {"accountKeys": [W]}}}
         self.assertAlmostEqual(ct.buy_fraction(tx, W), 0.30)          # spent 3 of 10 SOL
 
-    def test_same_percentage_capped(self):
-        self.assertEqual(ct.proportional_usd(0.10, 300), 30.0)          # 10% -> 10%
-        self.assertEqual(ct.proportional_usd(0.30, 300), 90.0)          # 30% -> 30%
-        self.assertEqual(ct.proportional_usd(0.90, 300), 100.0)         # max 50% and US$ 100
-        self.assertIsNone(ct.proportional_usd(0.005, 300))              # < US$ 3
+    def test_between_10_and_45_percent_of_our_wallet(self):
+        self.assertEqual(ct.proportional_usd(0.30, 1000), 300.0)        # 30% -> 30% (no dollar cap)
+        self.assertEqual(ct.proportional_usd(0.02, 1000), 100.0)        # 2% -> at least 10%
+        self.assertEqual(ct.proportional_usd(0.90, 1000), 450.0)        # 90% -> at most 45%
+        self.assertEqual(ct.proportional_usd(0.30, 1000, free_usd=150), 148.0)   # only what is free (- fees)
+        self.assertIsNone(ct.proportional_usd(0.30, 1000, free_usd=3))   # nothing free
 
     def test_proportional_wallet_buys_same_share_even_small_buys(self):
         ct.BUY_FRACTION[(W, MINT)] = 0.10
@@ -298,7 +299,7 @@ class ProportionalTests(unittest.TestCase):
                 patch.object(ct, "users_active", return_value=False), \
                 patch.object(ct, "_open", return_value=None) as buy:
             ct.cycle()
-        self.assertEqual(buy.call_args.kwargs["usd"], 10.0)            # 10% of the US$ 100 simulation balance
+        self.assertEqual(buy.call_args.kwargs["usd"], 10.0)            # 10% of the US$ 100 simulation wallet
         self.assertIn("📐", ct.wallets_text())
 
     def test_mirror_wallet_copies_even_a_fast_trader_without_audit(self):

@@ -314,7 +314,7 @@ def handle(update):
   on=not ct.proportional(parts[1])
   if ct.set_proportional(parts[1],on) is None:send(chat,"Essa carteira não está na lista de copiadas.",keyboard());return
   send(chat,("📐 "+parts[1][:6]+"…"+parts[1][-4:]+": agora copio cada compra com a MESMA % do saldo que ela usa (10% → 10%, 30% → 30%), no máximo "+
-   format(ct.PROPORTIONAL_MAX_FRACTION*100,".0f")+"% e US$ "+format(ct.PROPORTIONAL_MAX_USD,".0f")+" por compra." if on else
+   "entre "+format(ct.PROPORTIONAL_MIN_FRACTION*100,".0f")+"% e "+format(ct.PROPORTIONAL_MAX_FRACTION*100,".0f")+"% da carteira do bot por compra." if on else
    "📐 "+parts[1][:6]+"…: voltou ao valor fixo de US$ "+format(ct.ORDER_USD,".0f")+" por cópia."),keyboard());return
  if action in ("copy_wallets","/carteiras"):
   try:send(chat,discovery_text(),keyboard())
