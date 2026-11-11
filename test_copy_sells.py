@@ -308,6 +308,68 @@ class ProportionalTests(unittest.TestCase):
         self.assertAlmostEqual(ct._load()["positions"][MINT]["cost_usd"], 25.0 + ct.NETWORK_FEE_USD)
 
 
+class RepeatBuyTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        q = patch.object(ct, "_sol_usd", return_value=100.0)
+        q.start()
+        self.addCleanup(q.stop)
+        d = ct._load()
+        d["score_v2"] = True
+        d["wallets"][W] = {"last_sig": "s", "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False, "holds": []}
+        ct._save(d)
+
+    def test_same_wallet_buying_the_same_coin_again_is_copied_again(self):
+        with patch.object(ct, "safety_reason", return_value=""), patch.object(ct, "_order", return_value={"outAmount": "1000"}):
+            ct._open(MINT, W, None, None)
+            msg = ct._open(MINT, W, None, None)                # 2nd buy of the same coin
+            ct._open(MINT, W, None, None)                      # 3rd
+        p = ct._load()["positions"][MINT]
+        self.assertIn("2ª compra da mesma moeda", msg)
+        self.assertEqual((p["tokens"], p["buys"]), (3000, 3))
+        self.assertAlmostEqual(p["cost_usd"], 3 * (ct.ORDER_USD + ct.NETWORK_FEE_USD))
+        self.assertIn("3 compras", ct.positions_text())
+
+    def test_limit_of_buys_per_coin(self):
+        with patch.object(ct, "safety_reason", return_value=""), patch.object(ct, "_order", return_value={"outAmount": "1000"}):
+            for _ in range(8):
+                ct._open(MINT, W, None, None, usd=5.0)
+        self.assertEqual(ct._load()["positions"][MINT]["buys"], ct.MAX_BUYS_PER_COIN)
+
+    def test_other_wallet_buying_a_coin_we_hold_is_not_added(self):
+        other = "Other" + "x" * 39
+        with patch.object(ct, "safety_reason", return_value=""), patch.object(ct, "_order", return_value={"outAmount": "1000"}):
+            ct._open(MINT, W, None, None)
+            self.assertIsNone(ct._open(MINT, other, None, None))
+        self.assertEqual(ct._load()["positions"][MINT].get("buys", 1), 1)
+
+    def test_live_engine_adds_a_new_buy_to_the_position(self):
+        import live_trade_state as st
+        d = st._load()
+        d.update(enabled=True, halted=False)
+        st._save(d)
+        st.reserve("o1", MINT, "buy")
+        st.record_settlement("o1", "sig1", position={"token_amount_raw": 100, "cost_usd": 32.0, "buy_signature": "sig1"})
+        st.set_position_fields(MINT, mode="copy", copy_wallet=W)
+        st.reserve("o2", MINT, "buy")
+        st.record_settlement("o2", "sig2", position={"token_amount_raw": 50, "cost_usd": 20.0, "buy_signature": "sig2"})
+        p = st._load()["positions"][MINT]
+        self.assertEqual((p["token_amount_raw"], p["cost_usd"], p["buys"], p["copy_wallet"]), (150, 52.0, 2, W))
+
+    def test_buying_more_of_a_held_coin_doesnt_need_a_free_slot(self):
+        import live_trade_state as st
+        d = st._load()
+        d.update(enabled=True, halted=False)
+        d["positions"] = {"M" + str(i): {"token_amount_raw": 1, "cost_usd": 1} for i in range(st.MAX_POSITIONS - 1)}
+        d["positions"][MINT] = {"token_amount_raw": 1, "cost_usd": 1}
+        st._save(d)
+        self.assertFalse(st.can_open()[0])
+        self.assertTrue(st.can_open(MINT)[0])
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m

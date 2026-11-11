@@ -60,8 +60,9 @@ def coins_held(wallet, rpc=None, valuer=value_usd, fresh=False):
     return dict(coins)
 
 
-def can_buy(mint, wallet, limit=None, rpc=None, valuer=value_usd):
-    """(True, n_held) when a new coin may be bought, else (False, reason)."""
+def can_buy(mint, wallet, limit=None, rpc=None, valuer=value_usd, add_on=False):
+    """(True, n_held) when a new coin may be bought, else (False, reason).
+    add_on=True: buying more of a coin already held (the copied wallet bought it again)."""
     import copy_trader as ct
     limit = limit or ct.MAX_OPEN_TOTAL
     try:
@@ -69,7 +70,7 @@ def can_buy(mint, wallet, limit=None, rpc=None, valuer=value_usd):
     except Exception as exc:
         return False, "não consegui ler a carteira (" + type(exc).__name__ + ")"
     if mint in coins:
-        return False, "a carteira já tem essa moeda"
+        return (True, len(coins)) if add_on else (False, "a carteira já tem essa moeda")
     if len(coins) >= limit:
         return False, "a carteira já tem " + str(len(coins)) + " moedas (máx. " + str(limit) + ")"
     return True, len(coins)
