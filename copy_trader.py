@@ -1603,7 +1603,12 @@ def cycle(send=None, chat=None):
     sell together with them (there is no fixed TP/SL)."""
     owner_on = enabled()
     users_on = users_active()
-    active = owner_on or users_on        # signals are read while the owner or any user is copying
+    try:
+        import consensus
+        consensus_on = consensus.enabled()
+    except Exception:
+        consensus_on = False
+    active = owner_on or users_on or consensus_on    # signals are read while anything uses them
     msgs = []
     reset_bad_scores_once()
     ensure_test_start()
@@ -1643,6 +1648,12 @@ def cycle(send=None, chat=None):
             if side == "buy" and paid_usd:
                 typical = typical_buy_usd(_load()["wallets"].get(wallet, {}))   # usual size BEFORE this buy (no lock: may hit the network)
                 _record_buy_size(wallet, paid_usd)
+            if (side == "buy" and consensus_on and not info.get("paused") and not info.get("leaving")
+                    and (paid_usd or 0) >= MIN_BUY_USD):
+                try:
+                    consensus.record_buy(mint, wallet)          # consensus robot: how many wallets buy this coin
+                except Exception as exc:
+                    LAST_ERROR["text"] = "consenso falhou: " + type(exc).__name__
             if side == "sell":
                 try:
                     import user_copy
@@ -1657,7 +1668,7 @@ def cycle(send=None, chat=None):
                         msgs += _sell_part(mint, frac)        # same movement: sold part -> sell the same part
                     else:
                         msgs += _close(mint, "copy_follow", send, chat)
-            elif active and not info.get("paused") and not info.get("leaving"):
+            elif (owner_on or users_on) and not info.get("paused") and not info.get("leaving"):
                 with _LOCK:
                     status, med = holder_status(_load()["wallets"].get(wallet, {}))
                 if status != "ok":

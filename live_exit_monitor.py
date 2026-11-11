@@ -40,6 +40,9 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
+    if position.get("mode") == "consensus":
+        import consensus      # stop -40%; from +25% a trailing stop 10% below the top
+        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **consensus.EXIT_RULES)
     if (position.get("mode") == "copy" and not position.get("copy_orphan")
             and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet"):
         # Copy trade: no fixed TP/SL; copy_trader sells when the copied wallet sells.
