@@ -1116,10 +1116,10 @@ def _real_result(mint, opened_at):
     None if there is no such record (never credit an old trade of the same coin)."""
     import live_trade_state as st
     since = float(opened_at or 0) - 5
-    for h in reversed(st.history()):
-        if h.get("mint") == mint and float(h.get("closed_at") or 0) >= since:
-            return None if h.get("pnl_usd") is None else float(h["pnl_usd"])
-    return None
+    sales = [h for h in st.history() if h.get("mint") == mint and float(h.get("closed_at") or 0) >= since]
+    if not sales or any(h.get("pnl_usd") is None for h in sales):
+        return None
+    return sum(float(h["pnl_usd"]) for h in sales)       # partial sales of this copy + the final one
 
 
 def reset_bad_scores_once():
@@ -1229,7 +1229,7 @@ def _open(mint, wallet, send, chat, usd=None):
         import live_engine
         pair = {"baseToken": {"address": mint, "symbol": mint[:6]}}
         settled = live_engine._execute_buy(pair, mint, mint[:6], send, chat, live_engine.get_address(), None, "copy",
-                                           usd=size)
+                                           usd=size, add_on=add_on)
         if not settled:
             return None
         pending = settled.get("status") != "settled_buy"
@@ -1343,6 +1343,23 @@ def _close(mint, reason, send=None, chat=None):
     if paused:
         msgs.append(paused)
     return msgs
+
+
+def _sell_part_real(mint, fraction, send=None, chat=None):
+    """Real copy: the copied wallet sold part of the coin -> sell the same part (the rest stays)."""
+    import live_engine
+    try:
+        result = live_engine.sell_part(mint, fraction, "copy_follow", send, chat)
+    except Exception as exc:
+        why = type(exc).__name__ + ": " + str(exc)[:160]
+        LAST_ERROR["text"] = "venda parcial falhou: " + why
+        logging.warning("copy partial sell failed for %s: %s", mint[:8], why)
+        return ["⚠️ A carteira copiada vendeu " + format(fraction * 100, ".0f") + "% de " + mint[:6] +
+                "…, mas a minha venda parcial falhou (" + why[:120] + "). O resto vende junto quando ela vender."]
+    if result == "gone":
+        return _close(mint, "copy_follow", send, chat)
+    _event("vendeu " + format(fraction * 100, ".0f") + "% de " + mint[:6] + " junto com a carteira")
+    return []
 
 
 def _sell_part(mint, fraction):
@@ -1770,6 +1787,8 @@ def cycle(send=None, chat=None):
                     frac = 1.0 if extra is None else float(extra)
                     if not pos.get("real") and frac < 0.95:
                         msgs += _sell_part(mint, frac)        # same movement: sold part -> sell the same part
+                    elif pos.get("real") and frac < 0.95:
+                        msgs += _sell_part_real(mint, frac, send, chat)   # took part of the profit: same part
                     else:
                         msgs += _close(mint, "copy_follow", send, chat)
             elif (owner_on or users_on) and not info.get("paused") and not info.get("leaving"):

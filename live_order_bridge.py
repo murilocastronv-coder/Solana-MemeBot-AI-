@@ -70,7 +70,9 @@ def preflight():
         raise TradingNotReady("Unreconciled transaction: trading paused")
     return True
 
-def submit_swap(mint, side, amount_raw, wallet_address):
+def submit_swap(mint, side, amount_raw, wallet_address, add_on=False, partial=False):
+    """add_on: buy more of a coin already held (copied wallet bought again).
+    partial: sell only part of the position (copied wallet sold part)."""
     """Persist intent before network call; leave pending on any uncertainty.
 
     Does NOT settle position or PnL: actual on-chain balance differences and
@@ -88,16 +90,16 @@ def submit_swap(mint, side, amount_raw, wallet_address):
     if side == "buy" and not MIN_ORDER_USD * 1_000_000 <= int(amount_raw) <= MAX_ORDER_USD * 1_000_000:
         raise TradingNotReady("Buy size must be between USD 1 and MAX_ORDER_USD (" + format(MAX_ORDER_USD, ".0f") + ")")
     if side == "buy":
-        allowed, reason = state.can_open()
+        allowed, reason = state.can_open(mint if add_on else None)
         if not allowed:
             raise TradingNotReady(reason)
-        if mint in state._load()["positions"]:
+        if mint in state._load()["positions"] and not add_on:
             raise TradingNotReady("Position already open")
     else:
         if mint not in state._load()["positions"]:
             raise TradingNotReady("Cannot sell an untracked position")
         tracked = int(state._load()["positions"][mint]["token_amount_raw"])
-        if int(amount_raw) != tracked:
+        if (int(amount_raw) > tracked) if partial else (int(amount_raw) != tracked):
             raise TradingNotReady("Sell amount must equal tracked position")
     order_usd = int(amount_raw) / 1_000_000 if side == "buy" else 0.0
     swap_amount = sol_for_usd(wallet_address, order_usd) if side == 'buy' else int(amount_raw)

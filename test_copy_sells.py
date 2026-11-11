@@ -370,6 +370,75 @@ class RepeatBuyTests(unittest.TestCase):
         self.assertTrue(st.can_open(MINT)[0])
 
 
+class PartialSellTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        import live_trade_state as st
+        self.st = st
+        s = st._load()
+        s.update(enabled=True, halted=False)
+        s["positions"][MINT] = {"token_amount_raw": 1000, "cost_usd": 40.0, "mode": "copy", "copy_wallet": W,
+                                "symbol": "VEYL", "opened_at": time.time()}
+        s["pending"]["o1"] = {"mint": MINT, "side": "sell", "signature": "sig", "before_token_raw": 1000,
+                              "before_sol_raw": 1_000_000_000, "input_amount_raw": 300,
+                              "created_at": "2026-11-11T00:00:00+00:00"}
+        st._save(s)
+
+    def test_settling_a_partial_sale_keeps_the_rest_open(self):
+        st = self.st
+        tx = {"transaction": {"message": {"accountKeys": [{"pubkey": "OWNER", "signer": True}]}}, "meta": {"err": None}}
+        with patch("live_swap_executor.rpc", return_value=tx), \
+                patch("solana_settlement.get_token_balance", return_value=700), \
+                patch("solana_settlement.get_sol_balance", return_value=1_200_000_000), \
+                patch.object(st, "_sol_to_usd", return_value=18.0):
+            r = st.reconcile_known_signature("o1", "OWNER")
+        self.assertTrue(r["partial"])
+        self.assertAlmostEqual(r["cost_usd"], 12.0)                  # 30% of US$ 40
+        self.assertAlmostEqual(r["pnl_usd"], 6.0)
+        left = st._load()["positions"][MINT]
+        self.assertEqual(left["token_amount_raw"], 700)
+        self.assertAlmostEqual(left["cost_usd"], 28.0)
+        self.assertEqual(left["copy_wallet"], W)                     # still sold together with the wallet later
+
+    def test_bridge_accepts_partial_sale_and_buy_more_only_when_asked(self):
+        import live_order_bridge as b
+        st = self.st
+        s = st._load()
+        s["pending"] = {}
+        st._save(s)
+        with patch.object(b, "preflight"), patch("bot_wallet_service.get_address", return_value="W"):
+            with self.assertRaises(b.TradingNotReady):
+                b.submit_swap(MINT, "sell", 300, "W")                   # whole position required
+            with self.assertRaises(b.TradingNotReady):
+                b.submit_swap(MINT, "buy", 10_000_000, "W")             # already open
+            with patch.object(b, "sol_for_usd", side_effect=RuntimeError("stop here")):
+                with self.assertRaises(RuntimeError):
+                    b.submit_swap(MINT, "buy", 10_000_000, "W", add_on=True)   # passes the checks
+            with patch.object(st, "reserve", side_effect=RuntimeError("stop here")):
+                with self.assertRaises(RuntimeError):
+                    b.submit_swap(MINT, "sell", 300, "W", partial=True)        # passes the checks
+
+    def test_copy_sells_the_same_part_in_real(self):
+        d = ct._load()
+        d["score_v2"] = True
+        d["enabled"] = True
+        d["wallets"][W] = {"last_sig": "s", "copies": 0, "wins": 0, "pnl_usd": 0.0, "paused": False, "holds": []}
+        d["positions"][MINT] = {"wallet": W, "real": True, "opened_at": time.time()}
+        ct._save(d)
+        import live_engine
+        with patch.object(ct, "new_signals", return_value=[("sell", MINT, 0.3)]), \
+                patch.object(ct, "users_active", return_value=False), \
+                patch.object(live_engine, "sell_part", return_value="sold") as part, \
+                patch.object(ct, "_close") as close:
+            ct.cycle("send", 1)
+        self.assertEqual(part.call_args.args[:2], (MINT, 0.3))
+        close.assert_not_called()                                    # the rest stays open
+        self.assertIn(MINT, ct._load()["positions"])
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m

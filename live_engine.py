@@ -138,7 +138,7 @@ EXIT_TEXT = {
 }
 
 
-def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
+def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, add_on=False):
     try:
         if usd is not None:   # fixed-size order (Strategy B: US$ 10)
             value = account_value_usd(wallet)
@@ -159,7 +159,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:
-        result = bridge.submit_swap(mint, "buy", int(round(order_usd * 1_000_000)), wallet)
+        result = bridge.submit_swap(mint, "buy", int(round(order_usd * 1_000_000)), wallet, add_on=add_on)
         settled = _settle(result["order_id"], wallet)
     except Exception as exc:
         _failure(send, chat, "compra", mint, exc)
@@ -178,6 +178,43 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None):
         send(chat, "⏳ Compra enviada, conferindo saldo (" + str(settled.get("reason", settled.get("status"))) +
              "). Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" + str(result["signature"]))
     return settled
+
+
+def sell_part(mint, fraction, reason, send, chat):
+    """Sell `fraction` of a position (the copied wallet took part of its profit). Returns like sell_now."""
+    if fraction is None or float(fraction) >= 0.95:
+        return sell_now(mint, reason, send, chat)
+    position = state._load()["positions"].get(mint)
+    wallet = get_address()
+    if not position or not wallet:
+        return "gone"
+    try:
+        held = bridge.get_token_balance(wallet, mint)
+    except Exception:
+        held = None
+    if held == 0:
+        state.drop_position(mint)
+        return "gone"
+    tracked = int(position["token_amount_raw"])
+    if held is not None and held < tracked:
+        state.set_position_amount(mint, held)
+        tracked = held
+    amount = int(tracked * float(fraction))
+    if amount <= 0:
+        return "gone"
+    symbol = position.get("symbol") or mint[:6]
+    result = bridge.submit_swap(mint, "sell", amount, wallet, partial=True)
+    settled = _settle(result["order_id"], wallet)
+    if settled.get("status") == "settled_sell":
+        pnl = settled["pnl_usd"]
+        send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + format(float(fraction) * 100, ".0f") + "% de " +
+             symbol + " (a carteira copiada vendeu essa parte)\n💵 Parte: US$ " + format(settled["cost_usd"], ".2f") +
+             " → US$ " + format(settled["proceeds_usd"], ".2f") + " · P/L " + format(pnl, "+.2f") + " USD\n" +
+             "📦 O resto continua aberto e vende junto com a carteira.\n🔗 https://solscan.io/tx/" + settled["signature"])
+        return "sold"
+    send(chat, "⏳ Venda parcial enviada, conferindo saldo. Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" +
+         str(result["signature"]))
+    return "pending"
 
 
 def sell_now(mint, reason, send, chat):

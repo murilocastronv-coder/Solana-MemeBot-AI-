@@ -533,7 +533,11 @@ def reconcile_known_signature(order_id, owner):
         sold = int(before_token) - after_token
         if sold != int(pending.get("input_amount_raw", -1)) or after_sol <= int(before_sol):
             return {"status": "manual_review", "reason": "Sell balance mismatch", "signature": signature}
-        cost = float(data["positions"].get(mint, {}).get("cost_usd", 0) or 0)
+        position = dict(data["positions"].get(mint, {}))
+        held = int(position.get("token_amount_raw") or 0) or int(before_token) or 1
+        part = min(1.0, sold / held)                       # < 1: only part of the position was sold
+        cost = float(position.get("cost_usd", 0) or 0) * part
+        cost_left = float(position.get("cost_usd", 0) or 0) - cost
         try:
             proceeds_usd = _sol_to_usd(after_sol - int(before_sol))
         except Exception:
@@ -548,8 +552,16 @@ def reconcile_known_signature(order_id, owner):
             return {"status": "settled_sell_review_pnl", "reason": "PnL not valued", "signature": signature}
         pnl = proceeds_usd - cost
         record_settlement(order_id, signature, realized_loss_usd=max(0.0, -pnl), pnl_usd=pnl)
+        leftover = held - sold
+        partial = part < 0.95 and leftover > 0 and after_token > 0
+        if partial:                                          # keep tracking the part not sold
+            with _LOCK:
+                data = _load()
+                position.update(token_amount_raw=min(leftover, after_token), cost_usd=cost_left)
+                data["positions"][mint] = position
+                _save(data)
         return {"status": "settled_sell", "signature": signature, "pnl_usd": pnl,
-                "cost_usd": cost, "proceeds_usd": proceeds_usd,
+                "cost_usd": cost, "proceeds_usd": proceeds_usd, "partial": partial, "part": part,
                 "sol_received": (after_sol - int(before_sol)) / 1_000_000_000}
 
 def _sol_to_usd(lamports):
