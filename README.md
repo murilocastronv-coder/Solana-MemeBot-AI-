@@ -169,3 +169,13 @@ python -m unittest discover -p "test_*.py"
   e avisa), **só 3 ordens ao mesmo tempo** (`SNIPER_MAX_POSITIONS`), nunca compra a mesma
   moeda duas vezes em 24 h. Saída: **stop −40%** (`SNIPER_STOP_LOSS`), a partir de +25% vende 12% abaixo do topo, sai em 30 min se
   não decolar. Todos os limites podem ser ajustados por variáveis `SNIPER_*`.
+
+## 🤝 Consenso das carteiras (dono, SIMULAÇÃO ou REAL)
+- Compra uma moeda quando **3 ou mais das carteiras acompanhadas** (não pausadas, compra ≥ US$ 40) compram
+  **a mesma moeda dentro de 1 hora** (`CONSENSUS_MIN_WALLETS`, `CONSENSUS_WINDOW_MINUTES`). Para exigir a
+  maioria das carteiras, use `CONSENSUS_MIN_SHARE=0.5`.
+- Proteções: anti-golpe e teste de venda (honeypot) do copy trade + armadilhas Token-2022 do sniper.
+- **Stop −40%**; a partir de **+25%** entra o **stop móvel** (vende 10% abaixo do topo)
+  (`CONSENSUS_STOP_LOSS`, `CONSENSUS_TRAIL_ARM`, `CONSENSUS_TRAIL_DROP`).
+- US$ 32 por compra (`CONSENSUS_ORDER_USD`), máx. 3 posições (`CONSENSUS_MAX_POSITIONS`), nunca a mesma moeda
+  duas vezes em 24 h. Funciona mesmo com o copy trade desligado.

@@ -103,6 +103,8 @@ def keyboard():
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
+  [{"text":"🤝 Consenso SIM","callback_data":"cns_sim"},{"text":"🤝 Consenso REAL","callback_data":"cns_real"}],
+  [{"text":"⏹️ Parar consenso","callback_data":"cns_off"},{"text":"📊 Status consenso","callback_data":"cns_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"🎯 Sniper SIM","callback_data":"snp_sim"},{"text":"🎯 Sniper REAL","callback_data":"snp_real"}],
   [{"text":"⏹️ Parar sniper","callback_data":"snp_off"},{"text":"📊 Status sniper","callback_data":"snp_status"}],
@@ -247,6 +249,22 @@ def handle(update):
    else:pre=""
    send(chat,pre+sn.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
+  return
+ if action in ("cns_sim","cns_real","cns_real_ok","cns_off","cns_status","/consenso"):
+  import consensus as cn
+  try:
+   if action=="cns_sim":cn.set_mode(True,False);pre="🧪 CONSENSO em SIMULAÇÃO (preços reais, US$ 100 de mentira).\n\n"
+   elif action=="cns_real":
+    send(chat,"🤝 CONSENSO COM DINHEIRO REAL\nCompra US$ "+format(cn.ORDER_USD,".0f")+" quando "+str(cn.MIN_WALLETS)+
+     "+ carteiras acompanhadas compram a mesma moeda em 1 h (máx. "+str(cn.MAX_POSITIONS)+" posições). Stop −40%; a partir de +25% stop móvel.\n⚠️ Recomendo testar antes em 🤝 Consenso SIM.",
+     [[{"text":"✅ Ligar consenso REAL","callback_data":"cns_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"cns_status"}]]);return
+   elif action=="cns_real_ok":
+    cn.set_mode(True,True)
+    pre="💵 CONSENSO REAL LIGADO.\n\n" if start_real_or_wait(chat,"consenso") else "⏳ CONSENSO REAL LIGADO: começa assim que a ordem pendente for conferida (~2 min).\n\n"
+   elif action=="cns_off":cn.set_mode(False);pre="⏹️ Consenso desligado: não abre novas posições. As abertas continuam com stop e stop móvel.\n\n"
+   else:pre=""
+   send(chat,pre+cn.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Consenso: "+str(exc)[:200],keyboard())
   return
  if action in ("unstick","/destravar"):
   send(chat,"🔧 Conferindo as ordens pendentes na blockchain…")
@@ -521,6 +539,11 @@ def copy_loop():
    if not chat:continue
    for m in copy_trader.cycle(send,chat):send(chat,m)   # also runs with copy off: sells open copies with the wallet
   except Exception as exc:logging.warning("copy cycle failed: %s",type(exc).__name__)
+  try:
+   import consensus
+   chat=active_chat()
+   if chat:consensus.cycle(send,chat)        # consensus robot: buys what several followed wallets buy
+  except Exception as exc:logging.warning("consensus cycle failed: %s",type(exc).__name__)
   if time.monotonic()>=USERS_UPKEEP["next"]:
    USERS_UPKEEP["next"]=time.monotonic()+60
    try:
