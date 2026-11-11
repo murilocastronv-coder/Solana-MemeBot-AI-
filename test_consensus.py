@@ -101,5 +101,60 @@ class ConsensusTests(unittest.TestCase):
         self.assertEqual(buy.call_args.kwargs["usd"], 32)
 
 
+class MarketConsensusTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        q = patch.object(ct, "_sol_usd", return_value=100.0)
+        q.start()
+        self.addCleanup(q.stop)
+
+    def buyers(self, n, now):
+        return [(MINT, "Buyer" + str(i).zfill(39), now - 60) for i in range(n)]
+
+    def test_many_buyers_with_proven_ones_trigger_a_buy(self):
+        now = time.time()
+        cn.record_market_buys(self.buyers(15, now), now)
+        good = {"Buyer" + "0".zfill(39), "Buyer" + "1".zfill(39)}
+        found = cn.market_candidates(now, good=good)
+        self.assertEqual((found[0][0], len(found[0][1]), len(found[0][2])), (MINT, 15, 2))
+
+    def test_many_buyers_but_no_proven_wallet_is_not_enough(self):
+        now = time.time()
+        cn.record_market_buys(self.buyers(40, now), now)
+        self.assertEqual(cn.market_candidates(now, good=set()), [])
+
+    def test_few_buyers_is_not_enough(self):
+        now = time.time()
+        rows = self.buyers(10, now)
+        cn.record_market_buys(rows, now)
+        self.assertEqual(cn.market_candidates(now, good={w for _, w, _ in rows}), [])
+
+    def test_cycle_buys_market_consensus_coin(self):
+        now = time.time()
+        cn.set_mode(True, False)
+        rows = self.buyers(20, now)
+        cn.record_market_buys(rows, now)
+        sent = []
+        with patch.object(cn, "good_wallets", return_value={w for _, w, _ in rows[:3]}), \
+                patch.object(cn, "safety_reason", return_value=""), \
+                patch.object(ct, "_order", side_effect=lambda i, o, a: {"outAmount": "1000" if i == cn.SOL_MINT
+                                                                         else str(int(0.32e9))}):
+            cn.cycle(lambda c, t: sent.append(t), 1, now=now)
+        self.assertIn("mercado: 20 carteiras compraram, 3 com histórico de lucro", sent[0])
+
+    def test_search_records_who_bought_each_hot_coin(self):
+        import dex_wallets
+        w = "Wbuyer" + "x" * 38
+        tx = {"meta": {"err": None, "preBalances": [10_000_000_000], "postBalances": [9_000_000_000],
+                       "preTokenBalances": [], "postTokenBalances": [
+                           {"owner": w, "mint": MINT, "uiTokenAmount": {"amount": "500", "decimals": 6}}]},
+              "transaction": {"message": {"accountKeys": [w]}}}
+        self.assertEqual(dex_wallets.buyers_of(tx, MINT), [w])
+        self.assertEqual(dex_wallets.buyers_of(tx, "OtherMint"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
