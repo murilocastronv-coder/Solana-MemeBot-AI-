@@ -119,9 +119,11 @@ LOSS_STREAK_TO_PAUSE = int(_env("COPY_LOSS_STREAK_TO_PAUSE", 6))
 # each copy: between 10% and 30% of OUR wallet (free SOL + open positions), same % as the wallet inside that range
 PROPORTIONAL_MIN_FRACTION = _env("COPY_PROPORTIONAL_MIN_FRACTION", 0.10)
 PROPORTIONAL_MAX_FRACTION = _env("COPY_PROPORTIONAL_MAX_FRACTION", 0.30)
-# mirror wallet (4x5Uti...zTJ): each copied buy between 5% and 22% of our account
+# mirror wallet (4x5Uti...zTJ): each copied buy between 5% and 6% of our account
 MIRROR_MIN_FRACTION = _env("COPY_MIRROR_MIN_FRACTION", 0.05)
-MIRROR_MAX_FRACTION = _env("COPY_MIRROR_MAX_FRACTION", 0.22)
+MIRROR_MAX_FRACTION = _env("COPY_MIRROR_MAX_FRACTION", 0.06)
+# ... and the whole position in one coin (all its buys) at most 6% of our account
+MIRROR_MAX_COIN_FRACTION = _env("COPY_MIRROR_MAX_COIN_FRACTION", 0.06)
 PROPORTIONAL_MAX_USD = _env("COPY_PROPORTIONAL_MAX_USD", 0)      # 0 = no dollar cap (only the % limits)
 PROPORTIONAL_RESERVE_USD = _env("COPY_PROPORTIONAL_RESERVE_USD", 2)   # left in SOL for network fees
 # buying the same coin again: the whole position in that coin can't pass 30% of our wallet
@@ -136,11 +138,12 @@ def coin_cost_usd(mint, real):
     return float((_load()["positions"].get(mint) or {}).get("cost_usd") or 0)
 
 
-def add_on_room(size, already_usd, wallet_value_usd):
-    """Buying the same coin again: cut the buy so the coin stays <= 35% of the wallet. None = no room."""
+def add_on_room(size, already_usd, wallet_value_usd, max_coin=None):
+    """Buying the same coin again: cut the buy so the coin stays <= max_coin of the wallet. None = no room."""
     if not already_usd:
         return size
-    room = PROPORTIONAL_MAX_COIN_FRACTION * float(wallet_value_usd) - float(already_usd)
+    cap = PROPORTIONAL_MAX_COIN_FRACTION if max_coin is None else max_coin
+    room = cap * float(wallet_value_usd) - float(already_usd)
     size = min(float(size), room)
     return round(size, 2) if size >= PROPORTIONAL_MIN_USD else None
 PROPORTIONAL_MIN_USD = _env("COPY_PROPORTIONAL_MIN_USD", 3)
@@ -649,7 +652,8 @@ def wallets_text():
                                               else ("👀 observando" if status == "watching" else "⚡ vende rápido"))
         if mirror(addr, w):
             icon += (" 📐 espelho: copia tudo, mesma % (" + format(MIRROR_MIN_FRACTION * 100, ".0f") + "%–" +
-                     format(MIRROR_MAX_FRACTION * 100, ".0f") + "% da conta)")
+                     format(MIRROR_MAX_FRACTION * 100, ".0f") + "% da conta, máx. " +
+                     format(MIRROR_MAX_COIN_FRACTION * 100, ".0f") + "% por posição)")
         elif proportional(addr, w):
             icon += " 📐 copia a % dela"
         if w.get("paused"):
@@ -1905,12 +1909,13 @@ def cycle(send=None, chat=None):
                         free = value = None
                     size = proportional_usd(frac, value, free, limits=fraction_limits(wallet, wi))
                     already = coin_cost_usd(mint, real_enabled()) if size else 0
+                    coin_cap = MIRROR_MAX_COIN_FRACTION if is_mirror else PROPORTIONAL_MAX_COIN_FRACTION
                     if size and already:
-                        size = add_on_room(size, already, value)
+                        size = add_on_room(size, already, value, coin_cap)
                         if size is None:
                             _event("não recomprou " + mint[:6] + " de " + wallet[:6] + "…: já tenho " +
                                    format(already / value * 100, ".0f") + "% da carteira nela (máx. " +
-                                   format(PROPORTIONAL_MAX_COIN_FRACTION * 100, ".0f") + "%)")
+                                   format(coin_cap * 100, ".0f") + "%)")
                             continue
                     if size is None:
                         _event("não copiou " + mint[:6] + " de " + wallet[:6] + "… (proporcional): " +
