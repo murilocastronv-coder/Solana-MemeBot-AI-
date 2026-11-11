@@ -250,6 +250,19 @@ class ManualPauseTests(unittest.TestCase):
         self.assertFalse(ct._load()["wallets"][W]["paused"])
 
 
+class OrphanExitTests(unittest.TestCase):
+    def test_copy_without_origin_wallet_stop_40_and_trailing_from_25(self):
+        from live_exit_monitor import position_signal
+        pos = {"mode": "copy", "copy_orphan": True, "opened_at": time.time()}
+        self.assertEqual(position_signal(pos, 32, 32 * 0.86)["action"], "hold")     # -14%: no longer sold at -15%
+        self.assertEqual(position_signal(pos, 32, 32 * 0.61)["action"], "hold")     # -39%
+        self.assertEqual(position_signal(pos, 32, 32 * 0.59)["reason"], "stop_loss")  # -41%
+        self.assertEqual(position_signal(pos, 32, 32 * 1.32)["reason"], "trailing")   # +32%: trailing on, holds
+        top = dict(pos, peak_ratio=1.60)
+        self.assertEqual(position_signal(top, 32, 32 * 1.50)["action"], "hold")      # 6% below the top
+        self.assertEqual(position_signal(top, 32, 32 * 1.40)["reason"], "take_profit")  # 12.5% below: sells
+
+
 class MonitorTests(unittest.TestCase):
     def test_copy_position_is_monitored_without_error(self):
         import live_exit_monitor as m
