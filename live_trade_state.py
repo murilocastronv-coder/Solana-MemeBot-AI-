@@ -410,6 +410,8 @@ def reserve(order_id, mint, side):
         state["pending"][order_id] = {"mint": mint, "side": side,
             "created_at": datetime.now(timezone.utc).isoformat()}
         _save(state)
+        import time as _time
+        IN_FLIGHT[order_id] = _time.time()
 
 HISTORY_MAX = 300
 
@@ -675,11 +677,18 @@ def _reconcile_by_balance(order_id, pending, owner):
 EXPIRY_SECONDS = 150  # a Solana transaction cannot land after its blockhash expires (~90 s)
 
 
+IN_FLIGHT = {}   # order_id -> time: being sent/settled by its own thread right now (don't reconcile it)
+IN_FLIGHT_MAX_S = 300
+
+
 def auto_reconcile(owner, min_age_seconds=None):
     """Resolve pending orders without manual help. Never resends anything."""
+    import time as _time
     min_age = EXPIRY_SECONDS if min_age_seconds is None else min_age_seconds
     results = []
     for order_id, pending in pending_orders().items():
+        if _time.time() - IN_FLIGHT.get(order_id, 0) < IN_FLIGHT_MAX_S:
+            continue                       # its own thread is still sending / settling it
         if pending.get("signature"):
             try:
                 result = reconcile_known_signature(order_id, owner)

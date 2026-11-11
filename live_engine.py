@@ -54,6 +54,13 @@ def start():
 
 
 def _settle(order_id, wallet):
+    try:
+        return _settle_now(order_id, wallet)
+    finally:
+        state.IN_FLIGHT.pop(order_id, None)     # from now on the background check may take over
+
+
+def _settle_now(order_id, wallet):
     # The bridge already waited for finality; balances may lag a few seconds.
     for _ in range(5):
         result = state.reconcile_known_signature(order_id, wallet)

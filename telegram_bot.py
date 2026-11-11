@@ -657,6 +657,10 @@ def loop():
  except Exception:logging.exception("startup notice failed")
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
+ try:
+  import copy_trader
+  copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
+ except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=sniper_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()

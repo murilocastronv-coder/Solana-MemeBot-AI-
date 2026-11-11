@@ -139,6 +139,7 @@ def submit_swap(mint, side, amount_raw, wallet_address, add_on=False, partial=Fa
                 "input_amount_raw": swap_amount, "input_mint": input_mint, "output_mint": output_mint,
                 "reconciliation_required": True}
     except Exception as exc:
+        state.IN_FLIGHT.pop(order_id, None)
         # Never include credentials or signed transactions in the reason.
         reason = type(exc).__name__ + ": " + str(exc)[:160]
         if stage in ("quoting", "signing", "rejected"):

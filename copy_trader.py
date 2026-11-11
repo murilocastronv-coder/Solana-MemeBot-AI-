@@ -1247,10 +1247,100 @@ def unpause_test_wallets():
     return back
 
 
-def _open(mint, wallet, send, chat, usd=None):
-    """Copy a buy (simulated or real). Returns a message or None. usd: custom size (proportional wallet)."""
+QUEUE_MAX_AGE_S = _env("COPY_QUEUE_MAX_SECONDS", 180)
+_BUY_Q = deque()
+_BUY_QLOCK = threading.Lock()
+_BUY_EVENT = threading.Event()
+_WORKER = {"thread": None}
+
+
+def queue_real_buy(mint, wallet, send, chat, usd=None, now=None):
+    """Real copy buys run one at a time in a worker thread, so reading the wallets never stops while a
+    buy is being confirmed; a buy waits in the queue while another order is in progress."""
+    with _BUY_QLOCK:
+        if any(e[0] == mint and e[1] == wallet for e in _BUY_Q):
+            return False
+        _BUY_Q.append((mint, wallet, send, chat, usd, now or time.time()))
+    if _WORKER["thread"] is None:
+        process_buy_queue(wait=False)      # no worker running (tests / not started): buy right away
+    else:
+        _BUY_EVENT.set()
+    return True
+
+
+def start_buy_worker():
+    """Started once by the Telegram bot: real copy buys then run off the wallet-reading loop."""
+    if _WORKER["thread"] is None or not _WORKER["thread"].is_alive():
+        _WORKER["thread"] = threading.Thread(target=_buy_worker, daemon=True)
+        _WORKER["thread"].start()
+
+
+def process_buy_queue(sleep=time.sleep, max_steps=None, wait=True):
+    """Buy what is queued, oldest first. Waits while an order is pending; drops a buy that is too old
+    or whose wallet already sold the coin."""
+    import live_trade_state as st
+    steps = 0
+    while max_steps is None or steps < max_steps:
+        steps += 1
+        with _BUY_QLOCK:
+            if not _BUY_Q:
+                return
+            mint, wallet, send, chat, usd, at = _BUY_Q[0]
+        age = time.time() - at
+        if age > QUEUE_MAX_AGE_S:
+            with _BUY_QLOCK:
+                _BUY_Q.popleft()
+            _event("não deu tempo de copiar " + mint[:6] + " de " + wallet[:6] + "… (fila: ordem anterior demorou)")
+            if send and chat:
+                send(chat, "⚠️ Não consegui copiar a compra de " + wallet[:6] + "…" + wallet[-4:] + " em " + mint[:6] +
+                     "… a tempo: outra ordem demorou mais de " + format(QUEUE_MAX_AGE_S / 60, ".0f") + " min para confirmar.")
+            continue
+        try:
+            busy = bool(st.pending_orders())
+        except Exception:
+            busy = False
+        if busy:
+            if not wait:
+                return                     # the worker / next call buys it once the order is released
+            sleep(2)                       # another order is being confirmed: wait for it
+            continue
+        if age > 20:
+            try:
+                held = wallet_token_balance(wallet, mint)
+            except Exception:
+                held = None
+            if held == 0:                  # it already sold the coin while we waited: don't buy
+                with _BUY_QLOCK:
+                    _BUY_Q.popleft()
+                continue
+        with _BUY_QLOCK:
+            _BUY_Q.popleft()
+        try:
+            m = _open(mint, wallet, send, chat, usd=usd, direct=True)
+            if m and send and chat:
+                send(chat, m)
+        except Exception as exc:
+            logging.warning("queued copy buy failed for %s: %s", mint[:8], type(exc).__name__)
+
+
+def _buy_worker():
+    while True:
+        _BUY_EVENT.wait(5)
+        _BUY_EVENT.clear()
+        try:
+            process_buy_queue()
+        except Exception as exc:
+            logging.warning("copy buy worker: %s", type(exc).__name__)
+
+
+def _open(mint, wallet, send, chat, usd=None, direct=False):
+    """Copy a buy (simulated or real). Returns a message or None. usd: custom size (proportional wallet).
+    Real buys are queued for the buy worker unless direct=True (the worker itself)."""
     size = float(usd or ORDER_USD)
     real = real_enabled() and send is not None and chat is not None
+    if real and not direct:
+        queue_real_buy(mint, wallet, send, chat, usd)
+        return None
     with _LOCK:
         mine = _load()["positions"].get(mint)
     # same wallet buying the same coin again: buy again (add to our copy), up to MAX_BUYS_PER_COIN buys
@@ -1812,6 +1902,8 @@ def cycle(send=None, chat=None):
         d = _load()
         busy = _busy(d)
         wallets = {a: w for a, w in d["wallets"].items() if active or a in busy}
+        # mirror wallets first: their buys are copied as fast as possible
+        wallets = dict(sorted(wallets.items(), key=lambda kv: not mirror(kv[0], kv[1])))
     if not wallets:
         return msgs
     for wallet, info in wallets.items():
