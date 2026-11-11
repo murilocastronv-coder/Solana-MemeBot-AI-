@@ -61,7 +61,7 @@ Variáveis obrigatórias (segredos):
 - `BOT_WALLET_ENCRYPTION_PASSPHRASE` (senha que criptografa a carteira do bot no disco);
 - `SOLANA_RPC_URL`: RPC dedicado (ex.: Helius). **Sem ele a busca automática não roda.**
 
-Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=32`, `MAX_ORDER_USD=32`, `COPY_MAX_POSITIONS=8`, `COPY_AUTO_MAX_WALLETS=20`, `NOTIFY_REPEAT_HOURS=2`,
+Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=32`, `MAX_ORDER_USD=32`, `COPY_MAX_POSITIONS=12`, `COPY_AUTO_MAX_WALLETS=20`, `NOTIFY_REPEAT_HOURS=2`,
 `COPY_MIN_HOLD_MINUTES=5`, `COPY_AUTO_DISCOVERY_ENABLED=true`, `DAILY_LOSS_LIMIT_ENABLED=false`.
 
 Use uma **carteira dedicada** só para o bot, com pouco dinheiro (ver `DEDICATED_WALLET.md` e
@@ -74,8 +74,8 @@ python -m unittest discover -p "test_*.py"
 ```
 
 ## Limites de ordens e regra dos 5 minutos
-- **No máximo 8 operações copiadas abertas ao mesmo tempo**, de copy trade
-  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 8 abertas, nada novo abre.
+- **No máximo 12 posições abertas ao mesmo tempo**, de copy trade
+  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 12 abertas, nada novo abre.
 - **Toda carteira seguida**, inclusive as de `/seguir`, só tem compras copiadas se
   segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
   abre ordem. A compra mínima de US$ 40 vale para todas.
@@ -85,8 +85,8 @@ python -m unittest discover -p "test_*.py"
   (`COPY_MIN_LONG_HOLD_SHARE`). Carteira que fecha rápido é **removida** (com cópia aberta, sai quando ela fechar) e a busca automática coloca outra no lugar.
 - **Conferência da carteira antes de comprar** (dinheiro real): o bot lê na blockchain as moedas que
   a carteira dele tem de verdade (SPL Token e Token-2022, sem SOL/USDC/USDT e sem sobras de menos de
-  US$ 1 ou que não dá para vender, `HOLDINGS_DUST_USD`). Se já houver 8 moedas, ou se já tiver a
-  moeda, não compra. O 📊 Status mostra "Moedas na carteira agora: N/8".
+  US$ 1 ou que não dá para vender, `HOLDINGS_DUST_USD`). Se já houver 12 moedas, ou se já tiver a
+  moeda, não compra. O 📊 Status mostra "Moedas na carteira agora: N/12".
 - **Convicção:** só copia quando a carteira coloca na moeda pelo menos o que ela costuma colocar
   (mediana das últimas compras observadas, ou a média do histórico no começo;
   `COPY_CONVICTION_MULT=1.0`, use `1.5` para exigir 50% acima do normal ou `0` para desligar).

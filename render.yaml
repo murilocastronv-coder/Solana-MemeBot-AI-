@@ -30,13 +30,13 @@ services:
         value: "48"
       - key: COPY_ORDER_USD
         value: "32"
-      # No máximo 8 operações copiadas abertas ao mesmo tempo
+      # No máximo 12 posições abertas ao mesmo tempo
       - key: COPY_MAX_POSITIONS
-        value: "8"
+        value: "12"
       - key: MAX_OPEN_ORDERS
-        value: "8"
+        value: "12"
       - key: MAX_POSITIONS
-        value: "8"
+        value: "12"
       - key: COPY_MIN_HOLD_MINUTES
         value: "5"
       - key: COPY_MIN_ROUND_TRIPS
