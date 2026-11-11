@@ -112,6 +112,8 @@ TEST_DAYS = _env("COPY_TEST_DAYS", 3)
 TEST_MAX_LOSS_USD = _env("COPY_TEST_MAX_LOSS_USD", 100)
 # Pause a copied wallet that makes this many trades shorter than MIN_HOLD (5 min) in its last 5 seen trades
 FAST_TRADES_TO_PAUSE = int(_env("COPY_FAST_TRADES_TO_PAUSE", 2))
+# Pause a copied wallet after this many losing copies in a row (also during the test)
+LOSS_STREAK_TO_PAUSE = int(_env("COPY_LOSS_STREAK_TO_PAUSE", 6))
 
 
 def _busy(d):
@@ -529,8 +531,9 @@ def wallets_text():
         status, med = holder_status(w)
         icon = "⏸️" if w.get("paused") else ("✅" if status == "ok" else ("👀" if status == "watching" else "⚡"))
         if w.get("paused"):
-            icon += " pausada (" + ("trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min"
-                                    if w.get("pause_reason") == "fast" else "prejuízo nas cópias") + ")"
+            icon += " pausada (" + {"fast": "trades de menos de " + format(MIN_HOLD_SECONDS / 60, ".0f") + " min",
+                                    "losses": str(w.get("loss_streak", LOSS_STREAK_TO_PAUSE)) + " perdas seguidas"
+                                    }.get(w.get("pause_reason"), "prejuízo nas cópias") + ")"
         hist = ""
         if st:
             hist = (" · histórico " + format(st.get("realized_lamports", 0) / 1e9, "+.3f") + " SOL, acerto " +
@@ -1032,8 +1035,14 @@ def _score(d, wallet, pnl):
     w["copies"] += 1
     w["wins"] += 1 if pnl > 0 else 0
     w["pnl_usd"] = round(w["pnl_usd"] + pnl, 4)
+    w["loss_streak"] = int(w.get("loss_streak", 0)) + 1 if pnl < 0 else 0
     if w["paused"]:
         return None
+    if w["loss_streak"] >= LOSS_STREAK_TO_PAUSE:
+        # too many losing copies in a row: pause, also during the 3-day test
+        w["paused"], w["pause_reason"] = True, "losses"
+        return ("⏸️ Pausei " + wallet[:6] + "…" + wallet[-4:] + ": " + str(w["loss_streak"]) + " cópias seguidas no "
+                "prejuízo (P/L total " + format(w["pnl_usd"], "+.2f") + " USD). Posições abertas dela vendem quando ela vender.")
     if in_test(w):
         # 3-day test: keep copying; pause only if its copies lost a lot
         if w["pnl_usd"] <= -TEST_MAX_LOSS_USD:
@@ -1053,7 +1062,7 @@ def unpause_test_wallets():
     with _LOCK:
         d = _load()
         for a, w in d["wallets"].items():
-            if (w.get("paused") and w.get("pause_reason") != "fast" and in_test(w)
+            if (w.get("paused") and w.get("pause_reason") not in ("fast", "losses") and in_test(w)
                     and float(w.get("pnl_usd", 0.0)) > -TEST_MAX_LOSS_USD):
                 w["paused"] = False
                 back.append(a)
