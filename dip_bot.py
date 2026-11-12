@@ -23,22 +23,26 @@ import signals as sg
 ORDER_USD = sg._f("DIP_ORDER_USD", 10)
 MAX_OPEN = int(sg._f("DIP_MAX_OPEN", 5))
 RESERVE_USD = sg._f("DIP_RESERVE_USD", 1)
-MIN_LIQ = sg._f("DIP_MIN_LIQUIDITY_USD", 10_000)
+MIN_LIQ = sg._f("DIP_MIN_LIQUIDITY_USD", 20_000)
 MAX_LIQ = sg._f("DIP_MAX_LIQUIDITY_USD", 300_000)
-MIN_AGE_S = sg._f("DIP_MIN_AGE_MINUTES", 10) * 60
+MIN_AGE_S = sg._f("DIP_MIN_AGE_MINUTES", 30) * 60
 MIN_UP_24H = sg._f("DIP_MIN_UP_24H", 20)
 MIN_UP_6H = sg._f("DIP_MIN_UP_6H", 10)
-MIN_BUYS_1H = int(sg._f("DIP_MIN_BUYS_1H", 30))
+MIN_BUYS_1H = int(sg._f("DIP_MIN_BUYS_1H", 80))
 MIN_VOL_24H = sg._f("DIP_MIN_VOLUME_24H", 10_000)
 DIP_MIN = sg._f("DIP_MIN_DROP_1H", 15)          # % down in the last hour
-DIP_MAX = sg._f("DIP_MAX_DROP_1H", 45)
-MAX_SELL_SHARE_1H = sg._f("DIP_MAX_SELL_SHARE_1H", 0.62)
+DIP_MAX = sg._f("DIP_MAX_DROP_1H", 35)
+MIN_BOUNCE_5M = sg._f("DIP_MIN_BOUNCE_5M", 2)     # last 5 min up 2%+ ...
+MIN_BUY_RATIO_5M = sg._f("DIP_MIN_BUY_RATIO_5M", 1.5)   # ... with 1.5x more buys than sells
+MAX_LOSS_STREAK = int(sg._f("DIP_MAX_LOSS_STREAK", 3))  # pauses itself after 3 losses in a row
+RULES = 2
+MAX_SELL_SHARE_1H = sg._f("DIP_MAX_SELL_SHARE_1H", 0.55)
 COOLDOWN_S = sg._f("DIP_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("DIP_SCAN_SECONDS", 60)
-STOP_LOSS = sg._f("DIP_STOP_LOSS", 0.20)
-TRAIL_ARM = sg._f("DIP_TRAIL_ARM", 0.20)
-TRAIL_DROP = sg._f("DIP_TRAIL_DROP", 0.08)
-MAX_HOLD_S = sg._f("DIP_MAX_HOLD_HOURS", 6) * 3600
+STOP_LOSS = sg._f("DIP_STOP_LOSS", 0.15)
+TRAIL_ARM = sg._f("DIP_TRAIL_ARM", 0.12)
+TRAIL_DROP = sg._f("DIP_TRAIL_DROP", 0.06)
+MAX_HOLD_S = sg._f("DIP_MAX_HOLD_HOURS", 3) * 3600
 EXIT = {"stop_loss": str(STOP_LOSS), "arm": str(1 + TRAIL_ARM), "drop": str(TRAIL_DROP)}
 
 _LOCK = threading.RLock()
@@ -58,7 +62,25 @@ def _load():
             d.update(json.loads(p.read_text(encoding="utf-8")))
         except (OSError, ValueError):
             pass
+    if d.get("rules") != RULES:            # new rules: start the loss count again
+        d.update(rules=RULES, since=time.time(), enabled=True, paused_why="")
     return d
+
+
+def closed_trades(since=None):
+    import live_trade_state as st
+    since = _load().get("since", 0) if since is None else since
+    return [h for h in st.history() if h.get("mode") == "dip" and h.get("pnl_usd") is not None
+            and float(h.get("closed_at") or 0) >= since]
+
+
+def loss_streak(trades):
+    n = 0
+    for h in reversed(trades):
+        if h["pnl_usd"] > 0:
+            break
+        n += 1
+    return n
 
 
 def _save(d):
@@ -74,6 +96,8 @@ def set_enabled(on):
     with _LOCK:
         d = _load()
         d["enabled"] = bool(on)
+        if on:
+            d.update(since=time.time(), paused_why="")      # turned on again: count losses from now
         _save(d)
 
 
@@ -107,14 +131,17 @@ def dip_reason(p, now=None):
     c5, c1, c6, c24 = (float(ch.get(k) or 0) for k in ("m5", "h1", "h6", "h24"))
     if c24 < MIN_UP_24H and c6 < MIN_UP_6H:
         return "moeda fraca (não está em alta)"
+    if c6 <= 0:
+        return "6 h no vermelho (queda virou tendência)"
     if c1 > -DIP_MIN:
         return "sem queda forte"
     if c1 < -DIP_MAX:
         return "queda demais (pode ser rug)"
     if s / max(b + s, 1) > MAX_SELL_SHARE_1H:
         return "vendedores dominando"
-    if c5 <= 0 or int(m5.get("buys") or 0) <= int(m5.get("sells") or 0):
-        return "ainda caindo"
+    b5, s5 = int(m5.get("buys") or 0), int(m5.get("sells") or 0)
+    if c5 < MIN_BOUNCE_5M or b5 < max(5, MIN_BUY_RATIO_5M * s5):
+        return "ainda caindo (sem virada forte)"
     return ""
 
 
@@ -159,6 +186,19 @@ def _buy(p, send, chat):
 def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
     """One scan: find dips and buy them (at most one buy per scan)."""
     if not enabled():
+        return []
+    try:
+        streak = loss_streak(closed_trades())
+    except Exception:
+        streak = 0
+    if streak >= MAX_LOSS_STREAK:
+        with _LOCK:
+            dd = _load()
+            dd.update(enabled=False, paused_why=str(streak) + " perdas seguidas")
+            _save(dd)
+        if send and chat:
+            send(chat, "⏸️ DIP BOT PAUSADO SOZINHO: " + str(streak) + " perdas seguidas. O mercado não está bom para "
+                 "comprar queda agora. Ligue de novo no botão 📉 Ligar Dip Bot quando quiser.")
         return []
     now = now or time.time()
     pairs = sg.candidate_pairs() if pairs is None else pairs
@@ -213,15 +253,17 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
 def status_text():
     import live_trade_state as st
     d = _load()
-    lines = ["📉 DIP BUYING BOT (dinheiro real) — " + ("LIGADO" if d["enabled"] else "DESLIGADO"),
-             "Compra moeda forte da pump.fun (+" + format(MIN_UP_24H, ".0f") + "% em 24 h) que caiu " +
-             format(DIP_MIN, ".0f") + "–" + format(DIP_MAX, ".0f") + "% na última hora e voltou a subir nos últimos 5 min "
-             "(mais compra que venda). Liquidez US$ " + format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") +
+    lines = ["📉 DIP BUYING BOT (dinheiro real) — " + ("LIGADO" if d["enabled"] else "DESLIGADO") +
+             (" (" + d["paused_why"] + ")" if not d["enabled"] and d.get("paused_why") else ""),
+             "Compra moeda forte da pump.fun (+" + format(MIN_UP_24H, ".0f") + "% em 24 h, 6 h no verde) que caiu " +
+             format(DIP_MIN, ".0f") + "–" + format(DIP_MAX, ".0f") + "% na última hora e virou forte nos últimos 5 min "
+             "(+" + format(MIN_BOUNCE_5M, ".0f") + "% e " + format(MIN_BUY_RATIO_5M, "g") + "x mais compra que venda). Liquidez US$ " + format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") +
              " mil, moeda com 10+ min, anti-golpe.",
              "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · 🛑 stop -" +
              format(STOP_LOSS * 100, ".0f") + "% · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
              "% stop móvel (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · ⏱️ sai em " +
-             format(MAX_HOLD_S / 3600, ".0f") + " h se não subir."]
+             format(MAX_HOLD_S / 3600, ".0f") + " h se não subir · ⏸️ pausa sozinho com " + str(MAX_LOSS_STREAK) +
+             " perdas seguidas."]
     try:
         hist = [h for h in st.history() if h.get("mode") == "dip" and h.get("pnl_usd") is not None]
         open_n = st.positions_by_mode("dip")
