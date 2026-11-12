@@ -141,6 +141,7 @@ EXIT_TEXT = {
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
+    "dip": "📉 Dip Bot: 🛑 stop -20% | 🚀 a partir de +20% stop móvel (vende 8% abaixo do topo) | ⏱️ sai em 6 h se não subir",
     "signal": "📡 Sinal: vende 1/2 no TP1, 1/4 no TP2 e o resto no TP3 | 🛑 stop do sinal (abaixo do fundo) | ⏱️ fecha em 24 h se não andar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
 }
@@ -163,7 +164,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT "}.get(mode, "")
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:

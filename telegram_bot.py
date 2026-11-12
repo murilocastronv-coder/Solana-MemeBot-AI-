@@ -48,7 +48,7 @@ NOTIFY_REPEAT_S=float(os.getenv("NOTIFY_REPEAT_HOURS","2"))*3600
 SENT_AT={}
 SENT_LOCK=threading.Lock()
 CTX=threading.local()   # CTX.interactive=True while answering the owner (button/command)
-TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL|SINAL DE ENTRADA|TP1 ATINGIDO|TP2 ATINGIDO|STOP LOSS —|VOLTOU À ENTRADA|SINAL ENCERRADO")
+TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL|SINAL DE ENTRADA|TP1 ATINGIDO|TP2 ATINGIDO|STOP LOSS —|VOLTOU À ENTRADA|SINAL ENCERRADO|DIP BOT:")
 def is_trade_message(text):
  """A buy/sell notice: always sent, never held back (errors and warnings are not trades)."""
  t=(text or "").lstrip()
@@ -103,6 +103,8 @@ def keyboard():
   [{"text":"📡 Ligar sinais","callback_data":"sig_on"},{"text":"⏹️ Parar sinais","callback_data":"sig_off"}],
   [{"text":"🤖 Sinais operam sozinhos","callback_data":"sig_auto_on"},{"text":"✋ Só avisar","callback_data":"sig_auto_off"}],
   [{"text":"📊 Resultado dos sinais","callback_data":"sig_status"}],
+  [{"text":"📉 Ligar Dip Bot","callback_data":"dip_on"},{"text":"⏹️ Parar Dip Bot","callback_data":"dip_off"}],
+  [{"text":"📊 Dip Bot: resultado","callback_data":"dip_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -240,6 +242,15 @@ def handle(update):
    else:pre=""
    send(chat,pre+sg.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Sinais: "+str(exc)[:200],keyboard())
+  return
+ if action in ("dip_on","dip_off","dip_status","/dip"):
+  import dip_bot
+  try:
+   if action=="dip_on":dip_bot.set_enabled(True);pre="📉 DIP BOT LIGADO (dinheiro real): compra US$ "+format(dip_bot.ORDER_USD,".0f")+" nas quedas fortes de moedas em alta, máx. "+str(dip_bot.MAX_OPEN)+" abertas.\n\n"
+   elif action=="dip_off":dip_bot.set_enabled(False);pre="⏹️ Dip Bot parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
+   else:pre=""
+   send(chat,pre+dip_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Dip Bot: "+str(exc)[:200],keyboard())
   return
  if action in ("unstick","/destravar"):
   send(chat,"🔧 Conferindo as ordens pendentes na blockchain…")
@@ -507,6 +518,17 @@ def signals_loop():
    if chat:signals.cycle(send,chat)
    elif signals._load()["open"]:signals.follow_up(signals.prices_now({x["mint"] for x in signals._load()["open"].values()}))
   except Exception as exc:logging.warning("signals cycle failed: %s",type(exc).__name__)
+def dip_loop():
+ """Dip Buying Bot: every DIP_SCAN_SECONDS looks for sharp dips of strong pump.fun coins and buys them."""
+ import dip_bot,signals
+ while True:
+  time.sleep(dip_bot.SCAN_EVERY_S)
+  try:
+   chat=active_chat()
+   if not chat or not dip_bot.enabled():continue
+   fresh=time.time()-signals.PAIRS["at"]<90
+   dip_bot.cycle(send,chat,pairs=signals.PAIRS["pairs"] if fresh else None)
+  except Exception as exc:logging.warning("dip cycle failed: %s",type(exc).__name__)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
 def copy_beat_line():
@@ -633,6 +655,7 @@ def loop():
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=signals_loop,daemon=True).start()
+ threading.Thread(target=dip_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
