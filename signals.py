@@ -86,6 +86,7 @@ _LOCK = threading.RLock()
 _http = requests.Session()
 LAST = {"at": 0, "coins": 0, "popular": 0, "checked": 0, "signals": 0, "why": {}}
 PAIRS = {"at": 0.0, "pairs": []}
+_OFF_LOG = [0.0]
 
 
 # ---------------------------------------------------------------- storage
@@ -697,8 +698,12 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None, tr
     """One scan: follow the open signals, then look for new entries (and buy them when auto trade is on)."""
     trader = trader if trader is not None else (auto_buy if fetch is None else None)
     if not enabled():
+        if time.time() - _OFF_LOG[0] > 600:
+            _OFF_LOG[0] = time.time()
+            logging.info("signals scan: OFF (botão Ligar sinais)")
         return []
     now = now or time.time()
+    t0 = time.time()
     d = _load()
     if d["open"]:
         follow_up(prices_now({s["mint"] for s in d["open"].values()}, fetch), send, chat, now)
@@ -789,8 +794,8 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None, tr
     if fetch is None:
         PAIRS.update(at=time.time(), pairs=pairs)      # the Dip Buying Bot reuses this scan
     top = ", ".join(k + "=" + str(v) for k, v in sorted(why.items(), key=lambda kv: -kv[1])[:6])
-    logging.info("signals scan: %s coins, %s popular, %s candle checks, %s signals | %s", len(pairs), len(popular),
-                 checked, len(sent), top)
+    logging.info("signals scan: %s coins, %s popular, %s candle checks, %s signals (%.0fs) | %s", len(pairs),
+                 len(popular), checked, len(sent), time.time() - t0, top)
     return sent
 
 

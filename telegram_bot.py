@@ -515,9 +515,10 @@ def signals_loop():
   time.sleep(signals.SCAN_EVERY_S)
   try:
    chat=active_chat()
+   if not chat:logging.info("signals scan: no active chat")
    if chat:signals.cycle(send,chat)
    elif signals._load()["open"]:signals.follow_up(signals.prices_now({x["mint"] for x in signals._load()["open"].values()}))
-  except Exception as exc:logging.warning("signals cycle failed: %s",type(exc).__name__)
+  except Exception as exc:logging.exception("signals cycle failed: %s",type(exc).__name__)
 def dip_loop():
  """Dip Buying Bot: every DIP_SCAN_SECONDS looks for sharp dips of strong pump.fun coins and buys them."""
  import dip_bot,signals
