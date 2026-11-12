@@ -88,8 +88,8 @@ class PumpFunTests(unittest.TestCase):
         self.assertIn("/pools/GPOOL/ohlcv", urls[-1])
 
     def test_coin_one_hour_old_is_allowed(self):
-        self.assertEqual(sg.popular_reason(pair(pairCreatedAt=(NOW - 3700) * 1000), NOW), "")
-        self.assertIn("nova demais", sg.popular_reason(pair(pairCreatedAt=(NOW - 1800) * 1000), NOW))
+        self.assertEqual(sg.popular_reason(pair(pairCreatedAt=(NOW - 1900) * 1000), NOW), "")   # new coins (30+ min)
+        self.assertIn("nova demais", sg.popular_reason(pair(pairCreatedAt=(NOW - 1500) * 1000), NOW))
 
 
 class EntryTests(unittest.TestCase):
