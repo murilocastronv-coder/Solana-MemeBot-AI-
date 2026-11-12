@@ -1,7 +1,7 @@
 """📡 Signals bot: Solana memecoin entry signals (does NOT trade; tells the owner when and where).
 
 1. Coins: DexScreener new/boosted Solana pairs + GeckoTerminal trending / pump.fun / PumpSwap pools.
-   Liquidity US$ 10k-150k, pair >= 3 h old (enough 5-min candles), SOL/USDC quote.
+   Liquidity US$ 10k-300k, pair >= 3 h old (enough 5-min candles), SOL/USDC quote.
 2. "Most people are buying it": last hour >= SIGNAL_MIN_BUYS_1H buys and >= 55% of the trades are
    buys, 24 h volume >= US$ 30k, and the coin is in an uptrend (price up in 6 h and 24 h).
 3. Entry on the pullback ("buy the dip in an uptrend"), from 5-min candles (GeckoTerminal OHLCV):
@@ -36,7 +36,7 @@ def _f(name, default):
 
 
 MIN_LIQ = _f("SIGNAL_MIN_LIQUIDITY_USD", 10_000)
-MAX_LIQ = _f("SIGNAL_MAX_LIQUIDITY_USD", 150_000)
+MAX_LIQ = _f("SIGNAL_MAX_LIQUIDITY_USD", 300_000)
 MIN_AGE_S = _f("SIGNAL_MIN_AGE_HOURS", 1) * 3600
 # pump.fun only: coins still on the launch curve (dexId pumpfun) or already on PumpSwap
 PUMP_ONLY = os.getenv("SIGNAL_PUMP_ONLY", "true").strip().lower() != "false"
