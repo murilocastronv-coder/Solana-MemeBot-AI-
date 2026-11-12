@@ -70,6 +70,22 @@ class PumpFunTests(unittest.TestCase):
         sg.candles("POOL1", fetch=lambda u: urls.append(u) or {}, minutes=1)
         self.assertIn("aggregate=1", urls[0])
 
+    def test_candles_fall_back_to_the_geckoterminal_pool_of_the_coin(self):
+        import requests
+        resp = requests.Response()
+        resp.status_code = 404
+        urls = []
+
+        def f(u):
+            urls.append(u)
+            if "/pools/CURVE/" in u:
+                raise requests.HTTPError(response=resp)
+            if "/tokens/" in u:
+                return {"data": [{"attributes": {"address": "GPOOL"}}]}
+            return {"data": {"attributes": {"ohlcv_list": [[1, 1, 2, 0.5, 1.5, 10]]}}}
+        self.assertEqual(sg.candles("CURVE", fetch=f, minutes=1, mint="MINTpump"), [(1.0, 1.0, 2.0, 0.5, 1.5, 10.0)])
+        self.assertIn("/pools/GPOOL/ohlcv", urls[-1])
+
     def test_coin_one_hour_old_is_allowed(self):
         self.assertEqual(sg.popular_reason(pair(pairCreatedAt=(NOW - 3700) * 1000), NOW), "")
         self.assertIn("nova demais", sg.popular_reason(pair(pairCreatedAt=(NOW - 1800) * 1000), NOW))

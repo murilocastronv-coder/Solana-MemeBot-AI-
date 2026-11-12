@@ -122,10 +122,24 @@ def enabled():
 
 
 # ---------------------------------------------------------------- data
+GECKO_GAP_S = _f("SIGNAL_GECKO_GAP_SECONDS", 2.2)   # GeckoTerminal free API: ~30 calls/min, so space them
+_gecko_last = [0.0]
+
+
 def _get(url):
-    r = _http.get(url, timeout=15, headers={"Accept": "application/json", "User-Agent": "SolanaSignals/1.0"})
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(3):
+        if url.startswith(GECKO):
+            with _LOCK:
+                wait = _gecko_last[0] + GECKO_GAP_S - time.time()
+                if wait > 0:
+                    time.sleep(wait)
+                _gecko_last[0] = time.time()
+        r = _http.get(url, timeout=15, headers={"Accept": "application/json", "User-Agent": "SolanaSignals/1.0"})
+        if r.status_code == 429 and attempt < 2:             # rate limited: wait and try again
+            time.sleep(6 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        return r.json()
 
 
 def candidate_pairs(fetch=None):
@@ -215,11 +229,32 @@ def candle_minutes(p, now=None):
     return 1 if age < FAST_CANDLES_UNDER_S else 5
 
 
-def candles(pool, fetch=None, minutes=5):
+def _ohlcv_url(pool, minutes):
+    return (GECKO + "/networks/solana/pools/" + pool + "/ohlcv/minute?aggregate=" + str(int(minutes)) +
+            "&limit=100&currency=usd")
+
+
+def gecko_pool(mint, fetch=None):
+    """The main GeckoTerminal pool of a coin (used when GeckoTerminal does not know the DexScreener pair)."""
+    data = (fetch or _get)(GECKO + "/networks/solana/tokens/" + mint + "/pools?page=1")
+    for pool in (data or {}).get("data") or []:
+        addr = ((pool or {}).get("attributes") or {}).get("address")
+        if addr:
+            return addr
+    return None
+
+
+def candles(pool, fetch=None, minutes=5, mint=None):
     """Candles [(ts, open, high, low, close, volume)] oldest first (GeckoTerminal), 1 or 5 minutes."""
     fetch = fetch or _get
-    data = fetch(GECKO + "/networks/solana/pools/" + pool + "/ohlcv/minute?aggregate=" + str(int(minutes)) +
-                 "&limit=100&currency=usd")
+    try:
+        data = fetch(_ohlcv_url(pool, minutes))
+    except requests.HTTPError as exc:
+        code = getattr(exc.response, "status_code", None)
+        alt = gecko_pool(mint, fetch) if mint and code in (400, 404) else None
+        if not alt or alt == pool:
+            raise
+        data = fetch(_ohlcv_url(alt, minutes))
     rows = ((data or {}).get("data") or {}).get("attributes", {}).get("ohlcv_list") or []
     return sorted((tuple(float(x) for x in r[:6]) for r in rows), key=lambda r: r[0])
 
@@ -551,9 +586,10 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
             break
         checked += 1
         try:
-            setup, r = entry_setup(candles(p["pairAddress"], fetch, candle_minutes(p, now)))
+            setup, r = entry_setup(candles(p["pairAddress"], fetch, candle_minutes(p, now), mint=mint))
         except Exception as exc:
-            setup, r = None, "velas indisponíveis (" + type(exc).__name__ + ")"
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            setup, r = None, "velas indisponíveis (" + type(exc).__name__ + (" " + str(code) if code else "") + ")"
         if not setup:
             why[r] = why.get(r, 0) + 1
             continue
