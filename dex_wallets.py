@@ -250,7 +250,6 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         cursors = state.setdefault("dex_cursors", {})
         seen = set(state.get("dex_seen_sigs", []))
         buyers = []
-        market_buys = []          # (mint, wallet, time) for the consensus robot
         scanned = failed = 0
         errors_before = RPC_ERRORS["count"]
         for p in pairs:
@@ -276,9 +275,6 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
                     continue
                 seen.add(s["signature"])
                 buyers += _buyers(tx)
-                when = tx.get("blockTime") or s.get("blockTime") or time.time()
-                market_buys += [(p["mint"], w, when, "b") for w in buyers_of(tx, p["mint"])]
-                market_buys += [(p["mint"], w, when, "s") for w in sellers_of(tx, p["mint"])]
                 block = {"blockTime": tx.get("blockTime") or s.get("blockTime"), "transactions": [tx]}
                 wallet_copy.process_confirmed_block(state, block, slot=tx.get("slot"))
                 scanned += 1
@@ -337,10 +333,4 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         state["dex_transactions_scanned"] = int(state.get("dex_transactions_scanned", 0)) + scanned
         state["updated_at"] = int(time.time())
         wallet_copy._save_state(path, state)
-    if market_buys:
-        try:
-            import consensus
-            consensus.record_market_buys(market_buys)
-        except Exception:
-            pass
     return scanned

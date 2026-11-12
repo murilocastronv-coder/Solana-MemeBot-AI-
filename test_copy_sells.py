@@ -608,8 +608,7 @@ class MirrorSkipNoticeTests(unittest.TestCase):
 
     def test_mirror_buy_with_copy_trade_off_is_reported(self):
         with patch.object(ct, "new_signals", return_value=[("buy", MINT, 100.0)]), \
-                patch.object(ct, "users_active", return_value=False), \
-                patch("consensus.enabled", return_value=True):
+                patch.object(ct, "users_active", return_value=False):
             ct.cycle(self.send, 1)
         self.assertIn("copy trade está DESLIGADO", self.sent[-1])
         self.assertIn("COPY DESLIGADO", ct.status_text())

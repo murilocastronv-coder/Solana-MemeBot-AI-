@@ -1387,7 +1387,7 @@ def _open(mint, wallet, send, chat, usd=None, direct=False):
             return _skip(mint, wallet, "limite de " + str(MAX_OPEN_TOTAL) + " posições abertas atingido (" +
                          str(open_now) + " abertas)", send, chat)
         elif mint in live:
-            return _skip(mint, wallet, "essa moeda já está aberta por outro robô (sniper/consenso)", send, chat)
+            return _skip(mint, wallet, "essa moeda já está aberta na carteira por outra operação", send, chat)
         import wallet_holdings
         ok, why = wallet_holdings.can_buy(mint, live_engine.get_address(), add_on=add_on)
         if not ok:
@@ -1900,12 +1900,7 @@ def cycle(send=None, chat=None):
     sell together with them (there is no fixed TP/SL)."""
     owner_on = enabled()
     users_on = users_active()
-    try:
-        import consensus
-        consensus_on = consensus.enabled()
-    except Exception:
-        consensus_on = False
-    active = owner_on or users_on or consensus_on    # signals are read while anything uses them
+    active = owner_on or users_on        # signals are read while the owner or any user is copying
     msgs = []
     reset_bad_scores_once()
     ensure_test_start()
@@ -1922,7 +1917,8 @@ def cycle(send=None, chat=None):
     with _LOCK:
         d = _load()
         busy = _busy(d)
-        wallets = {a: w for a, w in d["wallets"].items() if active or a in busy}
+        # mirror wallets are always read: with the copy trade off the owner is told what was not copied
+        wallets = {a: w for a, w in d["wallets"].items() if active or a in busy or mirror(a, w)}
         # mirror wallets first: their buys are copied as fast as possible
         wallets = dict(sorted(wallets.items(), key=lambda kv: not mirror(kv[0], kv[1])))
     if not wallets:
@@ -1953,12 +1949,6 @@ def cycle(send=None, chat=None):
             if side == "buy" and paid_usd:
                 typical = typical_buy_usd(_load()["wallets"].get(wallet, {}))   # usual size BEFORE this buy (no lock: may hit the network)
                 _record_buy_size(wallet, paid_usd)
-            if (side == "buy" and consensus_on and not info.get("paused") and not info.get("leaving")
-                    and (paid_usd or 0) >= MIN_BUY_USD):
-                try:
-                    consensus.record_buy(mint, wallet)          # consensus robot: how many wallets buy this coin
-                except Exception as exc:
-                    LAST_ERROR["text"] = "consenso falhou: " + type(exc).__name__
             if side == "sell":
                 try:
                     import user_copy

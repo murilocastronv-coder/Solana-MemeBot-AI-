@@ -147,38 +147,18 @@ python -m unittest discover -p "test_*.py"
   Para ligar o REAL, o usuário precisa tocar em "✅ Aceito a taxa de 4%".
 - O 📊 Status do dono mostra quantos usuários estão copiando e o total de taxas recebidas.
 
-## 🎯 Sniper (dono do bot, SIMULAÇÃO ou REAL)
-- Procura o dia inteiro (a cada 30 s) moedas novas e em alta na DexScreener **e na pump.fun** (moedas ainda na
-  curva de lançamento e já na PumpSwap, pela API da pump.fun e pela GeckoTerminal; `SNIPER_PUMPFUN=false`
-  desliga) e compra só as que passam em tudo. Os dados de negociação vêm sempre da DexScreener, então as
-  moedas da pump.fun passam pelos mesmos filtros e proteções. Na curva de lançamento a liquidez fica presa
-  no contrato (o criador não consegue tirar), então ali não se exige liquidez travada; o resto vale igual:
-  - **liquidez entre US$ 10 mil e US$ 250 mil**, moeda com **pelo menos 1 hora** de criada (e até 48 h), par em SOL/USDC;
-  - **estratégia de impulso**: nos últimos 5 min ≥ 15 compras, compras ≥ 1,3× vendas, volume ≥ US$ 5 mil,
-    preço +2% a +25% (subindo, sem pegar topo) e positivo na última hora; valor de mercado ≤ 15× a liquidez;
-  - **anti-rug**: criador sem poder de criar moedas nem congelar carteiras, 10 maiores donos < 34%,
-    liquidez travada/queimada ≥ 80% e sem risco grave na RugCheck (sem resposta da RugCheck = não compra);
-  - **anti-golpe**: token sem taxa de transferência, gatilho, delegado permanente ou contas congeladas
-    (Token-2022), e com site/rede social;
-  - **anti-honeypot**: teste de compra e venda na Jupiter devolve ≥ 92% e impacto da nossa ordem ≤ 3%.
-- **US$ 38 por compra** (`SNIPER_ORDER_USD`; nunca compra menos: sem saldo livre de US$ 38 + taxas não compra
-  e avisa), **só 3 ordens ao mesmo tempo** (`SNIPER_MAX_POSITIONS`), nunca compra a mesma
-  moeda duas vezes em 24 h. Saída: **stop −40%** (`SNIPER_STOP_LOSS`), a partir de +25% vende 12% abaixo do topo, sai em 30 min se
-  não decolar. Todos os limites podem ser ajustados por variáveis `SNIPER_*`.
+## 📡 Sinais de memecoin (Solana) — só avisa, não compra
+- Botões: **📡 Ligar sinais**, **⏹️ Parar sinais**, **📊 Resultado dos sinais**.
+- Moedas da DexScreener e da GeckoTerminal (em alta, pump.fun, PumpSwap) com **liquidez US$ 10 mil–150 mil**,
+  ≥ 3 h de vida, **a maioria comprando** (≥ 80 compras na última hora e ≥ 55% compras, volume 24 h ≥ US$ 30 mil)
+  e em **tendência de alta** (subindo em 6 h e 24 h).
+- **Entrada na correção** (velas de 5 min da GeckoTerminal): EMA20 acima da EMA50, queda de 8%–40% do topo das
+  últimas 2 h, RSI(14) foi a ≤ 38 e está virando, e a última vela fechou verde acima da máxima da anterior.
+- Anti-golpe: criador sem poder de criar/congelar, 10 maiores donos, honeypot, armadilhas Token-2022, RugCheck.
+- O sinal traz **entrada**, **stop loss** (abaixo do fundo, 6%–20%), **TP1** (1,5× o risco, vender metade e
+  levar o stop para a entrada) e **TP2** (3× o risco). Cada sinal é acompanhado: avisa TP1, TP2, stop ou fim
+  em 24 h, e o 📊 mostra o **resultado real** (acerto, média por sinal, resultado seguindo todos).
+- Ajustes: variáveis `SIGNAL_*` (ex.: `SIGNAL_MIN_LIQUIDITY_USD`, `SIGNAL_MAX_LIQUIDITY_USD`, `SIGNAL_RSI_DIP`).
+- O 🎯 Sniper e o 🤝 Consenso foram removidos; posições reais que eles deixaram abertas continuam com stop
+  −40% e stop móvel a partir de +25%.
 
-## 🤝 Consenso das carteiras (dono, SIMULAÇÃO ou REAL)
-- Compra uma moeda quando **3 ou mais das carteiras acompanhadas** (não pausadas, compra ≥ US$ 40) compram
-  **a mesma moeda dentro de 1 hora** (`CONSENSUS_MIN_WALLETS`, `CONSENSUS_WINDOW_MINUTES`). Para exigir a
-  maioria das carteiras, use `CONSENSUS_MIN_SHARE=0.5`.
-- **Também olha o mercado (carteiras de fora do copy):** compra quando **a maioria das pessoas está comprando**:
-  - na blockchain (moedas em alta lidas pela busca): **15+ carteiras** negociaram a moeda na última hora e
-    **65%+ delas estão comprando** (`CONSENSUS_MARKET_MIN_BUYERS`, `CONSENSUS_MARKET_MIN_BUY_SHARE`);
-  - na DexScreener (muito mais moedas, inclusive pump.fun): **150+ compras na última hora**, **65%+ das
-    negociações são compras**, ainda comprando nos últimos 5 min e liquidez ≥ US$ 10 mil
-    (`CONSENSUS_DEX_MIN_BUYS_1H`, `CONSENSUS_DEX_MIN_LIQUIDITY_USD`).
-  Nenhuma carteira precisa estar no copy. `CONSENSUS_MARKET=false` / `CONSENSUS_DEX=false` desligam.
-- Proteções: anti-golpe e teste de venda (honeypot) do copy trade + armadilhas Token-2022 do sniper.
-- **Stop −40%**; a partir de **+25%** entra o **stop móvel** (vende 10% abaixo do topo)
-  (`CONSENSUS_STOP_LOSS`, `CONSENSUS_TRAIL_ARM`, `CONSENSUS_TRAIL_DROP`).
-- US$ 32 por compra (`CONSENSUS_ORDER_USD`), máx. 3 posições (`CONSENSUS_MAX_POSITIONS`), nunca a mesma moeda
-  duas vezes em 24 h. Funciona mesmo com o copy trade desligado.

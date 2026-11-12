@@ -48,7 +48,7 @@ NOTIFY_REPEAT_S=float(os.getenv("NOTIFY_REPEAT_HOURS","2"))*3600
 SENT_AT={}
 SENT_LOCK=threading.Lock()
 CTX=threading.local()   # CTX.interactive=True while answering the owner (button/command)
-TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL")
+TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL|SINAL DE ENTRADA|TP1 ATINGIDO|TP2 ATINGIDO|STOP LOSS —|VOLTOU À ENTRADA|SINAL ENCERRADO")
 def is_trade_message(text):
  """A buy/sell notice: always sent, never held back (errors and warnings are not trades)."""
  t=(text or "").lstrip()
@@ -100,11 +100,9 @@ def keyboard():
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
-  [{"text":"🤝 Consenso SIM","callback_data":"cns_sim"},{"text":"🤝 Consenso REAL","callback_data":"cns_real"}],
-  [{"text":"⏹️ Parar consenso","callback_data":"cns_off"},{"text":"📊 Status consenso","callback_data":"cns_status"}],
+  [{"text":"📡 Ligar sinais","callback_data":"sig_on"},{"text":"⏹️ Parar sinais","callback_data":"sig_off"}],
+  [{"text":"📊 Resultado dos sinais","callback_data":"sig_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
-  [{"text":"🎯 Sniper SIM","callback_data":"snp_sim"},{"text":"🎯 Sniper REAL","callback_data":"snp_real"}],
-  [{"text":"⏹️ Parar sniper","callback_data":"snp_off"},{"text":"📊 Status sniper","callback_data":"snp_status"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
 def user_keyboard():
@@ -231,37 +229,14 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
- if action in ("snp_sim","snp_real","snp_real_ok","snp_off","snp_status","/sniper_status"):
-  import sniper as sn
+ if action in ("sig_on","sig_off","sig_status","/sinais"):
+  import signals as sg
   try:
-   if action=="snp_sim":sn.set_mode(True,False);pre="🧪 SNIPER em SIMULAÇÃO (preços reais, US$ 100 de mentira).\n\n"
-   elif action=="snp_real":
-    send(chat,"🎯 SNIPER COM DINHEIRO REAL\nCompra US$ "+format(sn.ORDER_USD,".0f")+" por moeda (máx. "+str(sn.MAX_POSITIONS)+
-     " ao mesmo tempo) com a carteira principal, o dia inteiro.\n⚠️ Memecoin nova é o tipo de moeda mais arriscado: as proteções reduzem golpes, mas não evitam perdas. Recomendo testar antes em 🎯 Sniper SIM.",
-     [[{"text":"✅ Ligar sniper REAL","callback_data":"snp_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"snp_status"}]]);return
-   elif action=="snp_real_ok":
-    sn.set_mode(True,True)
-    pre="💵 SNIPER REAL LIGADO.\n\n" if start_real_or_wait(chat,"sniper") else "⏳ SNIPER REAL LIGADO: começa assim que a ordem pendente for conferida (~2 min).\n\n"
-   elif action=="snp_off":sn.set_mode(False);pre="⏹️ Sniper desligado: não abre novas posições. As abertas continuam com stop e stop móvel.\n\n"
+   if action=="sig_on":sg.set_enabled(True);pre="📡 SINAIS LIGADOS: te aviso a entrada, o stop e os alvos quando aparecer uma boa oportunidade.\n\n"
+   elif action=="sig_off":sg.set_enabled(False);pre="⏹️ Sinais desligados: não mando sinais novos. Os abertos continuam sendo acompanhados até fechar.\n\n"
    else:pre=""
-   send(chat,pre+sn.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
-  return
- if action in ("cns_sim","cns_real","cns_real_ok","cns_off","cns_status","/consenso"):
-  import consensus as cn
-  try:
-   if action=="cns_sim":cn.set_mode(True,False);pre="🧪 CONSENSO em SIMULAÇÃO (preços reais, US$ 100 de mentira).\n\n"
-   elif action=="cns_real":
-    send(chat,"🤝 CONSENSO COM DINHEIRO REAL\nCompra US$ "+format(cn.ORDER_USD,".0f")+" quando "+str(cn.MIN_WALLETS)+
-     "+ carteiras acompanhadas compram a mesma moeda em 1 h (máx. "+str(cn.MAX_POSITIONS)+" posições). Stop −40%; a partir de +25% stop móvel.\n⚠️ Recomendo testar antes em 🤝 Consenso SIM.",
-     [[{"text":"✅ Ligar consenso REAL","callback_data":"cns_real_ok"}],[{"text":"⬅️ Cancelar","callback_data":"cns_status"}]]);return
-   elif action=="cns_real_ok":
-    cn.set_mode(True,True)
-    pre="💵 CONSENSO REAL LIGADO.\n\n" if start_real_or_wait(chat,"consenso") else "⏳ CONSENSO REAL LIGADO: começa assim que a ordem pendente for conferida (~2 min).\n\n"
-   elif action=="cns_off":cn.set_mode(False);pre="⏹️ Consenso desligado: não abre novas posições. As abertas continuam com stop e stop móvel.\n\n"
-   else:pre=""
-   send(chat,pre+cn.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Consenso: "+str(exc)[:200],keyboard())
+   send(chat,pre+sg.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Sinais: "+str(exc)[:200],keyboard())
   return
  if action in ("unstick","/destravar"):
   send(chat,"🔧 Conferindo as ordens pendentes na blockchain…")
@@ -358,7 +333,7 @@ def handle(update):
   "btcx_sim","btcx_real","btcx_off","btcx_status","btcx_lev","btcx_test","btcx_bt",
   "clone_help","/analisar","/clonar","/estrategia","/robo",
   "mev_on","mev_off","mev_status","/mev","mev_config","mev_amount","mev_min","mev_tip","mev_mode_sim","mev_mode_real","mev_scan","mev_history"}
- if action in legacy or action.startswith(("lev_","brk_","strat_")):  # removed controls (BTC, strategy robot, clone)
+ if action in legacy or action.startswith(("lev_","brk_","strat_","snp_","cns_")):  # removed controls (BTC, strategy robot, clone, sniper, consensus)
   send(chat,"Esse controle foi removido. Use o menu abaixo.",keyboard());return
  if action in ("/start","/menu","help"):menu(chat)
  else:menu(chat)
@@ -519,15 +494,16 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
-def sniper_loop():
- """Sniper: scans DexScreener every SNIPER_SCAN_SECONDS, all day."""
- import sniper
+def signals_loop():
+ """Signals bot: scans Solana memecoins every SIGNAL_SCAN_SECONDS and follows the open signals."""
+ import signals
  while True:
-  time.sleep(sniper.SCAN_EVERY_S)
+  time.sleep(signals.SCAN_EVERY_S)
   try:
    chat=active_chat()
-   if chat:sniper.cycle(send,chat)
-  except Exception as exc:logging.warning("sniper cycle failed: %s",type(exc).__name__)
+   if chat:signals.cycle(send,chat)
+   elif signals._load()["open"]:signals.follow_up(signals.prices_now({x["mint"] for x in signals._load()["open"].values()}))
+  except Exception as exc:logging.warning("signals cycle failed: %s",type(exc).__name__)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
 def copy_beat_line():
@@ -551,11 +527,6 @@ def copy_loop():
   except Exception as exc:
    COPY_BEAT.update(at=time.time(),error=type(exc).__name__)
    logging.warning("copy cycle failed: %s: %s",type(exc).__name__,str(exc)[:200])
-  try:
-   import consensus
-   chat=active_chat()
-   if chat:consensus.cycle(send,chat)        # consensus robot: buys what several followed wallets buy
-  except Exception as exc:logging.warning("consensus cycle failed: %s",type(exc).__name__)
   if time.monotonic()>=USERS_UPKEEP["next"]:
    USERS_UPKEEP["next"]=time.monotonic()+60
    try:
@@ -658,7 +629,7 @@ def loop():
   import copy_trader
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
- threading.Thread(target=sniper_loop,daemon=True).start()
+ threading.Thread(target=signals_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()

@@ -13,13 +13,13 @@ _last_alert = {}
 _quote_fail_since = {}  # mint -> monotonic time quotes started failing
 _quote_err_logged = {}  # mint -> last time the reason was logged
 ARMED = []  # (mint, position, signal) whose trailing stop just started: live_engine tells the owner
+CONSENSUS_EXIT = {"stop_loss": "0.40", "arm": "1.25", "drop": "0.10"}   # removed consensus robot's positions
 
 
 def trail_text(position):
     """'sells X% below the top' for the position's trailing rule."""
     if position.get("mode") == "consensus":
-        import consensus
-        return format(consensus.TRAIL_DROP * 100, ".0f")
+        return format(float(CONSENSUS_EXIT["drop"]) * 100, ".0f")
     if position.get("copy_orphan"):
         return format(float(ORPHAN_EXIT["drop"]) * 100, ".0f")
     return format(float(SNIPER_EXIT["drop"]) * 100, ".0f")
@@ -56,8 +56,8 @@ def position_signal(position, cost, proceeds):
             signal.update(action="sell", reason="time_stop")
         return signal
     if position.get("mode") == "consensus":
-        import consensus      # stop -40%; from +25% a trailing stop 10% below the top
-        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **consensus.EXIT_RULES)
+        # robot removed; its open positions keep their rules: stop -40%, from +25% trailing 10% below the top
+        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **CONSENSUS_EXIT)
     if position.get("mode") == "copy" and position.get("copy_orphan"):
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **ORPHAN_EXIT)
     if (position.get("mode") == "copy" and not position.get("copy_orphan")
