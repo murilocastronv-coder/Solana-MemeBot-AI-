@@ -50,7 +50,9 @@ class PopularTests(unittest.TestCase):
     def test_most_people_buying_and_uptrend(self):
         self.assertIn("pouca gente", sg.popular_reason(pair(txns={"h1": {"buys": 20, "sells": 5}}), NOW))
         self.assertIn("mais venda", sg.popular_reason(pair(txns={"h1": {"buys": 300, "sells": 400}}), NOW))
-        self.assertIn("tendência", sg.popular_reason(pair(priceChange={"h6": -5, "h24": 30}), NOW))
+        self.assertIn("tendência", sg.popular_reason(pair(priceChange={"h6": -5, "h24": -2}), NOW))
+        self.assertEqual(sg.popular_reason(pair(priceChange={"h6": -5, "h24": 30}), NOW), "")   # 24 h uptrend is enough
+        self.assertIn("tendência", sg.popular_reason(pair(priceChange={"h1": -40, "h6": 10, "h24": 30}), NOW))
 
 
 class PumpFunTests(unittest.TestCase):
