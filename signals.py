@@ -85,6 +85,7 @@ BAD_EXTENSIONS = {"transferHook": "token com gatilho de transferência (pode tra
 _LOCK = threading.RLock()
 _http = requests.Session()
 LAST = {"at": 0, "coins": 0, "popular": 0, "checked": 0, "signals": 0, "why": {}}
+PAIRS = {"at": 0.0, "pairs": []}
 
 
 # ---------------------------------------------------------------- storage
@@ -785,6 +786,8 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None, tr
                             v["traded"] = True
                     _save(dd)
     LAST.update(at=now, coins=len(pairs), popular=len(popular), checked=checked, signals=len(sent), why=why)
+    if fetch is None:
+        PAIRS.update(at=time.time(), pairs=pairs)      # the Dip Buying Bot reuses this scan
     top = ", ".join(k + "=" + str(v) for k, v in sorted(why.items(), key=lambda kv: -kv[1])[:6])
     logging.info("signals scan: %s coins, %s popular, %s candle checks, %s signals | %s", len(pairs), len(popular),
                  checked, len(sent), top)
