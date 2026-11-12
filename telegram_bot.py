@@ -540,6 +540,7 @@ def rocket_loop():
   time.sleep(rocket_bot.SCAN_EVERY_S)
   try:
    chat=active_chat()
+   if chat:rocket_bot.take_profits(send,chat)
    if not chat or not rocket_bot.enabled():continue
    fresh=time.time()-signals.PAIRS["at"]<40
    pairs=signals.PAIRS["pairs"] if fresh else signals.candidate_pairs()

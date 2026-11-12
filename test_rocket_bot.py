@@ -64,6 +64,21 @@ class RocketTests(unittest.TestCase):
         old = dict(pos, opened_at=time.time() - 2 * 3600)
         self.assertEqual(lem.position_signal(old, 10, 11)["reason"], "time_stop")
 
+    def test_take_profit_ladder(self):
+        import live_trade_state as st
+        positions = {MINT: {"mode": "rocket", "token_amount_raw": "1000", "cost_usd": 10}}
+        sold, fields = [], {}
+        with patch.object(st, "_load", return_value={"positions": positions}), \
+             patch.object(st, "set_position_fields", side_effect=lambda m, **f: positions[m].update(f)):
+            rb.take_profits(quote=lambda m, a: 15, seller=lambda *a: sold.append(a))      # 1.5x: nothing
+            self.assertEqual(sold, [])
+            rb.take_profits(quote=lambda m, a: 21, seller=lambda *a: sold.append(a))      # 2.1x: half
+            self.assertEqual(sold[-1][1:3], (0.5, "rocket_tp_2x"))
+            rb.take_profits(quote=lambda m, a: 25, seller=lambda *a: sold.append(a))      # no repeat
+            self.assertEqual(len(sold), 1)
+            rb.take_profits(quote=lambda m, a: 55, seller=lambda *a: sold.append(a))      # 5.5x: half of the rest
+            self.assertEqual(sold[-1][1:3], (0.5, "rocket_tp_5x"))
+
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())
 

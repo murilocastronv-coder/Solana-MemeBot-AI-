@@ -8,6 +8,7 @@ Real money in the owner's wallet, separate from the signals bot and the Dip Bot 
 - US$ 10 per buy, at most 5 open, one try per coin every 6 hours.
 - Exit (live_exit_monitor, quotes every 20 s): stop -40%; from +30% trailing stop 15% below the top
   (lets a 2x-10x run); after 90 minutes without reaching +30% it sells.
+- Take-profit ladder: at 2x sells half (money back), at 5x half of the rest; the rest rides the trailing stop.
 - Pauses itself after 5 losses in a row (no daily loss limit).
 Most snipes lose; the result comes from the few that run. Nothing here guarantees profit.
 Data comes from DexScreener only (GeckoTerminal and pump.fun block the server).
@@ -43,6 +44,9 @@ STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.40)
 TRAIL_ARM = sg._f("ROCKET_TRAIL_ARM", 0.30)
 TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.15)
 MAX_HOLD_S = sg._f("ROCKET_MAX_HOLD_MINUTES", 90) * 60
+# take-profit ladder (the most common memecoin rule): at 2x take back the money put in (sell half),
+# at 5x sell half of what is left; the rest rides the trailing stop for a 10x+.
+LADDER = ((2.0, 0.5, "tp_2x", "2x: tirou o dinheiro investido"), (5.0, 0.5, "tp_5x", "5x: realizou mais lucro"))
 EXIT = {"stop_loss": str(STOP_LOSS), "arm": str(1 + TRAIL_ARM), "drop": str(TRAIL_DROP)}
 RULES = 1
 
@@ -104,6 +108,35 @@ def loss_streak(trades):
             break
         n += 1
     return n
+
+
+def take_profits(send=None, chat=None, quote=None, seller=None):
+    """Sell part of a rocket position at 2x and 5x (runs every scan, even with the sniper off)."""
+    import live_trade_state as st
+    done = []
+    for mint, pos in list(st._load()["positions"].items()):
+        if pos.get("mode") != "rocket":
+            continue
+        try:
+            if quote is None:
+                from live_exit_monitor import quote_value_usd as quote
+            ratio = float(quote(mint, int(pos["token_amount_raw"]))) / float(pos["cost_usd"])
+        except Exception:
+            continue
+        for x, part, key, note in LADDER:
+            if ratio >= x and not pos.get(key):
+                st.set_position_fields(mint, **{key: True})
+                try:
+                    if seller:
+                        seller(mint, part, "rocket_" + key, note)
+                    else:
+                        import live_engine
+                        live_engine.sell_part(mint, part, "rocket_" + key, send, chat, note=note)
+                except Exception as exc:
+                    logging.warning("rocket take profit %s failed: %s", mint[:8], type(exc).__name__)
+                done.append((mint, key))
+                break                               # one sale per scan per coin
+    return done
 
 
 def rocket_reason(p, now=None):
@@ -265,7 +298,8 @@ def status_text():
              format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil, anti-golpe.",
              "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · 🛑 stop -" +
              format(STOP_LOSS * 100, ".0f") + "% · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
-             "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · ⏱️ sai em " +
+             "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · 💰 em 2x vende metade "
+             "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · ⏱️ sai em " +
              format(MAX_HOLD_S / 60, ".0f") + " min se não decolar · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
              " perdas seguidas · sem limite diário."]
     try:
