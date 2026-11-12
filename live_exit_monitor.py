@@ -55,6 +55,14 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
+    if position.get("mode") == "signal":
+        # Signals bot: signals.follow_up sells at TP1/TP2/TP3, the signal's stop and the time limit.
+        # Here only a safety stop in between (quotes every 20 s): the signal's risk + 10% (max 40%).
+        stop = min(0.40, float(position.get("sig_risk") or 0.30) + 0.10)
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), stop_loss=str(stop), arm="1000", drop="0")
+        if signal["action"] == "sell":
+            signal["reason"] = "signal_safety_stop"
+        return signal
     if position.get("mode") == "consensus":
         # robot removed; its open positions keep their rules: stop -40%, from +25% trailing 10% below the top
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **CONSENSUS_EXIT)

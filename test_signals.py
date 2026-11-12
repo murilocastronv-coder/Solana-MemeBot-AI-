@@ -88,8 +88,8 @@ class PumpFunTests(unittest.TestCase):
         self.assertIn("/pools/GPOOL/ohlcv", urls[-1])
 
     def test_coin_one_hour_old_is_allowed(self):
-        self.assertEqual(sg.popular_reason(pair(pairCreatedAt=(NOW - 1900) * 1000), NOW), "")   # new coins (30+ min)
-        self.assertIn("nova demais", sg.popular_reason(pair(pairCreatedAt=(NOW - 1500) * 1000), NOW))
+        self.assertEqual(sg.popular_reason(pair(pairCreatedAt=(NOW - 700) * 1000), NOW), "")   # new coins (10+ min)
+        self.assertIn("nova demais", sg.popular_reason(pair(pairCreatedAt=(NOW - 500) * 1000), NOW))
 
 
 class EntryTests(unittest.TestCase):
@@ -116,6 +116,84 @@ class EntryTests(unittest.TestCase):
             cs.append((t, o, price, o, price, 1000))
             t += 300
         self.assertEqual(sg.entry_setup(cs)[1], "sem correção (perto do topo)")
+
+
+class AutoTradeTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        sg.SELLS.clear()
+
+    def test_new_coin_with_few_candles_can_give_a_signal(self):
+        cs, price, t = [], 1.0, NOW - 20 * 60                 # coin ~20 minutes old (1-min candles)
+        for i in range(13):                                   # launch pump
+            o, price = price, price * 1.04
+            cs.append((t, o, price * 1.002, o * 0.998, price, 1000))
+            t += 60
+        for i in range(5):                                    # dip
+            o, price = price, price * 0.96
+            cs.append((t, o, o * 1.001, price * 0.995, price, 800))
+            t += 60
+        o, price = price, price * 1.05                        # green reversal candle
+        cs.append((t, o, price * 1.001, o * 0.999, price, 1500))
+        setup, why = sg.entry_setup(cs)
+        self.assertEqual(why, "")
+        self.assertIsNotNone(setup)
+        self.assertEqual(sg.entry_setup(cs[-8:])[1], "poucas velas")
+
+    def test_auto_trade_buys_the_signal_and_sells_at_the_targets(self):
+        sg.set_auto(True)
+        self.assertTrue(sg.auto_enabled())
+        cs, _ = dip_candles()
+
+        def f(url):
+            if "ohlcv" in url:
+                return {"data": {"attributes": {"ohlcv_list": [list(c) for c in reversed(cs)]}}}
+            if "/tokens/v1/solana/" in url:
+                return [pair(txns={"h1": {"buys": 700, "sells": 100}})]
+            if "geckoterminal" in url:
+                return {"data": []}
+            return [{"chainId": "solana", "tokenAddress": MINT}]
+        bought = []
+        with patch.object(sg, "popular_reason", return_value=""):
+            sg.cycle(lambda c, t: None, 1, fetch=f, now=NOW, safety=lambda m, curve=False: "",
+                     buzz=lambda sym, mint: {"h1": 60, "h24": 700, "growth": 2.5},
+                     trader=lambda sig, send, chat: bought.append(sig["mint"]) or "")
+        self.assertEqual(bought, [MINT])
+        s = list(sg._load()["open"].values())[0]
+        self.assertTrue(s["traded"])
+        sg.follow_up({MINT: s["tp1"] * 1.01}, now=NOW + 60)
+        self.assertEqual(sg.SELLS[-1], (MINT, 0.5, "signal_tp1"))
+        sg.follow_up({MINT: s["tp2"] * 1.01}, now=NOW + 120)
+        self.assertEqual(sg.SELLS[-1], (MINT, 0.5, "signal_tp2"))
+        sg.follow_up({MINT: s["tp1"] * 0.5}, now=NOW + 180)    # crashed back under TP1: sell the rest
+        self.assertEqual(sg.SELLS[-1], (MINT, None, "signal_tp2_back"))
+
+    def test_dexscreener_entry_when_there_is_no_chart(self):
+        dip = pair(priceChange={"m5": 2, "h1": -15, "h6": 30, "h24": 80}, txns={"h1": {"buys": 300, "sells": 150},
+                                                                               "m5": {"buys": 20, "sells": 10}})
+        setup, why = sg.dex_setup(dip)
+        self.assertEqual(why, "")
+        self.assertAlmostEqual(setup["risk"], 0.12)
+        self.assertLess(setup["sl"], setup["entry"])
+        top = pair(priceChange={"m5": 2, "h1": 3, "h6": 30, "h24": 80})
+        self.assertIn("sem correção", sg.dex_setup(top)[1])
+        falling = pair(priceChange={"m5": -3, "h1": -15, "h6": 30, "h24": 80})
+        self.assertIn("ainda caindo", sg.dex_setup(falling)[1])
+
+    def test_auto_trade_off_does_not_buy(self):
+        sg.set_auto(False)
+        self.assertFalse(sg.auto_enabled())
+
+    def test_safety_stop_of_a_signal_position(self):
+        import live_exit_monitor as lem
+        pos = {"mode": "signal", "sig_risk": 0.15, "peak_ratio": 0}
+        self.assertEqual(lem.position_signal(pos, 10, 8.0)["action"], "hold")          # -20%: signal's own stop
+        out = lem.position_signal(pos, 10, 7.4)                                        # -26%: safety stop
+        self.assertEqual((out["action"], out["reason"]), ("sell", "signal_safety_stop"))
+        self.assertEqual(lem.position_signal(pos, 10, 40)["action"], "hold")           # big win: targets sell it
 
 
 class FollowUpTests(unittest.TestCase):

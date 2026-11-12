@@ -141,6 +141,7 @@ EXIT_TEXT = {
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
+    "signal": "📡 Sinal: vende 1/2 no TP1, 1/4 no TP2 e o resto no TP3 | 🛑 stop do sinal (abaixo do fundo) | ⏱️ fecha em 24 h se não andar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
 }
 
@@ -162,7 +163,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL "}.get(mode, "")
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:
@@ -292,7 +293,15 @@ def sell_message(symbol, signal, settled):
            "launch_flat": "😴 Não subiu rápido",
            "launch_dev_sold": "🚨 Criador vendeu (sinal de rug): saiu na hora",
            "launch_time": "⏱️ Tempo máximo encerrado",
-           "copy_follow": "👥 A carteira copiada vendeu"}.get(signal["reason"], "🛑 Stop loss")
+           "copy_follow": "👥 A carteira copiada vendeu",
+           "signal_tp1": "✅ Sinal: TP1 atingido (vendeu metade)",
+           "signal_tp2": "🚀 Sinal: TP2 atingido (vendeu parte)",
+           "signal_tp3": "🌙 Sinal: TP3 atingido (potencial)",
+           "signal_sl": "🛑 Sinal: stop loss",
+           "signal_be": "↩️ Sinal: voltou à entrada depois do TP1",
+           "signal_tp2_back": "↩️ Sinal: voltou ao TP1 depois do TP2",
+           "signal_expired": "⏱️ Sinal: tempo esgotado",
+           "signal_safety_stop": "🛑 Sinal: stop de segurança"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"

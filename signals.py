@@ -37,7 +37,10 @@ def _f(name, default):
 
 MIN_LIQ = _f("SIGNAL_MIN_LIQUIDITY_USD", 10_000)
 MAX_LIQ = _f("SIGNAL_MAX_LIQUIDITY_USD", 300_000)
-MIN_AGE_S = _f("SIGNAL_MIN_AGE_MINUTES", 30) * 60     # new pump.fun coins too (30 one-minute candles)
+MIN_AGE_S = _f("SIGNAL_MIN_AGE_MINUTES", 10) * 60     # new pump.fun coins too (from 10 minutes old)
+AUTO_USD = _f("SIGNAL_AUTO_ORDER_USD", 10)            # auto trade: every signal buy is US$ 10 (owner wallet)
+AUTO_MAX_OPEN = int(_f("SIGNAL_AUTO_MAX_OPEN", 5))     # ... at most 5 signal positions open at the same time
+AUTO_RESERVE_USD = _f("SIGNAL_AUTO_RESERVE_USD", 1)   # left for network fees
 # pump.fun only: coins still on the launch curve (dexId pumpfun) or already on PumpSwap
 PUMP_ONLY = os.getenv("SIGNAL_PUMP_ONLY", "true").strip().lower() != "false"
 PUMP_DEXES = {"pumpfun", "pumpswap"}
@@ -88,7 +91,7 @@ def _path():
 
 
 def _default():
-    return {"enabled": False, "open": {}, "history": [], "sent": {}}
+    return {"enabled": False, "auto": True, "open": {}, "history": [], "sent": {}}
 
 
 def _load():
@@ -122,25 +125,46 @@ def enabled():
     return bool(_load()["enabled"])
 
 
+def set_auto(on):
+    """Auto trade: buy every signal with real money in the owner's wallet and sell at its stop / targets."""
+    with _LOCK:
+        d = _load()
+        d["auto"] = bool(on)
+        if on:
+            d["enabled"] = True
+        _save(d)
+
+
+def auto_enabled():
+    d = _load()
+    return bool(d["enabled"] and d.get("auto", True))
+
+
 # ---------------------------------------------------------------- data
 GECKO_GAP_S = _f("SIGNAL_GECKO_GAP_SECONDS", 2.2)   # GeckoTerminal free API: ~30 calls/min, so space them
+GECKO_PAUSE_S = _f("SIGNAL_GECKO_PAUSE_SECONDS", 90)  # after a 429 skip GeckoTerminal for a while
 _gecko_last = [0.0]
+_gecko_block = [0.0]
+
+
+class GeckoBusy(RuntimeError):
+    pass
 
 
 def _get(url):
-    for attempt in range(3):
-        if url.startswith(GECKO):
-            with _LOCK:
-                wait = _gecko_last[0] + GECKO_GAP_S - time.time()
-                if wait > 0:
-                    time.sleep(wait)
-                _gecko_last[0] = time.time()
-        r = _http.get(url, timeout=15, headers={"Accept": "application/json", "User-Agent": "SolanaSignals/1.0"})
-        if r.status_code == 429 and attempt < 2:             # rate limited: wait and try again
-            time.sleep(6 * (attempt + 1))
-            continue
-        r.raise_for_status()
-        return r.json()
+    gecko = url.startswith(GECKO)
+    if gecko:
+        if time.time() < _gecko_block[0]:
+            raise GeckoBusy("GeckoTerminal limit")
+        wait = _gecko_last[0] + GECKO_GAP_S - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _gecko_last[0] = time.time()
+    r = _http.get(url, timeout=12, headers={"Accept": "application/json", "User-Agent": "SolanaSignals/1.0"})
+    if gecko and r.status_code == 429:                       # rate limited: don't insist, use DexScreener data
+        _gecko_block[0] = time.time() + GECKO_PAUSE_S
+    r.raise_for_status()
+    return r.json()
 
 
 def candidate_pairs(fetch=None):
@@ -289,13 +313,19 @@ def rsi(closes, n=14):
 
 def entry_setup(cs):
     """(levels dict, '') when the candles show a dip in an uptrend that is turning up; else (None, why)."""
-    if len(cs) < 30:
+    if len(cs) < 10:
         return None, "poucas velas"
+    short = len(cs) < 30                           # brand-new coin (10-30 min): faster averages and RSI
     closes = [c[4] for c in cs]
     highs, lows = [c[2] for c in cs], [c[3] for c in cs]
-    e20, e50 = ema(closes, 20), ema(closes, 50)
-    if e20[-1] < e50[-1] * 0.98:                 # uptrend (a small dip under the EMA50 is the correction)
-        return None, "tendência de 5 min não é de alta"
+    if short:
+        # new coin: it already pumped (+20% from its first candle) and the dip holds above where it started
+        if max(highs) < closes[0] * 1.2 or min(lows[-6:]) <= closes[0]:
+            return None, "moeda nova sem força (não subiu desde o lançamento)"
+    else:
+        e20, e50 = ema(closes, 20), ema(closes, 50)
+        if e20[-1] < e50[-1] * 0.98:             # uptrend (a small dip under the EMA50 is the correction)
+            return None, "tendência de 5 min não é de alta"
     top = max(highs[-24:])                       # top of the last 2 hours
     bottom = min(lows[-6:])                      # bottom of the last 30 minutes
     pull = (top - bottom) / top if top else 0
@@ -303,7 +333,7 @@ def entry_setup(cs):
         return None, "sem correção (perto do topo)"
     if pull > PULLBACK_MAX:
         return None, "caiu demais (quebrou a tendência)"
-    r = rsi(closes)
+    r = rsi(closes, 5 if short else 14)
     if min(r[-6:]) > RSI_DIP:
         return None, "não chegou no fundo (RSI)"
     if r[-1] <= r[-2]:
@@ -327,6 +357,31 @@ def entry_setup(cs):
     return {"entry": entry, "sl": sl, "tp1": entry * (1 + TP1_R * risk), "tp2": entry * (1 + TP2_R * risk),
             "risk": risk, "atr_pct": atr / entry, "pullback": pull, "rsi": r[-1], "rsi_min": min(r[-6:]), "top": top,
             "vol_ratio": (vols[-1] / avg_vol) if avg_vol else 1.0}, ""
+
+
+def dex_setup(p):
+    """Entry from DexScreener price changes when the candles can't be read: the coin is in an uptrend
+    (6 h / 24 h), corrected in the last hour and is turning up in the last 5 minutes with buyers."""
+    ch = p.get("priceChange") or {}
+    m5, h1 = float(ch.get("m5") or 0), float(ch.get("h1") or 0)
+    entry = float(p.get("priceUsd") or 0)
+    if entry <= 0:
+        return None, "sem preço"
+    if h1 > -PULLBACK_MIN * 100:
+        return None, "sem correção (perto do topo)"
+    if h1 < -PULLBACK_MAX * 100:
+        return None, "caiu demais (quebrou a tendência)"
+    t5 = (p.get("txns") or {}).get("m5") or {}
+    b5, s5 = int(t5.get("buys") or 0), int(t5.get("sells") or 0)
+    if m5 <= 0 or b5 < s5:
+        return None, "ainda caindo (5 min)"
+    pull = -h1 / 100
+    risk = max(SL_MIN, min(SL_MAX, pull * 0.8))
+    vol = p.get("volume") or {}
+    v5, vh = float(vol.get("m5") or 0), float(vol.get("h1") or 0)
+    return {"entry": entry, "sl": entry * (1 - risk), "tp1": entry * (1 + TP1_R * risk), "tp2": entry * (1 + TP2_R * risk),
+            "risk": risk, "atr_pct": risk / SL_ATR_MULT, "pullback": pull, "rsi": 50.0, "rsi_min": RSI_DIP - 3,
+            "top": entry / (1 - pull), "vol_ratio": (v5 * 12 / vh) if vh else 1.0, "source": "dexscreener"}, ""
 
 
 # ---------------------------------------------------------------- signal strength (70% / 80% / 90%)
@@ -515,17 +570,23 @@ def follow_up(prices, send=None, chat=None, now=None):
                 else:
                     s.pop("below_since", None)
                     if p >= s["tp2"] and not s.get("tp2_hit"):
+                        if s.get("traded"):
+                            SELLS.append((s["mint"], 0.5 if s.get("tp1_hit") else 0.75, "signal_tp2"))
                         s["tp1_hit"] = s["tp2_hit"] = True
                         msgs.append("🚀 TP2 ATINGIDO — " + s["symbol"] + " " + format((s["tp2"] / s["entry"] - 1) * 100, "+.0f") +
                                     "%: venda 1/4 e suba o stop para o TP1 (US$ " + _fmt_price(s["tp1"]) + "). O último 1/4 vai " +
                                     "atrás do potencial (TP3 US$ " + _fmt_price(tp3) + ").")
                     elif p >= s["tp1"] and not s.get("tp1_hit"):
+                        if s.get("traded"):
+                            SELLS.append((s["mint"], 0.5, "signal_tp1"))
                         s["tp1_hit"] = True
                         msgs.append("✅ TP1 ATINGIDO — " + s["symbol"] + " " + format((s["tp1"] / s["entry"] - 1) * 100, "+.0f") +
                                     "%: venda metade e coloque o stop na entrada (US$ " + _fmt_price(s["entry"]) + ").")
             if outcome is None and now - s["at"] > (EXPIRE_RUNNER_S if s.get("tp2_hit") else EXPIRE_S):
                 outcome = "expired"
             if outcome:
+                if s.get("traded"):
+                    SELLS.append((s["mint"], None, "signal_" + outcome))
                 res = _result_pct(s, outcome, p)
                 d["open"].pop(sid)
                 d["history"] = (d["history"] + [{"mint": s["mint"], "symbol": s["symbol"], "outcome": outcome,
@@ -543,6 +604,62 @@ def follow_up(prices, send=None, chat=None, now=None):
     return msgs
 
 
+SELLS = []   # (mint, fraction or None = all, reason) for auto-traded signals, run by run_sells
+
+
+def run_sells(send=None, chat=None):
+    """Sell the auto-traded positions whose signal hit a target, the stop or the time limit."""
+    import live_engine
+    while SELLS:
+        mint, fraction, reason = SELLS.pop(0)
+        try:
+            if fraction is None:
+                live_engine.sell_now(mint, reason, send, chat)
+            else:
+                live_engine.sell_part(mint, fraction, reason, send, chat)
+        except Exception as exc:
+            logging.warning("signal sell %s failed: %s", mint[:8], type(exc).__name__)
+            if send and chat:
+                send(chat, "⛔ Sinal automático: não consegui vender " + mint[:6] + " (" + type(exc).__name__ +
+                     "). O stop de segurança continua protegendo a posição.")
+
+
+def auto_buy(sig, send=None, chat=None):
+    """Buy a signal with real money (US$ AUTO_USD) in the owner's wallet. '' when bought, else why not."""
+    import live_engine
+    import live_trade_state as st
+    mint, symbol = sig["mint"], sig["symbol"]
+    if not live_engine.ready():
+        return "robô real não está pronto: " + str(live_engine.why_stopped() or "")
+    for _ in range(15):                          # another order (copy trade) still settling: wait a bit
+        if not st.pending_orders():
+            break
+        time.sleep(2)
+    allowed, why = st.can_open()
+    if not allowed:
+        return why
+    positions = st._load()["positions"]
+    if mint in positions:
+        return "já tem a moeda na carteira"
+    if st.positions_by_mode("signal") >= AUTO_MAX_OPEN:
+        return "já tem " + str(AUTO_MAX_OPEN) + " operações de sinal abertas"
+    if len(positions) >= st.MAX_POSITIONS:
+        return "limite de posições da carteira"
+    import copy_trader as ct
+    free = ct.wallet_usd(live_engine.get_address(), max_age=0)
+    if free is None:
+        return "saldo indisponível"
+    if free < AUTO_USD + AUTO_RESERVE_USD:
+        return "saldo livre US$ " + format(free, ".2f") + " (precisa US$ " + format(AUTO_USD + AUTO_RESERVE_USD, ".0f") + ")"
+    settled = live_engine._execute_buy({"baseToken": {"address": mint, "symbol": symbol}}, mint, symbol, send, chat,
+                                       live_engine.get_address(), None, "signal", usd=AUTO_USD)
+    if not settled:
+        return "compra não confirmada"
+    if settled.get("status") == "settled_buy":
+        st.set_position_fields(mint, sig_risk=round(float(sig["risk"]), 4))
+    return ""
+
+
 def prices_now(mints, fetch=None):
     fetch = fetch or _get
     out, mints = {}, list(mints)
@@ -558,14 +675,17 @@ def prices_now(mints, fetch=None):
     return out
 
 
-def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
-    """One scan: follow the open signals, then look for new entries."""
+def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None, trader=None):
+    """One scan: follow the open signals, then look for new entries (and buy them when auto trade is on)."""
+    trader = trader if trader is not None else (auto_buy if fetch is None else None)
     if not enabled():
         return []
     now = now or time.time()
     d = _load()
     if d["open"]:
         follow_up(prices_now({s["mint"] for s in d["open"].values()}, fetch), send, chat, now)
+        if SELLS:
+            run_sells(send, chat)
     pairs = candidate_pairs(fetch)
     why = {}
     popular = []
@@ -583,14 +703,16 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
         mint = p["baseToken"]["address"]
         if now - float(d["sent"].get(mint, 0)) < COOLDOWN_S or any(s["mint"] == mint for s in d["open"].values()):
             continue
-        if checked >= CANDLE_CHECKS:
-            break
-        checked += 1
         try:
+            if checked >= CANDLE_CHECKS or (fetch is None and time.time() < _gecko_block[0]):
+                raise GeckoBusy("sem gráfico nesta rodada")        # API limit: decide with DexScreener data
+            checked += 1
             setup, r = entry_setup(candles(p["pairAddress"], fetch, candle_minutes(p, now), mint=mint))
         except Exception as exc:
             code = getattr(getattr(exc, "response", None), "status_code", None)
-            setup, r = None, "velas indisponíveis (" + type(exc).__name__ + (" " + str(code) if code else "") + ")"
+            key = "gráfico indisponível (" + type(exc).__name__ + (" " + str(code) if code else "") + ")"
+            why[key] = why.get(key, 0) + 1
+            setup, r = dex_setup(p)                 # no candles: use DexScreener's 5 min / 1 h moves
         if not setup:
             why[r] = why.get(r, 0) + 1
             continue
@@ -630,6 +752,21 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
         sent.append(sig)
         if send and chat:
             send(chat, signal_text(sig))
+        if trader and auto_enabled():
+            try:
+                why_not = trader(sig, send, chat)
+            except Exception as exc:
+                why_not = type(exc).__name__
+            if why_not:
+                if send and chat:
+                    send(chat, "🤖 Sinal automático não comprou " + symbol + ": " + why_not)
+            else:
+                with _LOCK:
+                    dd = _load()
+                    for k, v in dd["open"].items():
+                        if v["mint"] == mint:
+                            v["traded"] = True
+                    _save(dd)
     LAST.update(at=now, coins=len(pairs), popular=len(popular), checked=checked, signals=len(sent), why=why)
     top = ", ".join(k + "=" + str(v) for k, v in sorted(why.items(), key=lambda kv: -kv[1])[:6])
     logging.info("signals scan: %s coins, %s popular, %s candle checks, %s signals | %s", len(pairs), len(popular),
@@ -659,6 +796,10 @@ def status_text():
              "Stop justo abaixo do fundo com folga do sobe-e-desce (" + format(SL_MIN * 100, ".0f") + "–" +
              format(SL_MAX * 100, ".0f") + "%, só vale se o preço ficar abaixo) · TP1 " + format(TP1_R, "g") +
              "× o risco (1/2) · TP2 " + format(TP2_R, "g") + "× (1/4) · TP3 = potencial 1x/2x/3x+ (1/4)."]
+    lines.append(("🤖 OPERANDO SOZINHO (dinheiro real): US$ " + format(AUTO_USD, ".0f") + " por sinal, máx. " +
+                  str(AUTO_MAX_OPEN) + " abertas, vende nos alvos e no stop do sinal") if d.get("auto", True) else
+                 "✋ Só avisa (não compra sozinho)")
+    lines.append("🆕 Moedas a partir de " + format(MIN_AGE_S / 60, ".0f") + " minutos de vida")
     r = results()
     if r:
         lines.append("📊 Resultado dos sinais: " + str(r["n"]) + " encerrados · " + str(r["wins"]) + " no lucro (" +

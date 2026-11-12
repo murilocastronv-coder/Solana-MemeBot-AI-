@@ -101,6 +101,7 @@ def keyboard():
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
   [{"text":"📡 Ligar sinais","callback_data":"sig_on"},{"text":"⏹️ Parar sinais","callback_data":"sig_off"}],
+  [{"text":"🤖 Sinais operam sozinhos","callback_data":"sig_auto_on"},{"text":"✋ Só avisar","callback_data":"sig_auto_off"}],
   [{"text":"📊 Resultado dos sinais","callback_data":"sig_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -229,10 +230,12 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
- if action in ("sig_on","sig_off","sig_status","/sinais"):
+ if action in ("sig_on","sig_off","sig_status","/sinais","sig_auto_on","sig_auto_off"):
   import signals as sg
   try:
    if action=="sig_on":sg.set_enabled(True);pre="📡 SINAIS LIGADOS: te aviso a entrada, o stop e os alvos quando aparecer uma boa oportunidade.\n\n"
+   elif action=="sig_auto_on":sg.set_auto(True);pre="🤖 SINAIS OPERANDO SOZINHOS (dinheiro real): cada sinal compra US$ "+format(sg.AUTO_USD,".0f")+" na sua carteira (máx. "+str(sg.AUTO_MAX_OPEN)+" abertas) e vende no TP1/TP2/TP3 e no stop do sinal, o dia inteiro.\n\n"
+   elif action=="sig_auto_off":sg.set_auto(False);pre="✋ Sinais só avisam: não compram mais sozinhos. As operações já abertas continuam com o stop e os alvos.\n\n"
    elif action=="sig_off":sg.set_enabled(False);pre="⏹️ Sinais desligados: não mando sinais novos. Os abertos continuam sendo acompanhados até fechar.\n\n"
    else:pre=""
    send(chat,pre+sg.status_text(),keyboard())
