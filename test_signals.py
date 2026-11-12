@@ -151,6 +151,78 @@ class CycleTests(unittest.TestCase):
         self.assertEqual(sg.cycle(None, None, fetch=lambda u: [], now=NOW), [])
 
 
+class StrengthTests(unittest.TestCase):
+    def test_levels_70_80_90(self):
+        self.assertEqual(sg.level(93), 90)
+        self.assertEqual(sg.level(85), 80)
+        self.assertEqual(sg.level(72), 70)
+        self.assertIsNone(sg.level(65))
+
+    def test_stronger_setup_and_twitter_buzz_raise_the_score(self):
+        cs, _ = dip_candles()
+        setup, _ = sg.entry_setup(cs)
+        weak = pair(txns={"h1": {"buys": 90, "sells": 70}}, priceChange={"h6": 2, "h24": 5})
+        strong = pair(txns={"h1": {"buys": 700, "sells": 100}}, priceChange={"h6": 40, "h24": 150})
+        s_weak, _ = sg.strength(weak, setup)
+        s_strong, _ = sg.strength(strong, setup)
+        s_buzz, parts = sg.strength(strong, setup, {"h1": 80, "h24": 900, "growth": 3.0})
+        self.assertLess(s_weak, s_strong)
+        self.assertLess(s_strong, s_buzz)
+        self.assertIn("Twitter (menções)", parts)
+        self.assertLessEqual(s_buzz, 97)
+
+    def test_signal_message_and_results_by_level(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+        sg.set_enabled(True)
+        cs, _ = dip_candles()
+
+        def f(url):
+            if "ohlcv" in url:
+                return {"data": {"attributes": {"ohlcv_list": [list(c) for c in reversed(cs)]}}}
+            if "/tokens/v1/solana/" in url:
+                return [pair(txns={"h1": {"buys": 700, "sells": 100}})]
+            if "geckoterminal" in url:
+                return {"data": []}
+            return [{"chainId": "solana", "tokenAddress": MINT}]
+        sent = []
+        with patch.object(sg, "popular_reason", return_value=""):
+            sg.cycle(lambda c, t: sent.append(t), 1, fetch=f, now=NOW, safety=lambda m, curve=False: "",
+                     buzz=lambda sym, mint: {"h1": 60, "h24": 700, "growth": 2.5})
+        msg = [t for t in sent if "SINAL DE ENTRADA" in t][0]
+        self.assertIn("Força do sinal:", msg)
+        self.assertIn("🐦 Twitter: 60 menções na última hora", msg)
+        lv = list(sg._load()["open"].values())[0]["level"]
+        self.assertIn(lv, (70, 80, 90))
+        sig = list(sg._load()["open"].values())[0]
+        sg.follow_up({MINT: sig["tp2"] * 1.01}, now=NOW + 60)
+        self.assertIn("nível " + str(lv) + "%: 1 sinais", sg.status_text())
+
+
+class TwitterTests(unittest.TestCase):
+    def test_mentions_and_growth_from_x_counts(self):
+        import twitter_buzz as tb
+        tb._cache.clear()
+        rows = [{"start": "2026-11-12T%02d:00:00Z" % h, "tweet_count": (2 if h < 21 else 20)} for h in range(24)]
+        out = tb.buzz("SIG", MINT, get=lambda q: {"data": rows})
+        self.assertEqual(out["h1"], 20)
+        self.assertEqual(out["h24"], 21 * 2 + 3 * 20)
+        self.assertAlmostEqual(out["growth"], 10.0)
+
+    def test_without_token_twitter_is_off(self):
+        import twitter_buzz as tb
+        with patch.dict(os.environ, {"X_BEARER_TOKEN": ""}):
+            self.assertIsNone(tb.buzz("SIG", MINT))
+
+    def test_query_uses_mint_and_ticker(self):
+        import twitter_buzz as tb
+        q = tb.query_for("SIG", MINT)
+        self.assertIn(MINT, q)
+        self.assertIn('"$SIG"', q)
+
+
 class RemovedRobotsTests(unittest.TestCase):
     def test_open_positions_of_the_removed_robots_still_have_exits(self):
         from live_exit_monitor import position_signal

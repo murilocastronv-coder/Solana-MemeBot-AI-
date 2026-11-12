@@ -158,6 +158,12 @@ python -m unittest discover -p "test_*.py"
 - O sinal traz **entrada**, **stop loss** (abaixo do fundo, 6%–20%), **TP1** (1,5× o risco, vender metade e
   levar o stop para a entrada) e **TP2** (3× o risco). Cada sinal é acompanhado: avisa TP1, TP2, stop ou fim
   em 24 h, e o 📊 mostra o **resultado real** (acerto, média por sinal, resultado seguindo todos).
+- **Força do sinal (🟡 70% · 🟢 80% · 🔥 90%):** nota somando maioria comprando, quantidade de compradores,
+  tendência, fundo do RSI, volume na virada, tamanho da correção e Twitter. Só manda sinal com força ≥ 70%
+  (`SIGNAL_MIN_STRENGTH`). É uma nota de qualidade, não uma promessa: o 📊 mostra o acerto real de cada nível.
+- **🐦 Twitter (X):** conta as menções do endereço da moeda e do $TICKER na última hora / 24 h e se estão
+  crescendo (API oficial do X, plano pago). Ligue colocando `X_BEARER_TOKEN` nos segredos do Render; sem ele
+  os sinais funcionam sem Twitter.
 - Ajustes: variáveis `SIGNAL_*` (ex.: `SIGNAL_MIN_LIQUIDITY_USD`, `SIGNAL_MAX_LIQUIDITY_USD`, `SIGNAL_RSI_DIP`).
 - O 🎯 Sniper e o 🤝 Consenso foram removidos; posições reais que eles deixaram abertas continuam com stop
   −40% e stop móvel a partir de +25%.

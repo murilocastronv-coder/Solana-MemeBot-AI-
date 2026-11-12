@@ -256,8 +256,55 @@ def entry_setup(cs):
         sl, risk = entry * (1 - SL_MIN), SL_MIN
     if risk > SL_MAX:
         return None, "stop ficaria longe demais"
+    vols = [c[5] for c in cs]
+    avg_vol = sum(vols[-21:-1]) / 20 if len(vols) > 21 else 0
     return {"entry": entry, "sl": sl, "tp1": entry * (1 + TP1_R * risk), "tp2": entry * (1 + TP2_R * risk),
-            "risk": risk, "pullback": pull, "rsi": r[-1], "top": top}, ""
+            "risk": risk, "pullback": pull, "rsi": r[-1], "rsi_min": min(r[-6:]), "top": top,
+            "vol_ratio": (vols[-1] / avg_vol) if avg_vol else 1.0}, ""
+
+
+# ---------------------------------------------------------------- signal strength (70% / 80% / 90%)
+MIN_STRENGTH = _f("SIGNAL_MIN_STRENGTH", 70)
+
+
+def _lin(x, lo, hi, pts):
+    """0 at lo, pts at hi (linear, clipped)."""
+    if hi == lo:
+        return 0.0
+    return max(0.0, min(1.0, (float(x) - lo) / (hi - lo))) * pts
+
+
+def strength(p, setup, buzz=None):
+    """(score 0-97, parts) — how strong the setup is. It is a quality score, not a promise: the status
+    shows the real hit rate of each level as signals close."""
+    h1 = (p.get("txns") or {}).get("h1") or {}
+    b, s_ = int(h1.get("buys") or 0), int(h1.get("sells") or 0)
+    ch = p.get("priceChange") or {}
+    parts = {
+        "maioria comprando": _lin(b / max(b + s_, 1), MIN_BUY_SHARE, 0.80, 10),
+        "muita gente comprando": _lin(b, MIN_BUYS_1H, 600, 10),
+        "tendência 24 h": _lin(float(ch.get("h24") or 0), 0, 100, 5),
+        "tendência 6 h": _lin(float(ch.get("h6") or 0), 0, 20, 5),
+        "fundo (RSI)": _lin(RSI_DIP - setup.get("rsi_min", RSI_DIP), 0, RSI_DIP - 30, 5),
+        "volume na virada": _lin(setup.get("vol_ratio", 1.0), 1.0, 1.5, 5),
+        "correção saudável": 5.0 if 0.12 <= setup.get("pullback", 0) <= 0.30 else 2.0,
+    }
+    if buzz:
+        parts["Twitter (menções)"] = _lin(buzz.get("h1", 0), 0, 50, 8)
+        parts["Twitter crescendo"] = _lin(buzz.get("growth", 0), 1.0, 2.0, 5)
+    score = min(97.0, 45.0 + sum(parts.values()))
+    return round(score), parts
+
+
+def level(score):
+    """90 / 80 / 70 or None (below the minimum: no signal)."""
+    for lv in (90, 80, 70):
+        if score >= lv and score >= MIN_STRENGTH:
+            return lv
+    return None
+
+
+LEVEL_ICON = {90: "🔥", 80: "🟢", 70: "🟡"}
 
 
 # ---------------------------------------------------------------- anti-scam
@@ -316,7 +363,13 @@ def _fmt_price(x):
 
 def signal_text(s):
     pct = lambda x: format((x / s["entry"] - 1) * 100, "+.0f") + "%"
+    tw = s.get("buzz")
     return ("📡 SINAL DE ENTRADA — " + s["symbol"] + "\n"
+            "Força do sinal: " + LEVEL_ICON.get(s.get("level"), "") + " " + str(s.get("score", "?")) + "% (nível " +
+            str(s.get("level", "?")) + "%)\n"
+            "🐦 Twitter: " + (str(tw["h1"]) + " menções na última hora, " + str(tw["h24"]) + " em 24 h" +
+                             (" · crescendo " + format(tw["growth"], ".1f") + "×" if tw.get("growth", 0) >= 1.2 else "")
+                             if tw else "não configurado (coloque X_BEARER_TOKEN no Render)") + "\n"
             "Moeda em alta, a maioria comprando (" + str(s["buys_1h"]) + " compras na última hora, " +
             format(s["buy_share"] * 100, ".0f") + "% compras) e voltando a subir depois da correção " +
             "(caiu " + format(s["pullback"] * 100, ".0f") + "% do topo, RSI " + format(s["rsi"], ".0f") + ").\n\n"
@@ -369,7 +422,8 @@ def follow_up(prices, send=None, chat=None, now=None):
                 res = _result_pct(s, outcome, p)
                 d["open"].pop(sid)
                 d["history"] = (d["history"] + [{"mint": s["mint"], "symbol": s["symbol"], "outcome": outcome,
-                                                 "pct": round(res, 2), "at": s["at"], "closed": now}])[-500:]
+                                                 "pct": round(res, 2), "at": s["at"], "closed": now,
+                                                 "level": s.get("level")}])[-500:]
                 label = {"tp2": "🚀 TP2 ATINGIDO", "sl": "🛑 STOP LOSS", "be": "↩️ VOLTOU À ENTRADA (depois do TP1)",
                          "expired": "⏱️ SINAL ENCERRADO (24 h)"}[outcome]
                 msgs.append(label + " — " + s["symbol"] + ": resultado do sinal " + format(res, "+.1f") + "%")
@@ -395,7 +449,7 @@ def prices_now(mints, fetch=None):
     return out
 
 
-def cycle(send=None, chat=None, fetch=None, now=None, safety=None):
+def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
     """One scan: follow the open signals, then look for new entries."""
     if not enabled():
         return []
@@ -439,9 +493,20 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None):
                     dd["sent"][mint] = now          # don't check it again for a while
                     _save(dd)
             continue
+        symbol = (p.get("baseToken") or {}).get("symbol") or mint[:6]
+        try:
+            import twitter_buzz
+            tw = (buzz or twitter_buzz.buzz)(symbol, mint)
+        except Exception:
+            tw = None
+        score, parts = strength(p, setup, tw)
+        lv = level(score)
+        if lv is None:
+            why["força abaixo de " + format(MIN_STRENGTH, ".0f") + "%"] = why.get("força abaixo de " + format(MIN_STRENGTH, ".0f") + "%", 0) + 1
+            continue
         h1 = (p.get("txns") or {}).get("h1") or {}
         b, s_ = int(h1.get("buys") or 0), int(h1.get("sells") or 0)
-        sig = dict(setup, mint=mint, symbol=(p.get("baseToken") or {}).get("symbol") or mint[:6],
+        sig = dict(setup, mint=mint, symbol=symbol, score=score, level=lv, buzz=tw,
                    pair=p["pairAddress"], liquidity=float((p.get("liquidity") or {}).get("usd") or 0),
                    buys_1h=b, buy_share=b / max(b + s_, 1), at=now)
         with _LOCK:
@@ -485,8 +550,23 @@ def status_text():
                      format(r["wins"] / r["n"] * 100, ".0f") + "%) · " + str(r["tp2"]) + " no TP2, " + str(r["sl"]) +
                      " no stop · média " + format(r["avg"], "+.1f") + "% por sinal · seguindo todos: " +
                      format(r["growth"], "+.0f") + "%")
+        for lv in (90, 80, 70):
+            hl = [x for x in _load()["history"] if x.get("level") == lv]
+            if hl:
+                w = sum(1 for x in hl if x["pct"] > 0)
+                lines.append("   " + LEVEL_ICON[lv] + " nível " + str(lv) + "%: " + str(len(hl)) + " sinais · " +
+                             format(w / len(hl) * 100, ".0f") + "% no lucro · média " +
+                             format(sum(x["pct"] for x in hl) / len(hl), "+.1f") + "%")
     else:
         lines.append("📊 Resultado dos sinais: ainda nenhum encerrado.")
+    try:
+        import twitter_buzz
+        lines.append("🐦 Twitter: " + ("ligado" + (" (último erro: " + twitter_buzz.STATUS["last_error"] + ")"
+                                                 if twitter_buzz.STATUS["last_error"] else "")
+                                       if twitter_buzz.configured() else "desligado — coloque X_BEARER_TOKEN (API do X) no Render"))
+    except Exception:
+        pass
+    lines.append("Só mando sinal com força ≥ " + format(MIN_STRENGTH, ".0f") + "% (🟡 70% · 🟢 80% · 🔥 90%).")
     if d["open"]:
         lines.append("Sinais abertos: " + ", ".join(s["symbol"] + (" (TP1 ✅)" if s.get("tp1_hit") else "")
                                                     for s in d["open"].values()))
