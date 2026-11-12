@@ -147,7 +147,10 @@ python -m unittest discover -p "test_*.py"
   Para ligar o REAL, o usuário precisa tocar em "✅ Aceito a taxa de 4%".
 - O 📊 Status do dono mostra quantos usuários estão copiando e o total de taxas recebidas.
 
-## 📡 Sinais de memecoin (Solana) — só avisa, não compra
+## 📡 Sinais da pump.fun (Solana) — só avisa, não compra
+- **Só moedas da pump.fun** (na curva de lançamento ou já na PumpSwap), lidas em 3 páginas dos pools da
+  pump.fun e da PumpSwap na GeckoTerminal + DexScreener. Idade mínima 1 h; moedas com menos de 8 h usam
+  velas de 1 min, as mais velhas de 5 min. `SIGNAL_PUMP_ONLY=false` volta a aceitar outras memecoins.
 - Botões: **📡 Ligar sinais**, **⏹️ Parar sinais**, **📊 Resultado dos sinais**.
 - Moedas da DexScreener e da GeckoTerminal (em alta, pump.fun, PumpSwap) com **liquidez US$ 10 mil–150 mil**,
   ≥ 3 h de vida, **a maioria comprando** (≥ 80 compras na última hora e ≥ 55% compras, volume 24 h ≥ US$ 30 mil)

@@ -53,6 +53,26 @@ class PopularTests(unittest.TestCase):
         self.assertIn("tendência", sg.popular_reason(pair(priceChange={"h6": -5, "h24": 30}), NOW))
 
 
+class PumpFunTests(unittest.TestCase):
+    def test_only_pump_fun_coins(self):
+        self.assertEqual(sg.popular_reason(pair(dexId="pumpfun"), NOW), "")          # launch curve
+        self.assertEqual(sg.popular_reason(pair(dexId="pumpswap"), NOW), "")         # graduated
+        self.assertEqual(sg.popular_reason(pair(dexId="raydium", baseToken={"address": "Abc" + "x" * 37 + "pump",
+                                                                          "symbol": "P"}), NOW), "")  # pump.fun mint
+        self.assertIn("não é da pump.fun", sg.popular_reason(pair(dexId="raydium"), NOW))
+
+    def test_young_coin_uses_1_minute_candles(self):
+        self.assertEqual(sg.candle_minutes(pair(pairCreatedAt=(NOW - 2 * 3600) * 1000), NOW), 1)
+        self.assertEqual(sg.candle_minutes(pair(pairCreatedAt=(NOW - 20 * 3600) * 1000), NOW), 5)
+        urls = []
+        sg.candles("POOL1", fetch=lambda u: urls.append(u) or {}, minutes=1)
+        self.assertIn("aggregate=1", urls[0])
+
+    def test_coin_one_hour_old_is_allowed(self):
+        self.assertEqual(sg.popular_reason(pair(pairCreatedAt=(NOW - 3700) * 1000), NOW), "")
+        self.assertIn("nova demais", sg.popular_reason(pair(pairCreatedAt=(NOW - 1800) * 1000), NOW))
+
+
 class EntryTests(unittest.TestCase):
     def test_dip_in_uptrend_turning_up_gives_entry_stop_and_targets(self):
         cs, top = dip_candles()

@@ -37,7 +37,11 @@ def _f(name, default):
 
 MIN_LIQ = _f("SIGNAL_MIN_LIQUIDITY_USD", 10_000)
 MAX_LIQ = _f("SIGNAL_MAX_LIQUIDITY_USD", 150_000)
-MIN_AGE_S = _f("SIGNAL_MIN_AGE_HOURS", 3) * 3600
+MIN_AGE_S = _f("SIGNAL_MIN_AGE_HOURS", 1) * 3600
+# pump.fun only: coins still on the launch curve (dexId pumpfun) or already on PumpSwap
+PUMP_ONLY = os.getenv("SIGNAL_PUMP_ONLY", "true").strip().lower() != "false"
+PUMP_DEXES = {"pumpfun", "pumpswap"}
+FAST_CANDLES_UNDER_S = _f("SIGNAL_FAST_CANDLES_UNDER_HOURS", 8) * 3600   # younger coins: 1-min candles
 MIN_BUYS_1H = int(_f("SIGNAL_MIN_BUYS_1H", 80))
 MIN_BUY_SHARE = _f("SIGNAL_MIN_BUY_SHARE", 0.55)
 MIN_VOL_24H = _f("SIGNAL_MIN_VOLUME_24H", 30_000)
@@ -61,9 +65,9 @@ CANDLE_CHECKS = int(_f("SIGNAL_CANDLE_CHECKS", 6))     # coins whose candles are
 DEX = "https://api.dexscreener.com"
 DEX_FEEDS = ("/token-profiles/latest/v1", "/token-boosts/latest/v1", "/token-boosts/top/v1")
 GECKO = "https://api.geckoterminal.com/api/v2"
-GECKO_FEEDS = ("/networks/solana/trending_pools?page=1",
-               "/networks/solana/dexes/pumpswap/pools?page=1&sort=h24_tx_count_desc",
-               "/networks/solana/dexes/pump-fun/pools?page=1&sort=h24_tx_count_desc")
+GECKO_FEEDS = ("/networks/solana/trending_pools?page=1",) + tuple(
+    "/networks/solana/dexes/" + dex + "/pools?page=" + str(page) + "&sort=h24_tx_count_desc"
+    for dex in ("pump-fun", "pumpswap") for page in (1, 2, 3))
 RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
 MIN_LP_LOCKED = _f("SIGNAL_MIN_LP_LOCKED", 80)
 BAD_EXTENSIONS = {"transferHook": "token com gatilho de transferência (pode travar a venda)",
@@ -172,6 +176,8 @@ def popular_reason(p, now=None):
         return "liquidez > US$ " + format(MAX_LIQ / 1000, ".0f") + " mil"
     if ((p.get("quoteToken") or {}).get("address")) not in QUOTES:
         return "par sem SOL/USDC"
+    if PUMP_ONLY and not is_pump(p):
+        return "não é da pump.fun"
     created = p.get("pairCreatedAt")
     if not created or now - float(created) / 1000 < MIN_AGE_S:
         return "moeda nova demais (poucas velas)"
@@ -195,10 +201,24 @@ def popularity(p):
     return b * (b / max(b + s, 1))
 
 
-def candles(pool, fetch=None):
-    """5-minute candles [(ts, open, high, low, close, volume)] oldest first (GeckoTerminal)."""
+def is_pump(p):
+    """A pump.fun coin: on the launch curve, on PumpSwap, or a pump.fun mint (address ending in 'pump')."""
+    mint = ((p.get("baseToken") or {}).get("address")) or ""
+    return p.get("dexId") in PUMP_DEXES or mint.endswith("pump")
+
+
+def candle_minutes(p, now=None):
+    """1-minute candles for young coins (pump.fun moves fast), 5-minute for the older ones."""
+    created = p.get("pairCreatedAt")
+    age = (now or time.time()) - float(created) / 1000 if created else 1e9
+    return 1 if age < FAST_CANDLES_UNDER_S else 5
+
+
+def candles(pool, fetch=None, minutes=5):
+    """Candles [(ts, open, high, low, close, volume)] oldest first (GeckoTerminal), 1 or 5 minutes."""
     fetch = fetch or _get
-    data = fetch(GECKO + "/networks/solana/pools/" + pool + "/ohlcv/minute?aggregate=5&limit=100&currency=usd")
+    data = fetch(GECKO + "/networks/solana/pools/" + pool + "/ohlcv/minute?aggregate=" + str(int(minutes)) +
+                 "&limit=100&currency=usd")
     rows = ((data or {}).get("data") or {}).get("attributes", {}).get("ohlcv_list") or []
     return sorted((tuple(float(x) for x in r[:6]) for r in rows), key=lambda r: r[0])
 
@@ -530,7 +550,7 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
             break
         checked += 1
         try:
-            setup, r = entry_setup(candles(p["pairAddress"], fetch))
+            setup, r = entry_setup(candles(p["pairAddress"], fetch, candle_minutes(p, now)))
         except Exception as exc:
             setup, r = None, "velas indisponíveis (" + type(exc).__name__ + ")"
         if not setup:
@@ -593,7 +613,8 @@ def results():
 
 def status_text():
     d = _load()
-    lines = ["📡 SINAIS DE MEMECOIN (Solana) — " + ("LIGADO" if d["enabled"] else "DESLIGADO"),
+    lines = ["📡 SINAIS DA PUMP.FUN (Solana) — " + ("LIGADO" if d["enabled"] else "DESLIGADO") if PUMP_ONLY else
+             "📡 SINAIS DE MEMECOIN (Solana) — " + ("LIGADO" if d["enabled"] else "DESLIGADO"),
              "Moedas com liquidez US$ " + format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") +
              " mil, a maioria comprando, em tendência de alta. Entrada na correção: fundo (RSI baixo) + vela de virada.",
              "Stop justo abaixo do fundo com folga do sobe-e-desce (" + format(SL_MIN * 100, ".0f") + "–" +
