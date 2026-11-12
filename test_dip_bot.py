@@ -68,6 +68,26 @@ class DipBotTests(unittest.TestCase):
         old = dict(pos, opened_at=time.time() - 7 * 3600)
         self.assertEqual(lem.position_signal(old, 10, 10.5)["reason"], "time_stop")
 
+    def test_new_stricter_rules(self):
+        self.assertIn("6 h no vermelho", dip_bot.dip_reason(pair(priceChange={"m5": 3, "h1": -25, "h6": -5, "h24": 120}), NOW))
+        self.assertIn("sem virada forte", dip_bot.dip_reason(pair(priceChange={"m5": 0.5, "h1": -25, "h6": 20, "h24": 120}), NOW))
+        self.assertIn("sem virada forte", dip_bot.dip_reason(pair(txns={"h1": {"buys": 300, "sells": 200},
+                                                                       "m5": {"buys": 12, "sells": 10}}), NOW))
+
+    def test_pauses_itself_after_3_losses_in_a_row(self):
+        losses = [{"mode": "dip", "pnl_usd": -1.5, "closed_at": time.time() + 5}] * 3
+        sent = []
+        with patch("live_trade_state.history", return_value=losses):
+            out = dip_bot.cycle(lambda c, t: sent.append(t), 1, pairs=[pair()], now=NOW,
+                                safety=lambda m, curve=False: "", buyer=lambda p, s, c: "")
+        self.assertEqual(out, [])
+        self.assertFalse(dip_bot.enabled())
+        self.assertIn("PAUSADO", sent[0])
+        dip_bot.set_enabled(True)                       # turned on again: old losses don't count
+        losses = [dict(h, closed_at=time.time() - 60) for h in losses]
+        with patch("live_trade_state.history", return_value=losses):
+            self.assertEqual(dip_bot.loss_streak(dip_bot.closed_trades()), 0)
+
     def test_status_text(self):
         self.assertIn("DIP BUYING BOT", dip_bot.status_text())
 
