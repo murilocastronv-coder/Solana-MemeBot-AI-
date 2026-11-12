@@ -39,10 +39,10 @@ RULES = 2
 MAX_SELL_SHARE_1H = sg._f("DIP_MAX_SELL_SHARE_1H", 0.55)
 COOLDOWN_S = sg._f("DIP_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("DIP_SCAN_SECONDS", 60)
-STOP_LOSS = sg._f("DIP_STOP_LOSS", 0.15)
+STOP_LOSS = sg._f("DIP_STOP_LOSS", 0.40)
 TRAIL_ARM = sg._f("DIP_TRAIL_ARM", 0.12)
 TRAIL_DROP = sg._f("DIP_TRAIL_DROP", 0.06)
-MAX_HOLD_S = sg._f("DIP_MAX_HOLD_HOURS", 3) * 3600
+MAX_HOLD_S = sg._f("DIP_MAX_HOLD_HOURS", 6) * 3600
 EXIT = {"stop_loss": str(STOP_LOSS), "arm": str(1 + TRAIL_ARM), "drop": str(TRAIL_DROP)}
 
 _LOCK = threading.RLock()
