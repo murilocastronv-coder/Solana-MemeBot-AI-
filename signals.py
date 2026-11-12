@@ -42,12 +42,12 @@ MIN_AGE_S = _f("SIGNAL_MIN_AGE_HOURS", 1) * 3600
 PUMP_ONLY = os.getenv("SIGNAL_PUMP_ONLY", "true").strip().lower() != "false"
 PUMP_DEXES = {"pumpfun", "pumpswap"}
 FAST_CANDLES_UNDER_S = _f("SIGNAL_FAST_CANDLES_UNDER_HOURS", 8) * 3600   # younger coins: 1-min candles
-MIN_BUYS_1H = int(_f("SIGNAL_MIN_BUYS_1H", 80))
-MIN_BUY_SHARE = _f("SIGNAL_MIN_BUY_SHARE", 0.55)
-MIN_VOL_24H = _f("SIGNAL_MIN_VOLUME_24H", 30_000)
-PULLBACK_MIN = _f("SIGNAL_PULLBACK_MIN", 0.08)
+MIN_BUYS_1H = int(_f("SIGNAL_MIN_BUYS_1H", 30))
+MIN_BUY_SHARE = _f("SIGNAL_MIN_BUY_SHARE", 0.50)
+MIN_VOL_24H = _f("SIGNAL_MIN_VOLUME_24H", 10_000)
+PULLBACK_MIN = _f("SIGNAL_PULLBACK_MIN", 0.06)
 PULLBACK_MAX = _f("SIGNAL_PULLBACK_MAX", 0.40)
-RSI_DIP = _f("SIGNAL_RSI_DIP", 38)
+RSI_DIP = _f("SIGNAL_RSI_DIP", 45)
 SL_MIN = _f("SIGNAL_SL_MIN", 0.10)     # fair stop: never tighter than 10% (memecoins wick and come back)
 SL_MAX = _f("SIGNAL_SL_MAX", 0.30)
 SL_ATR_MULT = _f("SIGNAL_SL_ATR", 1.5)  # stop = bottom of the dip minus 1.5x the normal candle range (ATR)
@@ -60,12 +60,12 @@ EXPIRE_RUNNER_S = _f("SIGNAL_EXPIRE_RUNNER_HOURS", 72) * 3600   # after TP2 the 
 POTENTIAL_LABEL = {1: "1x (+100%)", 2: "2x (+200%)", 3: "3x ou mais (+300%)"}
 COOLDOWN_S = _f("SIGNAL_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = _f("SIGNAL_SCAN_SECONDS", 120)
-CANDLE_CHECKS = int(_f("SIGNAL_CANDLE_CHECKS", 6))     # coins whose candles are read per scan (API limits)
+CANDLE_CHECKS = int(_f("SIGNAL_CANDLE_CHECKS", 12))     # coins whose candles are read per scan (API limits)
 
 DEX = "https://api.dexscreener.com"
 DEX_FEEDS = ("/token-profiles/latest/v1", "/token-boosts/latest/v1", "/token-boosts/top/v1")
 GECKO = "https://api.geckoterminal.com/api/v2"
-GECKO_FEEDS = ("/networks/solana/trending_pools?page=1",) + tuple(
+GECKO_FEEDS = tuple("/networks/solana/trending_pools?page=" + str(n) for n in (1, 2, 3)) + tuple(
     "/networks/solana/dexes/" + dex + "/pools?page=" + str(page) + "&sort=h24_tx_count_desc"
     for dex in ("pump-fun", "pumpswap") for page in (1, 2, 3))
 RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
@@ -190,7 +190,8 @@ def popular_reason(p, now=None):
     if float((p.get("volume") or {}).get("h24") or 0) < MIN_VOL_24H:
         return "volume baixo"
     ch = p.get("priceChange") or {}
-    if float(ch.get("h6") or 0) <= 0 or float(ch.get("h24") or 0) <= 0:
+    h1c, h6c, h24c = (float(ch.get(k) or 0) for k in ("h1", "h6", "h24"))
+    if max(h6c, h24c) <= 0 or h1c < -30:            # in an uptrend (6 h or 24 h) and not crashing now
         return "fora de tendência de alta"
     return ""
 
@@ -252,12 +253,12 @@ def rsi(closes, n=14):
 
 def entry_setup(cs):
     """(levels dict, '') when the candles show a dip in an uptrend that is turning up; else (None, why)."""
-    if len(cs) < 60:
+    if len(cs) < 50:
         return None, "poucas velas"
     closes = [c[4] for c in cs]
     highs, lows = [c[2] for c in cs], [c[3] for c in cs]
     e20, e50 = ema(closes, 20), ema(closes, 50)
-    if e20[-1] <= e50[-1]:
+    if e20[-1] < e50[-1] * 0.98:                 # uptrend (a small dip under the EMA50 is the correction)
         return None, "tendência de 5 min não é de alta"
     top = max(highs[-24:])                       # top of the last 2 hours
     bottom = min(lows[-6:])                      # bottom of the last 30 minutes
@@ -272,7 +273,7 @@ def entry_setup(cs):
     if r[-1] <= r[-2]:
         return None, "ainda caindo (RSI)"
     last, prev = cs[-1], cs[-2]
-    if not (last[4] > last[1] and last[4] > prev[2]):
+    if not (last[4] > last[1] and last[4] > prev[4]):   # green candle closing above the previous one
         return None, "sem vela de confirmação"
     entry = last[4]
     trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
@@ -321,7 +322,7 @@ def strength(p, setup, buzz=None):
     if buzz:
         parts["Twitter (menções)"] = _lin(buzz.get("h1", 0), 0, 50, 8)
         parts["Twitter crescendo"] = _lin(buzz.get("growth", 0), 1.0, 2.0, 5)
-    score = min(97.0, 45.0 + sum(parts.values()))
+    score = min(97.0, 50.0 + sum(parts.values()))
     return round(score), parts
 
 
@@ -593,8 +594,9 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
         if send and chat:
             send(chat, signal_text(sig))
     LAST.update(at=now, coins=len(pairs), popular=len(popular), checked=checked, signals=len(sent), why=why)
-    logging.info("signals scan: %s coins, %s popular, %s candle checks, %s signals", len(pairs), len(popular),
-                 checked, len(sent))
+    top = ", ".join(k + "=" + str(v) for k, v in sorted(why.items(), key=lambda kv: -kv[1])[:6])
+    logging.info("signals scan: %s coins, %s popular, %s candle checks, %s signals | %s", len(pairs), len(popular),
+                 checked, len(sent), top)
     return sent
 
 
