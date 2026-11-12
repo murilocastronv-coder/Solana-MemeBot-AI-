@@ -42,10 +42,11 @@ def dip_candles(bounce=True):
 
 
 class PopularTests(unittest.TestCase):
-    def test_liquidity_10k_to_150k(self):
+    def test_liquidity_10k_to_300k(self):
         self.assertEqual(sg.popular_reason(pair(), NOW), "")
         self.assertIn("< US$ 10 mil", sg.popular_reason(pair(liquidity={"usd": 9_000}), NOW))
-        self.assertIn("> US$ 150 mil", sg.popular_reason(pair(liquidity={"usd": 151_000}), NOW))
+        self.assertIn("> US$ 300 mil", sg.popular_reason(pair(liquidity={"usd": 301_000}), NOW))
+        self.assertEqual(sg.popular_reason(pair(liquidity={"usd": 250_000}), NOW), "")
 
     def test_most_people_buying_and_uptrend(self):
         self.assertIn("pouca gente", sg.popular_reason(pair(txns={"h1": {"buys": 20, "sells": 5}}), NOW))
