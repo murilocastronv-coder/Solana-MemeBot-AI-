@@ -852,7 +852,7 @@ def recover_real_orphans(force=False):
         known = set(d["positions"])
         wallets = list(d["wallets"])
     for mint, lp in live.items():
-        if mint in known or lp.get("mode") == "clone" or lp.get("copy_recovered"):
+        if mint in known or lp.get("mode") in ("clone", "signal") or lp.get("copy_recovered"):
             continue
         holder = lp.get("copy_wallet")
         if not holder:
@@ -896,7 +896,7 @@ def positions_text():
         live = st._load()["positions"]
     except Exception:
         live = {}
-    extra = [(m, lp) for m, lp in live.items() if m not in d["positions"] and lp.get("mode") != "clone"]
+    extra = [(m, lp) for m, lp in live.items() if m not in d["positions"] and lp.get("mode") not in ("clone", "signal")]
     if not d["positions"] and not extra:
         return "📦 Nenhuma posição copiada aberta."
     lines = ["📦 POSIÇÕES COPIADAS ABERTAS: " + str(len(d["positions"]) + len(extra))]
