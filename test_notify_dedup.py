@@ -54,7 +54,7 @@ class MenuTests(unittest.TestCase):
     def test_menu_has_only_copy_trade_and_bot_wallet(self):
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
         self.assertEqual(data, {"copy_sim", "copy_real", "copy_off", "copy_status", "copy_wallets", "copy_following",
-                                "copy_positions", "audit", "wallet_deposit", "wallet_balance", "wallet_withdraw", "unstick", "sig_on", "sig_off", "sig_status", "sig_auto_on", "sig_auto_off", "dip_on", "dip_off", "dip_status"})
+                                "copy_positions", "audit", "wallet_deposit", "wallet_balance", "wallet_withdraw", "unstick", "sig_on", "sig_off", "sig_status", "sig_auto_on", "sig_auto_off", "dip_on", "dip_off", "dip_status", "rk_on", "rk_off", "rk_status"})
 
     def test_removed_buttons_answer_removed(self):
         tb.CTX.interactive = True
