@@ -511,14 +511,29 @@ def background_loop():
 def signals_loop():
  """Signals bot: scans Solana memecoins every SIGNAL_SCAN_SECONDS and follows the open signals."""
  import signals
+ SIG_BEAT["thread"]=threading.get_ident()
  while True:
+  SIG_BEAT["at"]=time.time()
   time.sleep(signals.SCAN_EVERY_S)
+  SIG_BEAT["at"]=time.time()
   try:
    chat=active_chat()
    if not chat:logging.info("signals scan: no active chat")
-   if chat:signals.cycle(send,chat)
+   if chat:logging.info("signals scan: start");signals.cycle(send,chat)
    elif signals._load()["open"]:signals.follow_up(signals.prices_now({x["mint"] for x in signals._load()["open"].values()}))
   except Exception as exc:logging.exception("signals cycle failed: %s",type(exc).__name__)
+SIG_BEAT={"at":0.0,"thread":None,"dumped":0.0}
+def signals_watchdog():
+ """If the signals scan is stuck for 10+ minutes, log where (stack of its thread) so it can be fixed."""
+ import sys,traceback
+ while True:
+  time.sleep(60)
+  try:
+   if SIG_BEAT["at"] and time.time()-SIG_BEAT["at"]>600 and time.time()-SIG_BEAT["dumped"]>1800:
+    SIG_BEAT["dumped"]=time.time()
+    frame=sys._current_frames().get(SIG_BEAT["thread"])
+    logging.warning("signals scan stuck %.0fs at:\n%s",time.time()-SIG_BEAT["at"],"".join(traceback.format_stack(frame)) if frame else "thread gone")
+  except Exception:pass
 def dip_loop():
  """Dip Buying Bot: every DIP_SCAN_SECONDS looks for sharp dips of strong pump.fun coins and buys them."""
  import dip_bot,signals
@@ -657,6 +672,7 @@ def loop():
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=signals_loop,daemon=True).start()
  threading.Thread(target=dip_loop,daemon=True).start()
+ threading.Thread(target=signals_watchdog,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
