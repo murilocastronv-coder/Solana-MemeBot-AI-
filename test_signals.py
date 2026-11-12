@@ -86,26 +86,54 @@ class FollowUpTests(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
         d = sg._load()
-        d["open"]["s1"] = {"mint": MINT, "symbol": "SIG", "entry": 1.0, "sl": 0.9, "tp1": 1.15, "tp2": 1.30, "at": NOW}
+        d["open"]["s1"] = {"mint": MINT, "symbol": "SIG", "entry": 1.0, "sl": 0.85, "tp1": 1.2, "tp2": 1.45,
+                           "tp3": 3.0, "potential": 2, "at": NOW}
         sg._save(d)
 
-    def test_tp1_then_tp2(self):
-        msgs = sg.follow_up({MINT: 1.16}, now=NOW + 60)
-        self.assertIn("TP1 ATINGIDO", msgs[0])
-        msgs = sg.follow_up({MINT: 1.31}, now=NOW + 120)
-        self.assertIn("TP2 ATINGIDO", msgs[0])
-        r = sg.results()
-        self.assertAlmostEqual(r["avg"], (0.15 * 0.5 + 0.30 * 0.5) * 100)   # half at TP1, half at TP2
+    def test_quick_wick_under_the_stop_does_not_close(self):
+        self.assertEqual(sg.follow_up({MINT: 0.84}, now=NOW + 60), [])           # dipped under the stop...
+        self.assertEqual(sg.follow_up({MINT: 0.95}, now=NOW + 120), [])          # ...and came back: still open
+        self.assertIn("s1", sg._load()["open"])
 
-    def test_stop_loss(self):
-        self.assertIn("STOP LOSS", sg.follow_up({MINT: 0.89}, now=NOW + 60)[0])
-        self.assertAlmostEqual(sg.results()["avg"], -10.0)
+    def test_stop_counts_when_the_price_stays_under(self):
+        sg.follow_up({MINT: 0.84}, now=NOW + 60)
+        msgs = sg.follow_up({MINT: 0.83}, now=NOW + 60 + sg.SL_CONFIRM_S)
+        self.assertIn("STOP LOSS", msgs[0])
+        self.assertAlmostEqual(sg.results()["avg"], -15.0)
+
+    def test_crash_through_the_stop_closes_at_once(self):
+        self.assertIn("STOP LOSS", sg.follow_up({MINT: 0.70}, now=NOW + 60)[0])
+
+    def test_tp1_tp2_then_the_potential_tp3(self):
+        self.assertIn("TP1 ATINGIDO", sg.follow_up({MINT: 1.21}, now=NOW + 60)[0])
+        self.assertIn("TP2 ATINGIDO", sg.follow_up({MINT: 1.46}, now=NOW + 120)[0])
+        self.assertIn("TP3 ATINGIDO", sg.follow_up({MINT: 3.05}, now=NOW + 180)[0])
+        self.assertAlmostEqual(sg.results()["avg"], (0.2 * 0.5 + 0.45 * 0.25 + 2.0 * 0.25) * 100)
+        self.assertIn("1 bateram o potencial", sg.status_text())
 
     def test_after_tp1_the_stop_is_the_entry(self):
-        sg.follow_up({MINT: 1.16}, now=NOW + 60)
-        msgs = sg.follow_up({MINT: 0.99}, now=NOW + 120)
+        sg.follow_up({MINT: 1.21}, now=NOW + 60)
+        sg.follow_up({MINT: 0.99}, now=NOW + 120)
+        msgs = sg.follow_up({MINT: 0.98}, now=NOW + 120 + sg.SL_CONFIRM_S)
         self.assertIn("VOLTOU À ENTRADA", msgs[0])
-        self.assertAlmostEqual(sg.results()["avg"], 7.5)
+        self.assertAlmostEqual(sg.results()["avg"], 10.0)
+
+
+class PotentialTests(unittest.TestCase):
+    def test_smaller_market_cap_and_more_activity_mean_more_room(self):
+        self.assertEqual(sg.potential(pair(marketCap=200_000, volume={"h24": 50_000}), 75), 3)
+        self.assertEqual(sg.potential(pair(marketCap=600_000, volume={"h24": 100_000}), 75), 2)
+        self.assertEqual(sg.potential(pair(marketCap=3_000_000, volume={"h24": 100_000}), 75), 1)
+        self.assertEqual(sg.potential(pair(marketCap=3_000_000, volume={"h24": 4_000_000}), 75), 2)   # volume > mcap
+        self.assertEqual(sg.potential(pair(marketCap=600_000, volume={"h24": 100_000},
+                                           priceChange={"h6": 50, "h24": 400}), 75), 1)             # already pumped
+
+    def test_fair_stop_has_room_for_the_coins_swings(self):
+        cs, _ = dip_candles()
+        setup, _ = sg.entry_setup(cs)
+        bottom = min(c[3] for c in cs[-6:])
+        self.assertLessEqual(setup["sl"], bottom * 0.97)                         # below the bottom, with room
+        self.assertGreaterEqual(setup["risk"], 0.10)
 
 
 class CycleTests(unittest.TestCase):
@@ -197,7 +225,7 @@ class StrengthTests(unittest.TestCase):
         lv = list(sg._load()["open"].values())[0]["level"]
         self.assertIn(lv, (70, 80, 90))
         sig = list(sg._load()["open"].values())[0]
-        sg.follow_up({MINT: sig["tp2"] * 1.01}, now=NOW + 60)
+        sg.follow_up({MINT: sig["tp3"] * 1.01}, now=NOW + 60)
         self.assertIn("nível " + str(lv) + "%: 1 sinais", sg.status_text())
 
 
