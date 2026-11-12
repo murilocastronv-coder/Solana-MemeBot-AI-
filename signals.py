@@ -37,7 +37,7 @@ def _f(name, default):
 
 MIN_LIQ = _f("SIGNAL_MIN_LIQUIDITY_USD", 10_000)
 MAX_LIQ = _f("SIGNAL_MAX_LIQUIDITY_USD", 300_000)
-MIN_AGE_S = _f("SIGNAL_MIN_AGE_HOURS", 1) * 3600
+MIN_AGE_S = _f("SIGNAL_MIN_AGE_MINUTES", 30) * 60     # new pump.fun coins too (30 one-minute candles)
 # pump.fun only: coins still on the launch curve (dexId pumpfun) or already on PumpSwap
 PUMP_ONLY = os.getenv("SIGNAL_PUMP_ONLY", "true").strip().lower() != "false"
 PUMP_DEXES = {"pumpfun", "pumpswap"}
@@ -66,6 +66,7 @@ DEX = "https://api.dexscreener.com"
 DEX_FEEDS = ("/token-profiles/latest/v1", "/token-boosts/latest/v1", "/token-boosts/top/v1")
 GECKO = "https://api.geckoterminal.com/api/v2"
 GECKO_FEEDS = tuple("/networks/solana/trending_pools?page=" + str(n) for n in (1, 2, 3)) + tuple(
+    "/networks/solana/new_pools?page=" + str(n) for n in (1, 2)) + tuple(
     "/networks/solana/dexes/" + dex + "/pools?page=" + str(page) + "&sort=h24_tx_count_desc"
     for dex in ("pump-fun", "pumpswap") for page in (1, 2, 3))
 RUGCHECK = "https://api.rugcheck.xyz/v1/tokens/{}/report/summary"
@@ -288,7 +289,7 @@ def rsi(closes, n=14):
 
 def entry_setup(cs):
     """(levels dict, '') when the candles show a dip in an uptrend that is turning up; else (None, why)."""
-    if len(cs) < 50:
+    if len(cs) < 30:
         return None, "poucas velas"
     closes = [c[4] for c in cs]
     highs, lows = [c[2] for c in cs], [c[3] for c in cs]
