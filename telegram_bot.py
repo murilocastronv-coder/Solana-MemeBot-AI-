@@ -48,7 +48,7 @@ NOTIFY_REPEAT_S=float(os.getenv("NOTIFY_REPEAT_HOURS","2"))*3600
 SENT_AT={}
 SENT_LOCK=threading.Lock()
 CTX=threading.local()   # CTX.interactive=True while answering the owner (button/command)
-TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL|SINAL DE ENTRADA|TP1 ATINGIDO|TP2 ATINGIDO|STOP LOSS —|VOLTOU À ENTRADA|SINAL ENCERRADO|DIP BOT:")
+TRADE_RE=re.compile(r"COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL|SINAL DE ENTRADA|TP1 ATINGIDO|TP2 ATINGIDO|STOP LOSS —|VOLTOU À ENTRADA|SINAL ENCERRADO|DIP BOT:|SNIPER:")
 def is_trade_message(text):
  """A buy/sell notice: always sent, never held back (errors and warnings are not trades)."""
  t=(text or "").lstrip()
@@ -105,6 +105,8 @@ def keyboard():
   [{"text":"📊 Resultado dos sinais","callback_data":"sig_status"}],
   [{"text":"📉 Ligar Dip Bot","callback_data":"dip_on"},{"text":"⏹️ Parar Dip Bot","callback_data":"dip_off"}],
   [{"text":"📊 Dip Bot: resultado","callback_data":"dip_status"}],
+  [{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
+  [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -242,6 +244,15 @@ def handle(update):
    else:pre=""
    send(chat,pre+sg.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Sinais: "+str(exc)[:200],keyboard())
+  return
+ if action in ("rk_on","rk_off","rk_status","/sniper"):
+  import rocket_bot
+  try:
+   if action=="rk_on":rocket_bot.set_enabled(True);pre="🚀 SNIPER LIGADO (dinheiro real): compra US$ "+format(rocket_bot.ORDER_USD,".0f")+" nas moedas novas da pump.fun que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
+   elif action=="rk_off":rocket_bot.set_enabled(False);pre="⏹️ Sniper parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
+   else:pre=""
+   send(chat,pre+rocket_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
   return
  if action in ("dip_on","dip_off","dip_status","/dip"):
   import dip_bot
@@ -522,6 +533,19 @@ def signals_loop():
    if chat:logging.info("signals scan: start");signals.cycle(send,chat)
    elif signals._load()["open"]:signals.follow_up(signals.prices_now({x["mint"] for x in signals._load()["open"].values()}))
   except Exception as exc:logging.exception("signals cycle failed: %s",type(exc).__name__)
+def rocket_loop():
+ """Rocket Sniper: every ROCKET_SCAN_SECONDS looks for new pump.fun coins exploding in buys and buys them."""
+ import rocket_bot,signals
+ while True:
+  time.sleep(rocket_bot.SCAN_EVERY_S)
+  try:
+   chat=active_chat()
+   if not chat or not rocket_bot.enabled():continue
+   fresh=time.time()-signals.PAIRS["at"]<40
+   pairs=signals.PAIRS["pairs"] if fresh else signals.candidate_pairs()
+   if not fresh:signals.PAIRS.update(at=time.time(),pairs=pairs)    # the Dip Bot reuses this scan
+   rocket_bot.cycle(send,chat,pairs=pairs)
+  except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
 SIG_BEAT={"at":0.0,"thread":None,"dumped":0.0}
 def signals_watchdog():
  """If the signals scan is stuck for 10+ minutes, log where (stack of its thread) so it can be fixed."""
@@ -672,6 +696,7 @@ def loop():
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=signals_loop,daemon=True).start()
  threading.Thread(target=dip_loop,daemon=True).start()
+ threading.Thread(target=rocket_loop,daemon=True).start()
  threading.Thread(target=signals_watchdog,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()

@@ -22,6 +22,9 @@ def trail_text(position):
         return format(float(CONSENSUS_EXIT["drop"]) * 100, ".0f")
     if position.get("copy_orphan"):
         return format(float(ORPHAN_EXIT["drop"]) * 100, ".0f")
+    if position.get("mode") == "rocket":
+        import rocket_bot
+        return format(rocket_bot.TRAIL_DROP * 100, ".0f")
     if position.get("mode") == "dip":
         import dip_bot
         return format(dip_bot.TRAIL_DROP * 100, ".0f")
@@ -58,8 +61,16 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
+    if position.get("mode") == "rocket":
+        # Rocket Sniper: stop -40%, from +30% trailing 15% below the top, out after 90 min if it never took off
+        import rocket_bot
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rocket_bot.EXIT)
+        held = time.time() - float(position.get("opened_at") or time.time())
+        if signal["action"] == "hold" and held > rocket_bot.MAX_HOLD_S and signal["reason"] != "trailing":
+            signal.update(action="sell", reason="time_stop")
+        return signal
     if position.get("mode") == "dip":
-        # Dip Buying Bot: stop -20%, from +20% trailing 8% below the top, out after 6 h if it never took off
+        # Dip Buying Bot: stop -40%, from +12% trailing 6% below the top, out after 6 h if it never took off
         import dip_bot
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **dip_bot.EXIT)
         held = time.time() - float(position.get("opened_at") or time.time())
