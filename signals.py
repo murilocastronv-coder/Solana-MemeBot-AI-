@@ -44,11 +44,16 @@ MIN_VOL_24H = _f("SIGNAL_MIN_VOLUME_24H", 30_000)
 PULLBACK_MIN = _f("SIGNAL_PULLBACK_MIN", 0.08)
 PULLBACK_MAX = _f("SIGNAL_PULLBACK_MAX", 0.40)
 RSI_DIP = _f("SIGNAL_RSI_DIP", 38)
-SL_MIN = _f("SIGNAL_SL_MIN", 0.06)
-SL_MAX = _f("SIGNAL_SL_MAX", 0.20)
+SL_MIN = _f("SIGNAL_SL_MIN", 0.10)     # fair stop: never tighter than 10% (memecoins wick and come back)
+SL_MAX = _f("SIGNAL_SL_MAX", 0.30)
+SL_ATR_MULT = _f("SIGNAL_SL_ATR", 1.5)  # stop = bottom of the dip minus 1.5x the normal candle range (ATR)
+SL_CONFIRM_S = _f("SIGNAL_SL_CONFIRM_SECONDS", 90)   # price must stay under the stop this long (no wick stops)
+SL_CRASH = _f("SIGNAL_SL_CRASH", 0.10)               # ... unless it is 10% under it: then at once
 TP1_R = _f("SIGNAL_TP1_R", 1.5)
 TP2_R = _f("SIGNAL_TP2_R", 3.0)
 EXPIRE_S = _f("SIGNAL_EXPIRE_HOURS", 24) * 3600
+EXPIRE_RUNNER_S = _f("SIGNAL_EXPIRE_RUNNER_HOURS", 72) * 3600   # after TP2 the runner has more time
+POTENTIAL_LABEL = {1: "1x (+100%)", 2: "2x (+200%)", 3: "3x ou mais (+300%)"}
 COOLDOWN_S = _f("SIGNAL_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = _f("SIGNAL_SCAN_SECONDS", 120)
 CANDLE_CHECKS = int(_f("SIGNAL_CANDLE_CHECKS", 6))     # coins whose candles are read per scan (API limits)
@@ -250,7 +255,11 @@ def entry_setup(cs):
     if not (last[4] > last[1] and last[4] > prev[2]):
         return None, "sem vela de confirmação"
     entry = last[4]
-    sl = bottom * 0.98
+    trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+           for i in range(len(cs) - 14, len(cs))]
+    atr = sum(trs) / len(trs)
+    # fair stop: below the bottom of the dip, with room for the coin's normal swings (ATR)
+    sl = min(bottom * 0.97, bottom - SL_ATR_MULT * atr)
     risk = (entry - sl) / entry
     if risk < SL_MIN:
         sl, risk = entry * (1 - SL_MIN), SL_MIN
@@ -259,7 +268,7 @@ def entry_setup(cs):
     vols = [c[5] for c in cs]
     avg_vol = sum(vols[-21:-1]) / 20 if len(vols) > 21 else 0
     return {"entry": entry, "sl": sl, "tp1": entry * (1 + TP1_R * risk), "tp2": entry * (1 + TP2_R * risk),
-            "risk": risk, "pullback": pull, "rsi": r[-1], "rsi_min": min(r[-6:]), "top": top,
+            "risk": risk, "atr_pct": atr / entry, "pullback": pull, "rsi": r[-1], "rsi_min": min(r[-6:]), "top": top,
             "vol_ratio": (vols[-1] / avg_vol) if avg_vol else 1.0}, ""
 
 
@@ -305,6 +314,25 @@ def level(score):
 
 
 LEVEL_ICON = {90: "🔥", 80: "🟢", 70: "🟡"}
+
+
+def potential(p, score, buzz=None):
+    """1, 2 or 3: estimated room to make 1x (+100%), 2x (+200%) or 3x+ (+300%) on the capital.
+    Smaller market cap = more room; high volume vs market cap, growing Twitter and a strong signal
+    add room; a coin that already went up a lot today has less."""
+    mc = float(p.get("marketCap") or p.get("fdv") or 0)
+    vol = float((p.get("volume") or {}).get("h24") or 0)
+    h24 = float((p.get("priceChange") or {}).get("h24") or 0)
+    tier = 3 if mc and mc < 300_000 else (2 if mc and mc < 1_000_000 else 1)
+    if mc and vol / mc >= 1:
+        tier += 1
+    if buzz and buzz.get("growth", 0) >= 2:
+        tier += 1
+    if score >= 90:
+        tier += 1
+    if h24 >= 300:
+        tier -= 1
+    return max(1, min(3, tier))
 
 
 # ---------------------------------------------------------------- anti-scam
@@ -376,24 +404,34 @@ def signal_text(s):
             "🎯 ENTRADA: US$ " + _fmt_price(s["entry"]) + " (até " + _fmt_price(s["entry"] * 1.03) + ")\n"
             "🛑 STOP LOSS: US$ " + _fmt_price(s["sl"]) + " (" + pct(s["sl"]) + ")\n"
             "✅ TAKE PROFIT 1: US$ " + _fmt_price(s["tp1"]) + " (" + pct(s["tp1"]) + ") — vender metade, stop vai para a entrada\n"
-            "🚀 TAKE PROFIT 2: US$ " + _fmt_price(s["tp2"]) + " (" + pct(s["tp2"]) + ") — vender o resto\n\n"
+            "🚀 TAKE PROFIT 2: US$ " + _fmt_price(s["tp2"]) + " (" + pct(s["tp2"]) + ") — vender 1/4, stop vai para o TP1\n"
+            "🌙 TAKE PROFIT 3 (potencial " + POTENTIAL_LABEL.get(s.get("potential"), "?") + "): US$ " +
+            _fmt_price(s.get("tp3", s["tp2"])) + " (" + pct(s.get("tp3", s["tp2"])) + ") — vender o último 1/4\n"
+            "Stop justo: abaixo do fundo com folga para o sobe-e-desce normal da moeda; só vale se o preço " +
+            "ficar abaixo dele (pavio rápido não conta).\n\n"
             "Liquidez US$ " + format(s["liquidity"] / 1000, ".0f") + " mil · 🛡️ anti-golpe OK\n" + s["mint"] +
             "\ndexscreener.com/solana/" + s["pair"] + "\n⚠️ Sinal não é garantia: respeite o stop.")
 
 
 def _result_pct(s, outcome, price=None):
-    """% of a signal traded as: half sold at TP1 (then stop at entry), half at TP2."""
+    """% of a signal traded as: 1/2 sold at TP1 (stop -> entry), 1/4 at TP2 (stop -> TP1), 1/4 at TP3."""
     e = s["entry"]
-    if outcome == "tp2":
-        return ((s["tp1"] / e - 1) * 0.5 + (s["tp2"] / e - 1) * 0.5) * 100
+    g = lambda x: x / e - 1
+    tp3 = s.get("tp3", s["tp2"])
     if outcome == "sl":
-        return (s["sl"] / e - 1) * 100
-    if outcome == "be":                                  # TP1 then back to the entry
-        return (s["tp1"] / e - 1) * 0.5 * 100
-    p = price if price is not None else e                # expired: rest at the current price
+        return g(s["sl"]) * 100
+    if outcome == "be":                                  # TP1, then back to the entry
+        return g(s["tp1"]) * 0.5 * 100
+    if outcome == "tp2_back":                            # TP1 + TP2, then back to TP1
+        return (g(s["tp1"]) * 0.75 + g(s["tp2"]) * 0.25) * 100
+    if outcome in ("tp3", "tp2"):
+        return (g(s["tp1"]) * 0.5 + g(s["tp2"]) * 0.25 + g(tp3) * 0.25) * 100
+    p = price if price is not None else e                # expired: the rest at the current price
+    if s.get("tp2_hit"):
+        return (g(s["tp1"]) * 0.5 + g(s["tp2"]) * 0.25 + g(p) * 0.25) * 100
     if s.get("tp1_hit"):
-        return ((s["tp1"] / e - 1) * 0.5 + (p / e - 1) * 0.5) * 100
-    return (p / e - 1) * 100
+        return (g(s["tp1"]) * 0.5 + g(p) * 0.5) * 100
+    return g(p) * 100
 
 
 def follow_up(prices, send=None, chat=None, now=None):
@@ -407,25 +445,39 @@ def follow_up(prices, send=None, chat=None, now=None):
             outcome = None
             if p is not None:
                 s["peak"] = max(float(s.get("peak") or 0), p)
-                stop = s["entry"] if s.get("tp1_hit") else s["sl"]
-                if p >= s["tp2"]:
-                    outcome = "tp2"
+                stop = s["tp1"] if s.get("tp2_hit") else (s["entry"] if s.get("tp1_hit") else s["sl"])
+                tp3 = s.get("tp3", s["tp2"])
+                if p >= tp3:
+                    outcome = "tp3"
                 elif p <= stop:
-                    outcome = "be" if s.get("tp1_hit") else "sl"
-                elif p >= s["tp1"] and not s.get("tp1_hit"):
-                    s["tp1_hit"] = True
-                    msgs.append("✅ TP1 ATINGIDO — " + s["symbol"] + " " + format((s["tp1"] / s["entry"] - 1) * 100, "+.0f") +
-                                "%: venda metade e coloque o stop na entrada (US$ " + _fmt_price(s["entry"]) + ").")
-            if outcome is None and now - s["at"] > EXPIRE_S:
+                    # fair stop: a quick wick is not enough, the price must stay under it (or crash through it)
+                    if p <= stop * (1 - SL_CRASH) or (s.get("below_since") and now - s["below_since"] >= SL_CONFIRM_S):
+                        outcome = "tp2_back" if s.get("tp2_hit") else ("be" if s.get("tp1_hit") else "sl")
+                    else:
+                        s.setdefault("below_since", now)
+                else:
+                    s.pop("below_since", None)
+                    if p >= s["tp2"] and not s.get("tp2_hit"):
+                        s["tp1_hit"] = s["tp2_hit"] = True
+                        msgs.append("🚀 TP2 ATINGIDO — " + s["symbol"] + " " + format((s["tp2"] / s["entry"] - 1) * 100, "+.0f") +
+                                    "%: venda 1/4 e suba o stop para o TP1 (US$ " + _fmt_price(s["tp1"]) + "). O último 1/4 vai " +
+                                    "atrás do potencial (TP3 US$ " + _fmt_price(tp3) + ").")
+                    elif p >= s["tp1"] and not s.get("tp1_hit"):
+                        s["tp1_hit"] = True
+                        msgs.append("✅ TP1 ATINGIDO — " + s["symbol"] + " " + format((s["tp1"] / s["entry"] - 1) * 100, "+.0f") +
+                                    "%: venda metade e coloque o stop na entrada (US$ " + _fmt_price(s["entry"]) + ").")
+            if outcome is None and now - s["at"] > (EXPIRE_RUNNER_S if s.get("tp2_hit") else EXPIRE_S):
                 outcome = "expired"
             if outcome:
                 res = _result_pct(s, outcome, p)
                 d["open"].pop(sid)
                 d["history"] = (d["history"] + [{"mint": s["mint"], "symbol": s["symbol"], "outcome": outcome,
                                                  "pct": round(res, 2), "at": s["at"], "closed": now,
-                                                 "level": s.get("level")}])[-500:]
-                label = {"tp2": "🚀 TP2 ATINGIDO", "sl": "🛑 STOP LOSS", "be": "↩️ VOLTOU À ENTRADA (depois do TP1)",
-                         "expired": "⏱️ SINAL ENCERRADO (24 h)"}[outcome]
+                                                 "level": s.get("level"), "potential": s.get("potential"),
+                                                 "peak_x": round(float(s.get("peak") or s["entry"]) / s["entry"], 3)}])[-500:]
+                label = {"tp3": "🌙 TP3 ATINGIDO (potencial)", "tp2": "🚀 TP2 ATINGIDO", "sl": "🛑 STOP LOSS",
+                         "be": "↩️ VOLTOU À ENTRADA (depois do TP1)", "tp2_back": "↩️ VOLTOU AO TP1 (depois do TP2)",
+                         "expired": "⏱️ SINAL ENCERRADO (tempo)"}[outcome]
                 msgs.append(label + " — " + s["symbol"] + ": resultado do sinal " + format(res, "+.1f") + "%")
         _save(d)
     if send and chat:
@@ -506,7 +558,9 @@ def cycle(send=None, chat=None, fetch=None, now=None, safety=None, buzz=None):
             continue
         h1 = (p.get("txns") or {}).get("h1") or {}
         b, s_ = int(h1.get("buys") or 0), int(h1.get("sells") or 0)
-        sig = dict(setup, mint=mint, symbol=symbol, score=score, level=lv, buzz=tw,
+        pot = potential(p, score, tw)
+        tp3 = max(setup["entry"] * (1 + pot), setup["tp2"] * 1.5)
+        sig = dict(setup, mint=mint, symbol=symbol, score=score, level=lv, buzz=tw, potential=pot, tp3=tp3,
                    pair=p["pairAddress"], liquidity=float((p.get("liquidity") or {}).get("usd") or 0),
                    buys_1h=b, buy_share=b / max(b + s_, 1), at=now)
         with _LOCK:
@@ -533,7 +587,7 @@ def results():
     for x in h:
         growth *= 1 + x["pct"] / 100
     return {"n": len(h), "wins": len(wins), "avg": sum(x["pct"] for x in h) / len(h),
-            "growth": (growth - 1) * 100, "tp2": sum(1 for x in h if x["outcome"] == "tp2"),
+            "growth": (growth - 1) * 100, "tp2": sum(1 for x in h if x["outcome"] in ("tp2", "tp3", "tp2_back")),
             "sl": sum(1 for x in h if x["outcome"] == "sl")}
 
 
@@ -542,14 +596,21 @@ def status_text():
     lines = ["📡 SINAIS DE MEMECOIN (Solana) — " + ("LIGADO" if d["enabled"] else "DESLIGADO"),
              "Moedas com liquidez US$ " + format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") +
              " mil, a maioria comprando, em tendência de alta. Entrada na correção: fundo (RSI baixo) + vela de virada.",
-             "Stop abaixo do fundo (" + format(SL_MIN * 100, ".0f") + "–" + format(SL_MAX * 100, ".0f") + "%) · TP1 " +
-             format(TP1_R, "g") + "× o risco (vende metade) · TP2 " + format(TP2_R, "g") + "× o risco."]
+             "Stop justo abaixo do fundo com folga do sobe-e-desce (" + format(SL_MIN * 100, ".0f") + "–" +
+             format(SL_MAX * 100, ".0f") + "%, só vale se o preço ficar abaixo) · TP1 " + format(TP1_R, "g") +
+             "× o risco (1/2) · TP2 " + format(TP2_R, "g") + "× (1/4) · TP3 = potencial 1x/2x/3x+ (1/4)."]
     r = results()
     if r:
         lines.append("📊 Resultado dos sinais: " + str(r["n"]) + " encerrados · " + str(r["wins"]) + " no lucro (" +
                      format(r["wins"] / r["n"] * 100, ".0f") + "%) · " + str(r["tp2"]) + " no TP2, " + str(r["sl"]) +
                      " no stop · média " + format(r["avg"], "+.1f") + "% por sinal · seguindo todos: " +
                      format(r["growth"], "+.0f") + "%")
+        for pot in (3, 2, 1):
+            hp = [x for x in _load()["history"] if x.get("potential") == pot]
+            if hp:
+                hit = sum(1 for x in hp if x.get("peak_x", 0) >= 1 + pot)
+                lines.append("   🌙 potencial " + POTENTIAL_LABEL[pot] + ": " + str(len(hp)) + " sinais · " + str(hit) +
+                             " bateram o potencial · maior alta " + format((max(x.get("peak_x", 1) for x in hp) - 1) * 100, "+.0f") + "%")
         for lv in (90, 80, 70):
             hl = [x for x in _load()["history"] if x.get("level") == lv]
             if hl:

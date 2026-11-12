@@ -155,8 +155,13 @@ python -m unittest discover -p "test_*.py"
 - **Entrada na correção** (velas de 5 min da GeckoTerminal): EMA20 acima da EMA50, queda de 8%–40% do topo das
   últimas 2 h, RSI(14) foi a ≤ 38 e está virando, e a última vela fechou verde acima da máxima da anterior.
 - Anti-golpe: criador sem poder de criar/congelar, 10 maiores donos, honeypot, armadilhas Token-2022, RugCheck.
-- O sinal traz **entrada**, **stop loss** (abaixo do fundo, 6%–20%), **TP1** (1,5× o risco, vender metade e
-  levar o stop para a entrada) e **TP2** (3× o risco). Cada sinal é acompanhado: avisa TP1, TP2, stop ou fim
+- O sinal traz **entrada**, **stop loss justo** (abaixo do fundo menos 1,5× o ATR, 10%–30%; só vale se o preço
+  **ficar** abaixo dele por ~2 min — pavio rápido não fecha; abaixo 10% a mais fecha na hora), **TP1** (1,5× o
+  risco: vender 1/2 e levar o stop para a entrada), **TP2** (3× o risco: vender 1/4 e subir o stop para o TP1) e
+  **TP3 = potencial** (vender o último 1/4).
+- **Potencial 1x (+100%) / 2x (+200%) / 3x+ (+300%)**: estimado pelo valor de mercado (menor = mais espaço),
+  volume vs. valor de mercado, Twitter e força do sinal (menos se já subiu muito no dia). O 📊 mostra quantos
+  sinais de cada potencial realmente bateram o alvo e a maior alta. Cada sinal é acompanhado: avisa TP1, TP2, stop ou fim
   em 24 h, e o 📊 mostra o **resultado real** (acerto, média por sinal, resultado seguindo todos).
 - **Força do sinal (🟡 70% · 🟢 80% · 🔥 90%):** nota somando maioria comprando, quantidade de compradores,
   tendência, fundo do RSI, volume na virada, tamanho da correção e Twitter. Só manda sinal com força ≥ 70%
