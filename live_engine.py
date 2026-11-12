@@ -141,7 +141,7 @@ EXIT_TEXT = {
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
-    "rocket": "🚀 Sniper: 🛑 stop -40% | 🚀 a partir de +30% deixa correr (vende 15% abaixo do topo) | ⏱️ sai em 90 min se não decolar",
+    "rocket": "🚀 Sniper: 🛑 stop -40% | 💰 2x vende metade, 5x mais metade | 🚀 a partir de +30% stop móvel (15% abaixo do topo) | ⏱️ sai em 90 min se não decolar",
     "dip": "📉 Dip Bot: 🛑 stop -40% | 🚀 a partir de +12% stop móvel (vende 6% abaixo do topo) | ⏱️ sai em 6 h se não subir",
     "signal": "📡 Sinal: vende 1/2 no TP1, 1/4 no TP2 e o resto no TP3 | 🛑 stop do sinal (abaixo do fundo) | ⏱️ fecha em 24 h se não andar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
@@ -190,7 +190,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
     return settled
 
 
-def sell_part(mint, fraction, reason, send, chat):
+def sell_part(mint, fraction, reason, send, chat, note=None):
     """Sell `fraction` of a position (the copied wallet took part of its profit). Returns like sell_now."""
     if fraction is None or float(fraction) >= 0.95:
         return sell_now(mint, reason, send, chat)
@@ -218,9 +218,9 @@ def sell_part(mint, fraction, reason, send, chat):
     if settled.get("status") == "settled_sell":
         pnl = settled["pnl_usd"]
         send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + format(float(fraction) * 100, ".0f") + "% de " +
-             symbol + " (a carteira copiada vendeu essa parte)\n💵 Parte: US$ " + format(settled["cost_usd"], ".2f") +
+             symbol + " (" + (note or "a carteira copiada vendeu essa parte") + ")\n💵 Parte: US$ " + format(settled["cost_usd"], ".2f") +
              " → US$ " + format(settled["proceeds_usd"], ".2f") + " · P/L " + format(pnl, "+.2f") + " USD\n" +
-             "📦 O resto continua aberto e vende junto com a carteira.\n🔗 https://solscan.io/tx/" + settled["signature"])
+             "📦 O resto continua aberto" + (" com stop móvel." if note else " e vende junto com a carteira.") + "\n🔗 https://solscan.io/tx/" + settled["signature"])
         return "sold"
     send(chat, "⏳ Venda parcial enviada, conferindo saldo. Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" +
          str(result["signature"]))
