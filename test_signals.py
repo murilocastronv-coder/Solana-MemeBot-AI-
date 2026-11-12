@@ -183,6 +183,15 @@ class AutoTradeTests(unittest.TestCase):
         falling = pair(priceChange={"m5": -3, "h1": -15, "h6": 30, "h24": 80})
         self.assertIn("ainda caindo", sg.dex_setup(falling)[1])
 
+    def test_coins_found_by_dexscreener_search(self):
+        def f(url):
+            if "/latest/dex/search" in url:
+                return {"pairs": [{"chainId": "solana", "baseToken": {"address": "SEARCHpump"}}]}
+            if "/tokens/v1/solana/" in url:
+                return [pair(baseToken={"address": "SEARCHpump", "symbol": "S"})] if "SEARCHpump" in url else []
+            return []
+        self.assertIn("SEARCHpump", [p["baseToken"]["address"] for p in sg.candidate_pairs(f)])
+
     def test_auto_trade_off_does_not_buy(self):
         sg.set_auto(False)
         self.assertFalse(sg.auto_enabled())

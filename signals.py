@@ -66,7 +66,10 @@ SCAN_EVERY_S = _f("SIGNAL_SCAN_SECONDS", 120)
 CANDLE_CHECKS = int(_f("SIGNAL_CANDLE_CHECKS", 12))     # coins whose candles are read per scan (API limits)
 
 DEX = "https://api.dexscreener.com"
-DEX_FEEDS = ("/token-profiles/latest/v1", "/token-boosts/latest/v1", "/token-boosts/top/v1")
+DEX_FEEDS = ("/token-profiles/latest/v1", "/token-boosts/latest/v1", "/token-boosts/top/v1",
+             "/community-takeovers/latest/v1", "/ads/latest/v1")
+# DexScreener search (pairs): GeckoTerminal and pump.fun block the server, DexScreener does not
+DEX_SEARCHES = ("pumpswap", "pumpfun", "pump", "pump sol", "solana meme", "sol pump", "pumpswap sol", "pump.fun")
 GECKO = "https://api.geckoterminal.com/api/v2"
 GECKO_FEEDS = tuple("/networks/solana/trending_pools?page=" + str(n) for n in (1, 2, 3)) + tuple(
     "/networks/solana/new_pools?page=" + str(n) for n in (1, 2)) + tuple(
@@ -179,7 +182,18 @@ def candidate_pairs(fetch=None):
         for row in rows if isinstance(rows, list) else []:
             if isinstance(row, dict) and row.get("chainId") == "solana" and row.get("tokenAddress"):
                 mints.append(row["tokenAddress"])
+    for q in DEX_SEARCHES:
+        try:
+            rows = fetch(DEX + "/latest/dex/search?q=" + q.replace(" ", "%20"))
+        except Exception:
+            continue
+        for p in (rows or {}).get("pairs") or [] if isinstance(rows, dict) else []:
+            mint = ((p or {}).get("baseToken") or {}).get("address")
+            if p.get("chainId") == "solana" and mint:
+                mints.append(mint)
     for feed in GECKO_FEEDS:
+        if fetch is _get and time.time() < _gecko_block[0]:
+            break
         try:
             rows = fetch(GECKO + feed)
         except Exception:
@@ -188,7 +202,7 @@ def candidate_pairs(fetch=None):
             base = ((((pool or {}).get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id", "")
             if base.startswith("solana_"):
                 mints.append(base[len("solana_"):])
-    mints = [m for m in dict.fromkeys(mints) if m not in QUOTES][:240]
+    mints = [m for m in dict.fromkeys(mints) if m not in QUOTES][:360]
     best = {}
     for i in range(0, len(mints), 30):
         try:
@@ -359,6 +373,9 @@ def entry_setup(cs):
             "vol_ratio": (vols[-1] / avg_vol) if avg_vol else 1.0}, ""
 
 
+DEX_PULLBACK_MIN = _f("SIGNAL_DEX_PULLBACK_MIN", 0.04)   # without a chart: 4%+ down in the last hour
+
+
 def dex_setup(p):
     """Entry from DexScreener price changes when the candles can't be read: the coin is in an uptrend
     (6 h / 24 h), corrected in the last hour and is turning up in the last 5 minutes with buyers."""
@@ -367,7 +384,7 @@ def dex_setup(p):
     entry = float(p.get("priceUsd") or 0)
     if entry <= 0:
         return None, "sem preço"
-    if h1 > -PULLBACK_MIN * 100:
+    if h1 > -DEX_PULLBACK_MIN * 100:
         return None, "sem correção (perto do topo)"
     if h1 < -PULLBACK_MAX * 100:
         return None, "caiu demais (quebrou a tendência)"
