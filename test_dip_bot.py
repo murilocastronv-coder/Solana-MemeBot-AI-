@@ -62,7 +62,8 @@ class DipBotTests(unittest.TestCase):
     def test_exit_rules(self):
         import live_exit_monitor as lem
         pos = {"mode": "dip", "peak_ratio": 0, "opened_at": time.time()}
-        self.assertEqual(lem.position_signal(pos, 10, 7.9)["reason"], "stop_loss")          # -21%
+        self.assertEqual(lem.position_signal(pos, 10, 7.9)["action"], "hold")                # -21%: room to come back
+        self.assertEqual(lem.position_signal(pos, 10, 5.9)["reason"], "stop_loss")          # -41%
         self.assertEqual(lem.position_signal(pos, 10, 11)["action"], "hold")
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=1.5), 10, 13.5)["action"], "sell")  # 10% under top
         old = dict(pos, opened_at=time.time() - 7 * 3600)
