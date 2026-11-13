@@ -1716,7 +1716,7 @@ def apply_reference_only():
         return []
     with _LOCK:
         d = _load()
-        if d.get("reference_only") == ref:
+        if d.get("reference_only") == ref + ":v2":
             return []
     removed = [a for a in list(_load()["wallets"]) if a != ref]
     for a in removed:
@@ -1726,7 +1726,7 @@ def apply_reference_only():
         d = _load()
         w = d["wallets"][ref]
         w.update(mirror=True, proportional=True, paused=False, leaving=False, auto_discovered=False)
-        d["reference_only"] = ref
+        d["reference_only"] = ref + ":v2"     # v2: owner asked again to clear the list (sniper search)
         d["rejected"] = {}                   # old rejections were judged by other rules
         _save(d)
     _event("copiando só " + ref[:6] + "… (carteira de referência); " + str(len(removed)) + " carteiras saíram")
@@ -2139,7 +2139,7 @@ def status_text():
                     wallet_twin.describe(wallet_twin.reference_style()) +
                     ("\n🎯 Caçando carteiras SNIPER: compram a moeda com até " + format(wallet_twin.SNIPE_MAX_AGE_MIN, ".0f") +
                      " min de vida, seguram " + format(wallet_twin.SNIPE_HOLD_MIN, ".0f") + "–" +
-                     format(wallet_twin.SNIPE_HOLD_MAX, ".0f") + " min e estão no lucro" if wallet_twin.SNIPER else
+                     format(wallet_twin.SNIPE_HOLD_MAX, ".0f") + " min, operam parecido com ela (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") + "%) e estão no lucro" if wallet_twin.SNIPER else
                      "\n🔎 Caçando carteiras com o MESMO estilo (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") +
                      "% parecidas) e com lucro recente"))
         if TWIN_LOG:
