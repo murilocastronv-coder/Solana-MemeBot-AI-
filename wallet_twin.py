@@ -122,7 +122,10 @@ def judge(cand_style, audit, ref):
         return False, sim, "poucas operações recentes"
     if a.get("pnl_recent", 0) <= 0:
         return False, sim, "sem lucro recente"
-    if a.get("win_recent", 0) < MIN_WIN:
+    # the reference wallet itself may win few trades and make its money on big winners:
+    # ask the same hit rate as it (80% of it), never more than TWIN_MIN_WIN
+    need = min(MIN_WIN, 0.8 * float(ref.get("win_rate") or MIN_WIN))
+    if a.get("win_recent", 0) < need:
         return False, sim, "acerta pouco"
     return True, sim, ""
 
