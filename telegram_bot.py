@@ -554,6 +554,7 @@ def wallet_discovery_loop():
     except Exception as exc:
      logging.warning("pre-audit failed: %s",type(exc).__name__);continue
     if outcome in ("added","replaced"):added.append(a)
+   logging.info("wallet discovery: %s candidatas, %s analisadas, %s novas",len(candidates),checked,len(added))
    removed=copy_trader.prune_low_balance()+copy_trader.remove_fast_wallets()
    chat=active_chat()
    if chat and removed:
