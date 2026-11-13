@@ -1,7 +1,7 @@
-"""Rocket Sniper: buys the hottest new pump.fun coins (5-15 min old) the moment they explode in buys, lets winners run.
+"""Rocket Sniper: buys the hottest new pump.fun coins (3-30 min old) the moment they explode in buys, lets winners run.
 
 Real money in the owner's wallet, separate from the signals bot and the Dip Bot (mode "rocket").
-- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 5-15 minutes old; the most popular first
+- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 3-30 minutes old; the most popular first
   (most buyers in the last 5 minutes). Shares the 50% limit of the copy trade (rest stays in SOL).
 - Explosion: up 5-60% in the last 5 minutes and green in the hour (not more than +400%), 30+ buys in
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
@@ -32,16 +32,16 @@ MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 5_000)
 # so their size is checked by market cap instead (the curve ends at ~US$ 69k-100k)
 MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 5_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
-MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 5) * 60
-MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 15) * 60
-MIN_UP_5M = sg._f("ROCKET_MIN_UP_5M", 5)
-MAX_UP_5M = sg._f("ROCKET_MAX_UP_5M", 60)
+MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 3) * 60
+MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 30) * 60
+MIN_UP_5M = sg._f("ROCKET_MIN_UP_5M", 2)
+MAX_UP_5M = sg._f("ROCKET_MAX_UP_5M", 80)
 MAX_UP_1H = sg._f("ROCKET_MAX_UP_1H", 400)
-MIN_BUYS_5M = int(sg._f("ROCKET_MIN_BUYS_5M", 30))
-MIN_BUY_RATIO_5M = sg._f("ROCKET_MIN_BUY_RATIO_5M", 2.0)
-MIN_BUYS_1H = int(sg._f("ROCKET_MIN_BUYS_1H", 100))     # coin is only 5-15 min old: its whole life
-MIN_BUY_SHARE_1H = sg._f("ROCKET_MIN_BUY_SHARE_1H", 0.60)
-MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 15_000)
+MIN_BUYS_5M = int(sg._f("ROCKET_MIN_BUYS_5M", 15))
+MIN_BUY_RATIO_5M = sg._f("ROCKET_MIN_BUY_RATIO_5M", 1.3)
+MIN_BUYS_1H = int(sg._f("ROCKET_MIN_BUYS_1H", 50))      # coin is only 3-30 min old: its whole life
+MIN_BUY_SHARE_1H = sg._f("ROCKET_MIN_BUY_SHARE_1H", 0.52)
+MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 5_000)
 MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 5))
 COOLDOWN_S = sg._f("ROCKET_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("ROCKET_SCAN_SECONDS", 45)
