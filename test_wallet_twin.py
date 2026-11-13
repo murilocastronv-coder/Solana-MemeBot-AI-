@@ -38,6 +38,12 @@ class TwinTests(unittest.TestCase):
         other = dict(REF_STYLE, hold_min=600.0, trades_day=1.0, pump_share=0.0, scale_out=0.0)
         self.assertLess(wt.similarity(REF_STYLE, other), 30)
 
+    def test_hit_rate_is_compared_with_the_reference_wallet(self):
+        low = dict(REF_STYLE, win_rate=0.13)
+        ok, _, _ = wt.judge(low, audit(low, win=0.15), low)          # wins as often as the reference: ok
+        self.assertTrue(ok)
+        self.assertFalse(wt.judge(low, audit(low, win=0.05), low)[0])
+
     def test_style_from_profile_summary(self):
         s = {"positions": 10, "hold_median": 12, "trades_per_day": 8, "size_median": 40, "scale_out": 0.5,
              "scale_in": 0.1, "platforms": {"pump.fun": 6, "PumpSwap": 2, "Raydium": 2}, "win_rate": 0.7, "pnl_usd": 30}

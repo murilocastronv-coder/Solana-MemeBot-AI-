@@ -2133,7 +2133,7 @@ def status_text():
         lines[3] = ("⭐ Carteira de referência: " + ref[:6] + "…" + ref[-4:] + " (copia tudo, mesma %) — estilo: " +
                     wallet_twin.describe(wallet_twin.reference_style()) +
                     "\n🔎 Caçando carteiras com o MESMO estilo (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") +
-                    "% parecidas) e com lucro recente (acerto ≥ " + format(wallet_twin.MIN_WIN * 100, ".0f") + "%)")
+                    "% parecidas) e com lucro recente")
         if TWIN_LOG:
             lines.append("Últimas analisadas: " + " · ".join(t + " " + a[:5] + "… " + format(s, ".0f") + "% " + why
                                                             for t, a, s, why in TWIN_LOG[-4:]))
