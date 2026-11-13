@@ -31,11 +31,23 @@ session=requests.Session()
 seen=set()
 last=[]
 ALERTS_ENABLED=True
+_TG=threading.local()   # one HTTP session per thread: a shared Session is not thread-safe
+def _tg_session(reset=False):
+ s=getattr(_TG,"session",None)
+ if reset and s is not None:
+  try:s.close()
+  except Exception:pass
+  s=None
+ if s is None:s=_TG.session=requests.Session()
+ return s
 def request_api(method,**params):
  if not TOKEN:return {}
+ # long poll needs its own timeout + margin; every other call should answer fast
+ timeout=(10,float(params.get("timeout",0))+15) if method=="getUpdates" else (10,15)
  try:
-  r=session.post(BASE+"/"+method,json=params,timeout=25)
+  r=_tg_session().post(BASE+"/"+method,json=params,timeout=timeout)
  except requests.RequestException as exc:
+  _tg_session(reset=True)   # a stuck/half-closed connection must not be reused
   logging.warning("Telegram API transport failed method=%s type=%s",method,type(exc).__name__)
   raise RuntimeError("Telegram API transport failed") from None
  if not r.ok:
@@ -634,8 +646,11 @@ def run_async(fn,*args):
  threading.Thread(target=run,daemon=True).start()
 def loop():
  offset=None
- try:startup_notice()
- except Exception:logging.exception("startup notice failed")
+ def notice():
+  try:startup_notice()
+  except Exception:logging.exception("startup notice failed")
+ # off the polling thread: a slow Telegram must not delay the answer to /start after a deploy
+ threading.Thread(target=notice,daemon=True).start()
  threading.Thread(target=background_loop,daemon=True).start()
  threading.Thread(target=copy_loop,daemon=True).start()
  try:
@@ -654,12 +669,11 @@ def loop():
      offset=u["update_id"]+1
      run_async(handle_safe,u)   # each tap answers on its own: a slow one never blocks the others
    else:time.sleep(10)
-  except requests.HTTPError as exc:
-   if exc.response is not None and exc.response.status_code==409:
-    logging.warning("Telegram polling conflict: another instance may be polling this token")
-   else:logging.exception("telegram HTTP error")
-   time.sleep(15)
-  except Exception:logging.exception("telegram worker error");time.sleep(10)
+  except RuntimeError as exc:
+   if "HTTP 409" in str(exc):
+    logging.warning("Telegram polling conflict: another instance may be polling this token");time.sleep(5)
+   else:logging.warning("telegram polling failed: %s",exc);time.sleep(2)
+  except Exception:logging.exception("telegram worker error");time.sleep(3)
 
 @app.route("/exportar",methods=["GET","POST"])
 def export_page():

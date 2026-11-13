@@ -31,6 +31,8 @@ def trail_text(position):
         return format(rocket_bot.TRAIL_DROP * 100, ".0f")
     if position.get("mode") in REMOVED_BOT_EXIT:
         return format(float(REMOVED_BOT_EXIT[position["mode"]]["drop"]) * 100, ".0f")
+    if position.get("mode") == "copy":
+        return format(float(copy_wallet_exit()["drop"]) * 100, ".0f")
     return format(float(SNIPER_EXIT["drop"]) * 100, ".0f")
 DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
@@ -42,6 +44,18 @@ ORPHAN_EXIT = {"stop_loss": os.getenv("COPY_ORPHAN_STOP_LOSS", "0.40"),
                "arm": str(1 + float(os.getenv("COPY_ORPHAN_TRAIL_ARM", "0.25"))),
                "drop": os.getenv("COPY_ORPHAN_TRAIL_DROP", "0.10")}
 SNIPER_EXIT = {"stop_loss": SNIPER_STOP_LOSS, "arm": "1.25", "drop": "0.12"}
+
+
+def copy_trail_enabled():
+    return os.getenv("COPY_TRAIL_ENABLED", "true").strip().lower() != "false"
+
+
+def copy_wallet_exit():
+    """Copy trade (wallet exit mode): trailing stop from +COPY_TRAIL_ARM, selling COPY_TRAIL_DROP below the top.
+    COPY_WALLET_STOP_LOSS=1 (default) means no fixed stop loss: below the arm level it only follows the wallet."""
+    return {"stop_loss": os.getenv("COPY_WALLET_STOP_LOSS", "1"),
+            "arm": str(1 + float(os.getenv("COPY_TRAIL_ARM", "0.25"))),
+            "drop": os.getenv("COPY_TRAIL_DROP", "0.10")}
 PUMPFUN_EXIT = {"stop_loss": "0.12", "arm": "1.25", "drop": "0.12"}  # old pump.fun positions only
 HOT_EXIT = {"stop_loss": "0.06", "arm": "1.08", "drop": "0.05"}
 HOT_MAX_HOLD_SECONDS = 45 * 60  # fast mover that did not move is closed
@@ -89,7 +103,10 @@ def position_signal(position, cost, proceeds):
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **ORPHAN_EXIT)
     if (position.get("mode") == "copy" and not position.get("copy_orphan")
             and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet"):
-        # Copy trade: no fixed TP/SL; copy_trader sells when the copied wallet sells.
+        # Copy trade: sells when the copied wallet sells (copy_trader) AND, once in profit,
+        # a trailing stop locks the gain (no fixed stop loss unless COPY_WALLET_STOP_LOSS is set).
+        if copy_trail_enabled():
+            return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **copy_wallet_exit())
         ratio = float(proceeds) / float(cost) if cost else 0.0
         return {"action": "hold", "reason": "follow_wallet", "change_pct": (ratio - 1) * 100,
                 "peak_ratio": max(ratio, float(position.get("peak_ratio") or 0))}
