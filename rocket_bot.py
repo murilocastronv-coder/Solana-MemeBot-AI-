@@ -145,6 +145,9 @@ def _dca_buy(mint, pos, send, chat):
 # Basket stop (owner's choice): once the sniper holds MAX_OPEN coins, if all of them together are
 # BASKET_DROP below what they cost, it closes every sniper order.
 BASKET_DROP = sg._f("ROCKET_BASKET_DROP", 0.25)
+# Coin crash (owner's choice): if ANY sniper coin is COIN_CRASH below what it cost (average price,
+# rebuy included), every sniper position is closed.
+COIN_CRASH = sg._f("ROCKET_COIN_CRASH", 0.50)
 
 
 def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None, closer=None):
@@ -161,6 +164,24 @@ def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None, 
             values[mint] = (pos, float(quote(mint, int(pos["token_amount_raw"]))))
         except Exception:
             continue
+    crashed = [(m, v / float(p["cost_usd"])) for m, (p, v) in values.items()
+               if float(p.get("cost_usd") or 0) > 0 and v <= (1 - COIN_CRASH) * float(p["cost_usd"])]
+    if crashed:
+        m0, r0 = crashed[0]
+        if send and chat:
+            send(chat, "🛑 SNIPER: " + str(values[m0][0].get("symbol") or m0[:6]) + " caiu " + format((1 - r0) * 100, ".0f") +
+                 "%. Fechando todas as " + str(len(values)) + " posições do Sniper.")
+        for mint in values:
+            try:
+                if closer:
+                    closer(mint)
+                else:
+                    import live_engine
+                    live_engine.sell_now(mint, "rocket_coin_crash", send, chat)
+            except Exception as exc:
+                logging.warning("rocket crash stop %s failed: %s", mint[:8], type(exc).__name__)
+            done.append((mint, "crash"))
+        return done
     rocket_open = st.positions_by_mode("rocket")
     cost = sum(float(p.get("cost_usd") or 0) for p, _ in values.values())
     worth = sum(v for _, v in values.values())
@@ -386,13 +407,14 @@ def status_text():
              format(MIN_BUY_RATIO_5M, "g") + "x mais que vendas), " + str(MIN_BUYS_1H) + "+ compras na hora. Liquidez US$ " +
              format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil, anti-golpe.",
              "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · " +
-             ("🛑 stop -" + format(STOP_LOSS * 100, ".0f") + "%" if STOP_LOSS > 0 else "🚫 sem stop loss (só vende no lucro)") +
+             ("🛑 stop -" + format(STOP_LOSS * 100, ".0f") + "%" if STOP_LOSS > 0 else "🚫 sem stop loss por moeda") +
              " · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
              "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · 📉 se cair " +
              format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") + " e fecha tudo em +" +
              format(DCA_TARGET * 100, ".0f") + "% sobre o preço médio · 💰 em 2x vende metade "
              "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · 🛑 com " + str(MAX_OPEN) +
-             " abertas, se todas juntas caírem " + format(BASKET_DROP * 100, ".0f") + "% fecha todas · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
+             " abertas, se todas juntas caírem " + format(BASKET_DROP * 100, ".0f") + "% fecha todas · 🛑 se UMA moeda cair " +
+             format(COIN_CRASH * 100, ".0f") + "% fecha todas · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
              " perdas seguidas · sem limite diário."]
     try:
         hist = [h for h in st.history() if h.get("mode") == "rocket" and h.get("pnl_usd") is not None]

@@ -296,6 +296,7 @@ def sell_message(symbol, signal, settled):
            "launch_dev_sold": "🚨 Criador vendeu (sinal de rug): saiu na hora",
            "launch_time": "⏱️ Tempo máximo encerrado",
            "copy_follow": "👥 A carteira copiada vendeu",
+           "rocket_coin_crash": "🛑 Sniper: uma moeda caiu 50% (fechou todas)",
            "rocket_basket_stop": "🛑 Sniper: as ordens juntas caíram 25% (fechou todas)",
            "rocket_dca_target": "🎯 Sniper: +20% sobre o preço médio (depois da recompra)",
            "signal_tp1": "✅ Sinal: TP1 atingido (vendeu metade)",
