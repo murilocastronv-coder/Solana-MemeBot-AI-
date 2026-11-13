@@ -1648,7 +1648,12 @@ def measure(address, rpc, sol_usd, max_tx=None):
     """Read the wallet's history: (hold seconds per closed position, audit dict)."""
     import wallet_profile
     import wallet_twin
-    summary, closed, _ = wallet_profile.analyze(address, rpc, sol_usd, max_tx=max_tx or AUDIT_MAX_TX)
+    try:
+        import dex_wallets
+        get_json = dex_wallets._get_json          # coin ages at each buy (is it a sniper?)
+    except Exception:
+        get_json = None
+    summary, closed, _ = wallet_profile.analyze(address, rpc, sol_usd, max_tx=max_tx or AUDIT_MAX_TX, get_json=get_json)
     holds = wallet_profile.holds_seconds(closed)
     now = time.time()
     recent = [p for p in closed if p.get("closed", 0) >= now - RESULT_DAYS * 86400]
@@ -2132,8 +2137,11 @@ def status_text():
         ref = wallet_twin.REFERENCE
         lines[3] = ("⭐ Carteira de referência: " + ref[:6] + "…" + ref[-4:] + " (copia tudo, mesma %) — estilo: " +
                     wallet_twin.describe(wallet_twin.reference_style()) +
-                    "\n🔎 Caçando carteiras com o MESMO estilo (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") +
-                    "% parecidas) e com lucro recente")
+                    ("\n🎯 Caçando carteiras SNIPER: compram a moeda com até " + format(wallet_twin.SNIPE_MAX_AGE_MIN, ".0f") +
+                     " min de vida, seguram " + format(wallet_twin.SNIPE_HOLD_MIN, ".0f") + "–" +
+                     format(wallet_twin.SNIPE_HOLD_MAX, ".0f") + " min e estão no lucro" if wallet_twin.SNIPER else
+                     "\n🔎 Caçando carteiras com o MESMO estilo (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") +
+                     "% parecidas) e com lucro recente"))
         if TWIN_LOG:
             lines.append("Últimas analisadas: " + " · ".join(t + " " + a[:5] + "… " + format(s, ".0f") + "% " + why
                                                             for t, a, s, why in TWIN_LOG[-4:]))
