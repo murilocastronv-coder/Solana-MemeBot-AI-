@@ -12,6 +12,7 @@ from jupiter_v2_executor import order, SOL_MINT, USDC_MINT
 _last_alert = {}
 _quote_fail_since = {}  # mint -> monotonic time quotes started failing
 _quote_err_logged = {}  # mint -> last time the reason was logged
+LAST_VALUE = {}  # mint -> (time, executable USD value) of the last quote (web panel)
 ARMED = []  # (mint, position, signal) whose trailing stop just started: live_engine tells the owner
 CONSENSUS_EXIT = {"stop_loss": "0.40", "arm": "1.25", "drop": "0.10"}   # removed consensus robot's positions
 # Removed robots (signals, Dip Bot, Sniper): positions still open keep a safe exit until they are sold
@@ -158,6 +159,7 @@ def _evaluate():
             if amount <= 0 or cost <= 0:
                 raise ValueError("Invalid position amount or cost")
             proceeds = quote_value_usd(mint, amount)
+            LAST_VALUE[mint] = (time.time(), proceeds)
             signal = position_signal(position, cost, proceeds)
             if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
                 live_trade_state.update_peak(mint, signal["peak_ratio"])

@@ -320,8 +320,20 @@ def sell_message(symbol, signal, settled):
             "🔗 https://solscan.io/tx/" + settled["signature"])
 
 
+def _safe_sender(send):
+    """A send that never raises: a Telegram outage must not stop the stop / trailing-stop sales."""
+    def safe(chat, text, *a, **k):
+        try:
+            return send(chat, text, *a, **k)
+        except Exception as exc:
+            logging.warning("notice not delivered (%s), selling anyway: %s", type(exc).__name__, str(text)[:60])
+            return None
+    return safe
+
+
 def exit_cycle(send, chat):
     """Sell positions that hit TP/SL. Runs even after 'Parar' to protect funds."""
+    send = _safe_sender(send)
     if not chat:
         return
     try:
