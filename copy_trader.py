@@ -217,7 +217,7 @@ def fraction_limits(address, w=None):
 
 
 # At most this share of the account (free SOL + open positions) is in coins; the rest stays in SOL.
-MAX_EXPOSURE = _env("COPY_MAX_EXPOSURE", 0.50)
+MAX_EXPOSURE = _env("COPY_MAX_EXPOSURE", 0.70)
 
 
 def exposure_cap(size, value, invested, min_usd=None):
