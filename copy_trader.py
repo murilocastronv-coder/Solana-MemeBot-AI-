@@ -2151,7 +2151,11 @@ def status_text():
              "💰 Usa no máximo " + format(MAX_EXPOSURE * 100, ".0f") + "% da conta em moedas (o resto fica em SOL), "
              "dividido nas compras na mesma proporção que a carteira copiada compra",
              "US$ " + format(ORDER_USD, ".0f") + " por cópia · máx. " + str(MAX_POSITIONS) + " posições · " +
-             ("sai só quando a carteira vender (mesmo movimento, sem TP/SL fixo)" if EXIT_MODE == "wallet" else
+             (("vende quando a carteira vender + 🚀 stop móvel a partir de +" +
+               format(float(os.getenv("COPY_TRAIL_ARM", "0.25")) * 100, ".0f") + "% (vende " +
+               format(float(os.getenv("COPY_TRAIL_DROP", "0.10")) * 100, ".0f") + "% abaixo do topo)"
+               if os.getenv("COPY_TRAIL_ENABLED", "true").strip().lower() != "false" else
+               "sai só quando a carteira vender (mesmo movimento, sem TP/SL fixo)") if EXIT_MODE == "wallet" else
               "vende quando a carteira vender, stop −" + format(STOP_LOSS * 100, ".0f") + "%, alvo +" +
               format(TAKE_PROFIT * 100, ".0f") + "%"),
              "Só copia carteiras que seguram as moedas ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
