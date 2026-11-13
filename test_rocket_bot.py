@@ -31,13 +31,13 @@ class RocketTests(unittest.TestCase):
         self.assertEqual(rb.rocket_reason(pair(), NOW), "")
 
     def test_rejections(self):
-        self.assertIn("velha", rb.rocket_reason(pair(pairCreatedAt=(NOW - 20 * 60) * 1000), NOW))
-        self.assertIn("nova demais", rb.rocket_reason(pair(pairCreatedAt=(NOW - 200) * 1000), NOW))
+        self.assertIn("velha", rb.rocket_reason(pair(pairCreatedAt=(NOW - 40 * 60) * 1000), NOW))
+        self.assertIn("nova demais", rb.rocket_reason(pair(pairCreatedAt=(NOW - 120) * 1000), NOW))
         self.assertIn("sem explosão", rb.rocket_reason(pair(priceChange={"m5": 1, "h1": 50}), NOW))
-        self.assertIn("pico vertical", rb.rocket_reason(pair(priceChange={"m5": 90, "h1": 150}), NOW))
+        self.assertIn("pico vertical", rb.rocket_reason(pair(priceChange={"m5": 95, "h1": 150}), NOW))
         self.assertIn("vermelho", rb.rocket_reason(pair(priceChange={"m5": 10, "h1": -20}), NOW))
         self.assertIn("pouca compra", rb.rocket_reason(pair(txns={"h1": {"buys": 400, "sells": 150},
-                                                                  "m5": {"buys": 40, "sells": 30}}), NOW))
+                                                                  "m5": {"buys": 40, "sells": 35}}), NOW))
         self.assertIn("liquidez alta", rb.rocket_reason(pair(dexId="pumpswap", liquidity={"usd": 200_000}), NOW))
 
     def test_buys_once_per_coin(self):
