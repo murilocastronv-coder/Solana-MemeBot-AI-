@@ -15,8 +15,7 @@ _quote_err_logged = {}  # mint -> last time the reason was logged
 ARMED = []  # (mint, position, signal) whose trailing stop just started: live_engine tells the owner
 CONSENSUS_EXIT = {"stop_loss": "0.40", "arm": "1.25", "drop": "0.10"}   # removed consensus robot's positions
 # Removed robots (signals, Dip Bot, Sniper): positions still open keep a safe exit until they are sold
-REMOVED_BOT_EXIT = {"rocket": {"stop_loss": "0.40", "arm": "1.30", "drop": "0.15"},
-                    "dip": {"stop_loss": "0.40", "arm": "1.12", "drop": "0.06"},
+REMOVED_BOT_EXIT = {"dip": {"stop_loss": "0.40", "arm": "1.12", "drop": "0.06"},
                     "signal": {"stop_loss": "0.40", "arm": "1.25", "drop": "0.10"}}
 REMOVED_BOT_MAX_HOLD_S = 6 * 3600
 
@@ -27,6 +26,9 @@ def trail_text(position):
         return format(float(CONSENSUS_EXIT["drop"]) * 100, ".0f")
     if position.get("copy_orphan"):
         return format(float(ORPHAN_EXIT["drop"]) * 100, ".0f")
+    if position.get("mode") == "rocket":
+        import rocket_bot
+        return format(rocket_bot.TRAIL_DROP * 100, ".0f")
     if position.get("mode") in REMOVED_BOT_EXIT:
         return format(float(REMOVED_BOT_EXIT[position["mode"]]["drop"]) * 100, ".0f")
     return format(float(SNIPER_EXIT["drop"]) * 100, ".0f")
@@ -60,6 +62,14 @@ def position_signal(position, cost, proceeds):
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rules)
         held = time.time() - float(position.get("opened_at") or time.time())
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
+            signal.update(action="sell", reason="time_stop")
+        return signal
+    if position.get("mode") == "rocket":
+        # Rocket Sniper: stop -40%, from +30% trailing 15% below the top, out after 90 min if it never took off
+        import rocket_bot
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rocket_bot.EXIT)
+        held = time.time() - float(position.get("opened_at") or time.time())
+        if signal["action"] == "hold" and held > rocket_bot.MAX_HOLD_S and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
     if position.get("mode") in REMOVED_BOT_EXIT:

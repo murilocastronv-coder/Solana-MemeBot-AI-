@@ -100,6 +100,8 @@ def keyboard():
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
+  [{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
+  [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -227,9 +229,17 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
- if action in ("sig_on","sig_off","sig_status","/sinais","sig_auto_on","sig_auto_off","rk_on","rk_off","rk_status",
-               "/sniper","dip_on","dip_off","dip_status","/dip"):
-  send(chat,"🗑️ Sinais, Dip Bot e Sniper foram removidos. O bot agora faz só o copy trade.",keyboard());return
+ if action in ("rk_on","rk_off","rk_status","/sniper"):
+  import rocket_bot
+  try:
+   if action=="rk_on":rocket_bot.set_enabled(True);pre="🚀 SNIPER LIGADO (dinheiro real): compra US$ "+format(rocket_bot.ORDER_USD,".0f")+" nas moedas mais populares da pump.fun com 5–15 min de vida que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
+   elif action=="rk_off":rocket_bot.set_enabled(False);pre="⏹️ Sniper parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
+   else:pre=""
+   send(chat,pre+rocket_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
+  return
+ if action in ("sig_on","sig_off","sig_status","/sinais","sig_auto_on","sig_auto_off","dip_on","dip_off","dip_status","/dip"):
+  send(chat,"🗑️ Sinais e Dip Bot foram removidos.",keyboard());return
  if action in ("unstick","/destravar"):
   send(chat,"🔧 Conferindo as ordens pendentes na blockchain…")
   def run_unstick():
@@ -486,6 +496,17 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
+def rocket_loop():
+ """Rocket Sniper: every ROCKET_SCAN_SECONDS looks for the hottest new pump.fun coins and buys them."""
+ import rocket_bot,signals
+ while True:
+  time.sleep(rocket_bot.SCAN_EVERY_S)
+  try:
+   chat=active_chat()
+   if chat:rocket_bot.take_profits(send,chat)
+   if not chat or not rocket_bot.enabled():continue
+   rocket_bot.cycle(send,chat,pairs=signals.candidate_pairs())
+  except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
 def copy_beat_line():
@@ -612,6 +633,7 @@ def loop():
   import copy_trader
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
+ threading.Thread(target=rocket_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
