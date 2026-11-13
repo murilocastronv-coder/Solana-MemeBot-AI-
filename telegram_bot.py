@@ -100,13 +100,6 @@ def keyboard():
   [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
-  [{"text":"📡 Ligar sinais","callback_data":"sig_on"},{"text":"⏹️ Parar sinais","callback_data":"sig_off"}],
-  [{"text":"🤖 Sinais operam sozinhos","callback_data":"sig_auto_on"},{"text":"✋ Só avisar","callback_data":"sig_auto_off"}],
-  [{"text":"📊 Resultado dos sinais","callback_data":"sig_status"}],
-  [{"text":"📉 Ligar Dip Bot","callback_data":"dip_on"},{"text":"⏹️ Parar Dip Bot","callback_data":"dip_off"}],
-  [{"text":"📊 Dip Bot: resultado","callback_data":"dip_status"}],
-  [{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
-  [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -234,35 +227,9 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
- if action in ("sig_on","sig_off","sig_status","/sinais","sig_auto_on","sig_auto_off"):
-  import signals as sg
-  try:
-   if action=="sig_on":sg.set_enabled(True);pre="📡 SINAIS LIGADOS: te aviso a entrada, o stop e os alvos quando aparecer uma boa oportunidade.\n\n"
-   elif action=="sig_auto_on":sg.set_auto(True);pre="🤖 SINAIS OPERANDO SOZINHOS (dinheiro real): cada sinal compra US$ "+format(sg.AUTO_USD,".0f")+" na sua carteira (máx. "+str(sg.AUTO_MAX_OPEN)+" abertas) e vende no TP1/TP2/TP3 e no stop do sinal, o dia inteiro.\n\n"
-   elif action=="sig_auto_off":sg.set_auto(False);pre="✋ Sinais só avisam: não compram mais sozinhos. As operações já abertas continuam com o stop e os alvos.\n\n"
-   elif action=="sig_off":sg.set_enabled(False);pre="⏹️ Sinais desligados: não mando sinais novos. Os abertos continuam sendo acompanhados até fechar.\n\n"
-   else:pre=""
-   send(chat,pre+sg.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Sinais: "+str(exc)[:200],keyboard())
-  return
- if action in ("rk_on","rk_off","rk_status","/sniper"):
-  import rocket_bot
-  try:
-   if action=="rk_on":rocket_bot.set_enabled(True);pre="🚀 SNIPER LIGADO (dinheiro real): compra US$ "+format(rocket_bot.ORDER_USD,".0f")+" nas moedas novas da pump.fun que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
-   elif action=="rk_off":rocket_bot.set_enabled(False);pre="⏹️ Sniper parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
-   else:pre=""
-   send(chat,pre+rocket_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
-  return
- if action in ("dip_on","dip_off","dip_status","/dip"):
-  import dip_bot
-  try:
-   if action=="dip_on":dip_bot.set_enabled(True);pre="📉 DIP BOT LIGADO (dinheiro real): compra US$ "+format(dip_bot.ORDER_USD,".0f")+" nas quedas fortes de moedas em alta, máx. "+str(dip_bot.MAX_OPEN)+" abertas.\n\n"
-   elif action=="dip_off":dip_bot.set_enabled(False);pre="⏹️ Dip Bot parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
-   else:pre=""
-   send(chat,pre+dip_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Dip Bot: "+str(exc)[:200],keyboard())
-  return
+ if action in ("sig_on","sig_off","sig_status","/sinais","sig_auto_on","sig_auto_off","rk_on","rk_off","rk_status",
+               "/sniper","dip_on","dip_off","dip_status","/dip"):
+  send(chat,"🗑️ Sinais, Dip Bot e Sniper foram removidos. O bot agora faz só o copy trade.",keyboard());return
  if action in ("unstick","/destravar"):
   send(chat,"🔧 Conferindo as ordens pendentes na blockchain…")
   def run_unstick():
@@ -519,57 +486,6 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
-def signals_loop():
- """Signals bot: scans Solana memecoins every SIGNAL_SCAN_SECONDS and follows the open signals."""
- import signals
- SIG_BEAT["thread"]=threading.get_ident()
- while True:
-  SIG_BEAT["at"]=time.time()
-  time.sleep(signals.SCAN_EVERY_S)
-  SIG_BEAT["at"]=time.time()
-  try:
-   chat=active_chat()
-   if not chat:logging.info("signals scan: no active chat")
-   if chat:logging.info("signals scan: start");signals.cycle(send,chat)
-   elif signals._load()["open"]:signals.follow_up(signals.prices_now({x["mint"] for x in signals._load()["open"].values()}))
-  except Exception as exc:logging.exception("signals cycle failed: %s",type(exc).__name__)
-def rocket_loop():
- """Rocket Sniper: every ROCKET_SCAN_SECONDS looks for new pump.fun coins exploding in buys and buys them."""
- import rocket_bot,signals
- while True:
-  time.sleep(rocket_bot.SCAN_EVERY_S)
-  try:
-   chat=active_chat()
-   if chat:rocket_bot.take_profits(send,chat)
-   if not chat or not rocket_bot.enabled():continue
-   fresh=time.time()-signals.PAIRS["at"]<40
-   pairs=signals.PAIRS["pairs"] if fresh else signals.candidate_pairs()
-   if not fresh:signals.PAIRS.update(at=time.time(),pairs=pairs)    # the Dip Bot reuses this scan
-   rocket_bot.cycle(send,chat,pairs=pairs)
-  except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
-SIG_BEAT={"at":0.0,"thread":None,"dumped":0.0}
-def signals_watchdog():
- """If the signals scan is stuck for 10+ minutes, log where (stack of its thread) so it can be fixed."""
- import sys,traceback
- while True:
-  time.sleep(60)
-  try:
-   if SIG_BEAT["at"] and time.time()-SIG_BEAT["at"]>600 and time.time()-SIG_BEAT["dumped"]>1800:
-    SIG_BEAT["dumped"]=time.time()
-    frame=sys._current_frames().get(SIG_BEAT["thread"])
-    logging.warning("signals scan stuck %.0fs at:\n%s",time.time()-SIG_BEAT["at"],"".join(traceback.format_stack(frame)) if frame else "thread gone")
-  except Exception:pass
-def dip_loop():
- """Dip Buying Bot: every DIP_SCAN_SECONDS looks for sharp dips of strong pump.fun coins and buys them."""
- import dip_bot,signals
- while True:
-  time.sleep(dip_bot.SCAN_EVERY_S)
-  try:
-   chat=active_chat()
-   if not chat or not dip_bot.enabled():continue
-   fresh=time.time()-signals.PAIRS["at"]<90
-   dip_bot.cycle(send,chat,pairs=signals.PAIRS["pairs"] if fresh else None)
-  except Exception as exc:logging.warning("dip cycle failed: %s",type(exc).__name__)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
 def copy_beat_line():
@@ -695,10 +611,6 @@ def loop():
   import copy_trader
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
- threading.Thread(target=signals_loop,daemon=True).start()
- threading.Thread(target=dip_loop,daemon=True).start()
- threading.Thread(target=rocket_loop,daemon=True).start()
- threading.Thread(target=signals_watchdog,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()

@@ -14,6 +14,11 @@ _quote_fail_since = {}  # mint -> monotonic time quotes started failing
 _quote_err_logged = {}  # mint -> last time the reason was logged
 ARMED = []  # (mint, position, signal) whose trailing stop just started: live_engine tells the owner
 CONSENSUS_EXIT = {"stop_loss": "0.40", "arm": "1.25", "drop": "0.10"}   # removed consensus robot's positions
+# Removed robots (signals, Dip Bot, Sniper): positions still open keep a safe exit until they are sold
+REMOVED_BOT_EXIT = {"rocket": {"stop_loss": "0.40", "arm": "1.30", "drop": "0.15"},
+                    "dip": {"stop_loss": "0.40", "arm": "1.12", "drop": "0.06"},
+                    "signal": {"stop_loss": "0.40", "arm": "1.25", "drop": "0.10"}}
+REMOVED_BOT_MAX_HOLD_S = 6 * 3600
 
 
 def trail_text(position):
@@ -22,12 +27,8 @@ def trail_text(position):
         return format(float(CONSENSUS_EXIT["drop"]) * 100, ".0f")
     if position.get("copy_orphan"):
         return format(float(ORPHAN_EXIT["drop"]) * 100, ".0f")
-    if position.get("mode") == "rocket":
-        import rocket_bot
-        return format(rocket_bot.TRAIL_DROP * 100, ".0f")
-    if position.get("mode") == "dip":
-        import dip_bot
-        return format(dip_bot.TRAIL_DROP * 100, ".0f")
+    if position.get("mode") in REMOVED_BOT_EXIT:
+        return format(float(REMOVED_BOT_EXIT[position["mode"]]["drop"]) * 100, ".0f")
     return format(float(SNIPER_EXIT["drop"]) * 100, ".0f")
 DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
@@ -61,29 +62,12 @@ def position_signal(position, cost, proceeds):
         if signal["action"] == "hold" and held > SNIPER_MAX_HOLD_SECONDS and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
         return signal
-    if position.get("mode") == "rocket":
-        # Rocket Sniper: stop -40%, from +30% trailing 15% below the top, out after 90 min if it never took off
-        import rocket_bot
-        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rocket_bot.EXIT)
+    if position.get("mode") in REMOVED_BOT_EXIT:
+        # robot removed: stop -40%, trailing stop once in profit, out after 6 h if it never took off
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **REMOVED_BOT_EXIT[position["mode"]])
         held = time.time() - float(position.get("opened_at") or time.time())
-        if signal["action"] == "hold" and held > rocket_bot.MAX_HOLD_S and signal["reason"] != "trailing":
+        if signal["action"] == "hold" and held > REMOVED_BOT_MAX_HOLD_S and signal["reason"] != "trailing":
             signal.update(action="sell", reason="time_stop")
-        return signal
-    if position.get("mode") == "dip":
-        # Dip Buying Bot: stop -40%, from +12% trailing 6% below the top, out after 6 h if it never took off
-        import dip_bot
-        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **dip_bot.EXIT)
-        held = time.time() - float(position.get("opened_at") or time.time())
-        if signal["action"] == "hold" and held > dip_bot.MAX_HOLD_S and signal["reason"] != "trailing":
-            signal.update(action="sell", reason="time_stop")
-        return signal
-    if position.get("mode") == "signal":
-        # Signals bot: signals.follow_up sells at TP1/TP2/TP3, the signal's stop and the time limit.
-        # Here only a safety stop in between (quotes every 20 s): the signal's risk + 10% (max 40%).
-        stop = min(0.40, float(position.get("sig_risk") or 0.30) + 0.10)
-        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), stop_loss=str(stop), arm="1000", drop="0")
-        if signal["action"] == "sell":
-            signal["reason"] = "signal_safety_stop"
         return signal
     if position.get("mode") == "consensus":
         # robot removed; its open positions keep their rules: stop -40%, from +25% trailing 10% below the top
