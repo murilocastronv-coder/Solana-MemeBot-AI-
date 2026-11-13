@@ -27,7 +27,7 @@ import signals as sg
 ORDER_USD = sg._f("ROCKET_ORDER_USD", 20)
 MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 4))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
-MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 30_000)
+MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 15_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
 MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 80) * 60
 MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 7 * 24 * 60) * 60     # 7 days
@@ -247,7 +247,7 @@ def rocket_reason(p, now=None):
     liq = float((p.get("liquidity") or {}).get("usd") or 0)
     if not sg.is_pump(p):
         return "não é da pump.fun"
-    # real liquidity of the pool, for EVERY coin (also on the launch curve): owner's minimum US$ 30k
+    # real liquidity of the pool, for EVERY coin (also on the launch curve): owner's minimum US$ 15k
     if liq < MIN_LIQ:
         return "liquidez baixa (< US$ " + format(MIN_LIQ / 1000, ".0f") + " mil)"
     if liq > MAX_LIQ:

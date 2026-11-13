@@ -84,7 +84,8 @@ class RocketTests(unittest.TestCase):
         curve = pair(dexId="pumpfun", liquidity={"usd": 5_000}, marketCap=60_000)
         self.assertIn("liquidez baixa", rb.rocket_reason(curve, NOW))        # 5k liquidity: never, even on the curve
         self.assertIn("liquidez baixa", rb.rocket_reason(dict(curve, liquidity={"usd": 0}), NOW))
-        self.assertEqual(rb.rocket_reason(dict(curve, liquidity={"usd": 30_000}), NOW), "")
+        self.assertEqual(rb.rocket_reason(dict(curve, liquidity={"usd": 15_000}), NOW), "")
+        self.assertIn("liquidez baixa", rb.rocket_reason(dict(curve, liquidity={"usd": 14_000}), NOW))
 
     def test_most_bought_first(self):
         less = pair(baseToken={"address": "A" * 40 + "pump", "symbol": "A"})
