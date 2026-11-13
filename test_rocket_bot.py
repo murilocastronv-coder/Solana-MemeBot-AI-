@@ -100,10 +100,11 @@ class RocketTests(unittest.TestCase):
         self.assertEqual((out["action"], out["reason"]), ("sell", "rocket_dca_target"))
         self.assertEqual(lem.position_signal(pos, 20, 5)["action"], "hold")              # -75%: no stop loss
 
-    def test_coin_on_the_launch_curve_is_judged_by_market_cap(self):
-        curve = pair(dexId="pumpfun", liquidity={"usd": 0}, marketCap=60_000)
-        self.assertEqual(rb.rocket_reason(curve, NOW), "")
-        self.assertIn("market cap baixo", rb.rocket_reason(dict(curve, marketCap=20_000), NOW))
+    def test_minimum_liquidity_30k_for_every_coin(self):
+        curve = pair(dexId="pumpfun", liquidity={"usd": 5_000}, marketCap=60_000)
+        self.assertIn("liquidez baixa", rb.rocket_reason(curve, NOW))        # 5k liquidity: never, even on the curve
+        self.assertIn("liquidez baixa", rb.rocket_reason(dict(curve, liquidity={"usd": 0}), NOW))
+        self.assertEqual(rb.rocket_reason(dict(curve, liquidity={"usd": 30_000}), NOW), "")
 
     def test_most_bought_first(self):
         less = pair(baseToken={"address": "A" * 40 + "pump", "symbol": "A"})
