@@ -18,14 +18,14 @@ import time
 # set on Render: COPY_REFERENCE_WALLET=<wallet>. Empty = old behaviour (no reference wallet).
 REFERENCE = os.getenv("COPY_REFERENCE_WALLET", "").strip()
 ENABLED = os.getenv("COPY_TWIN_SEARCH", "true").strip().lower() != "false"
-MIN_SIMILARITY = float(os.getenv("COPY_TWIN_MIN_SIMILARITY", "60"))
+MIN_SIMILARITY = float(os.getenv("COPY_TWIN_MIN_SIMILARITY", "50"))
 MIN_WIN = float(os.getenv("COPY_TWIN_MIN_WIN", "0.45"))
 MIN_TRADES = int(float(os.getenv("COPY_TWIN_MIN_TRADES", "15")))
 PROFILE_MAX_AGE_S = float(os.getenv("COPY_TWIN_PROFILE_HOURS", "12")) * 3600
 PUMP = ("pump.fun", "PumpSwap")
 # Sniper search (owner's choice): wallets that snipe memecoins - buy the coin right after it is born
 # (median coin age at its buy <= SNIPE_MAX_AGE_MIN, or most buys still on the pump.fun launch curve)
-# and hold each coin SNIPE_HOLD_MIN-SNIPE_HOLD_MAX minutes (median). Style similarity is then only shown.
+# and hold each coin SNIPE_HOLD_MIN-SNIPE_HOLD_MAX minutes (median), AND trade like the reference wallet.
 SNIPER = os.getenv("COPY_SNIPER_SEARCH", "true").strip().lower() != "false"
 SNIPE_MAX_AGE_MIN = float(os.getenv("COPY_SNIPE_MAX_COIN_AGE_MINUTES", "15"))
 SNIPE_MIN_CURVE = float(os.getenv("COPY_SNIPE_MIN_CURVE_SHARE", "0.5"))
@@ -138,7 +138,7 @@ def judge(cand_style, audit, ref):
         if not sniper:
             return False, sim, ("não é sniper (compra moeda com " + format(age, ".0f") + " min)" if age is not None
                                 else "não é sniper (pouco na curva da pump.fun)")
-    elif sim < MIN_SIMILARITY:
+    if sim < MIN_SIMILARITY:                   # sniper AND trades like the reference wallet
         return False, sim, "estilo diferente (" + format(sim, ".0f") + "%)"
     if a.get("trades_recent", 0) < MIN_TRADES:
         return False, sim, "poucas operações recentes"

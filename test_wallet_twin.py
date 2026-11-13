@@ -39,8 +39,10 @@ class TwinTests(unittest.TestCase):
         self.assertLess(wt.similarity(REF_STYLE, other), 30)
 
     def test_sniper_search(self):
-        snipe = dict(REF_STYLE, hold_min=12.0, entry_age_min=3.0, curve_share=0.8, trades_day=3.0, size_usd=500.0)
-        self.assertTrue(wt.judge(snipe, audit(snipe), REF_STYLE)[0])            # style differs, but it snipes
+        snipe = dict(REF_STYLE, hold_min=12.0, entry_age_min=3.0, curve_share=0.8)
+        self.assertTrue(wt.judge(snipe, audit(snipe), REF_STYLE)[0])
+        far = dict(snipe, trades_day=0.5, size_usd=5000.0, pump_share=0.0, scale_out=0.0, scale_in=0.0)
+        self.assertIn("estilo diferente", wt.judge(far, audit(far), REF_STYLE)[2])   # snipes, but not like it
         self.assertIn("segura pouco", wt.judge(dict(snipe, hold_min=2.0), audit(snipe), REF_STYLE)[2])
         self.assertIn("segura muito", wt.judge(dict(snipe, hold_min=60.0), audit(snipe), REF_STYLE)[2])
         self.assertIn("não é sniper", wt.judge(dict(snipe, entry_age_min=300.0), audit(snipe), REF_STYLE)[2])
