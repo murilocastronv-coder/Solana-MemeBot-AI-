@@ -1,8 +1,9 @@
-"""Web panel of the bot (read-only): follow everything in the browser instead of Telegram.
+"""Web panel of the bot: follow everything in the browser instead of Telegram, and turn the copy
+trade / Sniper on and off. The bot runs on the server: closing the page changes nothing.
 
 Protected by a password: set DASHBOARD_PASSWORD (12+ characters) in Render > Environment.
 Open https://<service>.onrender.com/painel ; the browser asks user (anything) and password.
-Read-only: it never buys, sells or shows private keys.
+It never shows private keys; the only actions are the on/off switches (form posts with a CSRF token).
 """
 import collections
 import hmac
@@ -29,6 +30,18 @@ def authorized(auth):
     if len(pw) < 12 or auth is None:
         return False
     return hmac.compare_digest(str(auth.password or "").encode(), pw.encode())
+
+
+def csrf_token():
+    return hmac.new(password().encode(), b"painel-csrf-v1", "sha256").hexdigest()
+
+
+def csrf_ok(token):
+    return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
+
+
+ACTIONS = {"copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado",
+           "rk_on": "Sniper ligado", "rk_off": "Sniper desligado"}
 
 
 def _e(x):
@@ -120,11 +133,38 @@ th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);white-
 .tw{overflow-x:auto}pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.5 ui-monospace,Menlo,monospace;color:#d6d9de}
 a{color:#9db4ff}.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;background:#2a2e37}
 .ok{background:rgba(52,199,89,.15);color:var(--up)}.bad{background:rgba(255,69,58,.15);color:var(--down)}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.btn{border:0;border-radius:10px;padding:10px 14px;font-size:15px;font-weight:600;color:#fff;background:#3a3f4b;cursor:pointer;margin:2px 4px 2px 0}
+.btn.go{background:#2e8b57}.btn.stop{background:#b23b3b}
 .note{border-bottom:1px solid var(--line);padding:8px 0}.note:last-child{border:0}.note .t{color:var(--mut);font-size:12px}
 """
 
 
-def page():
+def _button(action, label, style=""):
+    return ("<form method='post' action='/painel/acao' style='display:inline'><input type='hidden' name='csrf' value='" +
+            csrf_token() + "'><input type='hidden' name='acao' value='" + action + "'><button class='btn " + style + "'>" +
+            label + "</button></form> ")
+
+
+def controls(s):
+    try:
+        import rocket_bot
+        rk_on = rocket_bot.enabled()
+    except Exception:
+        rk_on = None
+    copy_on = isinstance(s, dict) and s.get("copy_real")
+    return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>👥 Copy trade</b> — " +
+            ("<span class='pill ok'>REAL ligado</span>" if copy_on else "<span class='pill bad'>desligado</span>") +
+            "<div style='margin-top:8px'>" + _button("copy_real", "💵 Ligar (REAL)", "go") + _button("copy_off", "⏹️ Parar", "stop") +
+            "</div></div><div><b>🚀 Sniper</b> — " +
+            ("<span class='pill ok'>ligado</span>" if rk_on else "<span class='pill bad'>desligado</span>") +
+            "<div style='margin-top:8px'>" + _button("rk_on", "🚀 Ligar", "go") + _button("rk_off", "⏹️ Parar", "stop") +
+            "</div></div></div><div class='mut' style='margin-top:10px'>O bot roda no servidor 24 h: pode fechar esta aba "
+            "ou o celular que ele continua operando até você tocar em Parar. Parar não vende as posições abertas: "
+            "elas continuam com stop, stop móvel e alvos até fechar.</div></div>")
+
+
+def page(msg=""):
     import copy_trader as ct
     try:
         import rocket_bot
@@ -135,6 +175,9 @@ def page():
            "<meta http-equiv='refresh' content='30'><title>Painel do bot</title><style>", CSS, "</style></head><body><main>",
            "<h1>📊 Painel do bot</h1><div class='mut'>Atualiza sozinho a cada 30 s · ", _e(time.strftime("%d/%m %H:%M:%S UTC", time.gmtime())),
            "</div>"]
+    if msg:
+        out += ["<div class='card' style='border-color:var(--acc)'>✅ ", _e(msg), "</div>"]
+    out.append(controls(s))
     if isinstance(s, dict):
         state = ("<span class='pill ok'>robô pronto</span>" if s["ready"] else
                  "<span class='pill bad'>parado: " + _e(s["why"] or "?") + "</span>")

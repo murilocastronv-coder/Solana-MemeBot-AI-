@@ -684,8 +684,48 @@ def panel():
    "Painel desligado: crie a variável <b>DASHBOARD_PASSWORD</b> (12+ caracteres) no Render &gt; Environment.</p>",status=503,mimetype="text/html")
  if not dashboard.authorized(request.authorization):
   return Response("Senha do painel",status=401,headers={"WWW-Authenticate":'Basic realm="Painel do bot"',"Cache-Control":"no-store"})
- return Response(dashboard.page(),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
-  "X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer"})
+ msg=dashboard.ACTIONS.get(request.args.get("ok",""),"")
+ return Response(dashboard.page(msg),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
+  "X-Content-Type-Options":"nosniff","Referrer-Policy":"same-origin"})
+def web_action(action):
+ """On/off switches of the web panel (same effect as the Telegram buttons)."""
+ import copy_trader as ct
+ chat=active_chat()
+ def start_engine(what):
+  try:live_engine.start()
+  except Exception:
+   if not trade_state.pending_orders():raise
+   if chat:start_real_or_wait(chat,what)
+ if action=="copy_real":start_engine("copy trade");ct.set_mode(True,True)
+ elif action=="copy_off":ct.set_mode(False)
+ elif action=="rk_on":
+  import rocket_bot
+  start_engine("Sniper");rocket_bot.set_enabled(True)
+ elif action=="rk_off":
+  import rocket_bot
+  rocket_bot.set_enabled(False)
+ else:raise ValueError("ação desconhecida")
+ note="🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]
+ try:
+  if chat:send(chat,note)
+  else:__import__("dashboard").record(note)
+ except Exception:__import__("dashboard").record(note)
+@app.post("/painel/acao")
+def panel_action():
+ import dashboard
+ from urllib.parse import urlparse
+ if len(dashboard.password())<12 or not dashboard.authorized(request.authorization):
+  return Response("Senha do painel",status=401,headers={"WWW-Authenticate":'Basic realm="Painel do bot"'})
+ origin=request.headers.get("Origin") or request.headers.get("Referer") or ""
+ if origin and urlparse(origin).netloc!=request.host:return Response("Origem inválida",status=403)
+ if not dashboard.csrf_ok(request.form.get("csrf")):return Response("Formulário expirado: recarregue o painel",status=403)
+ action=request.form.get("acao","")
+ if action not in dashboard.ACTIONS:return Response("Ação inválida",status=400)
+ try:web_action(action)
+ except Exception as exc:
+  return Response("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><p style='font-family:sans-serif'>⛔ Não consegui: "+
+   __import__("html").escape(str(exc)[:200])+"</p><p><a href='/painel'>Voltar ao painel</a></p>",status=500,mimetype="text/html")
+ return Response(status=303,headers={"Location":"/painel?ok="+action})
 @app.get("/")
 def health():return {"service":"solana-memecoin-copytrade","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":live_engine.ready()}
 if __name__=="__main__":
