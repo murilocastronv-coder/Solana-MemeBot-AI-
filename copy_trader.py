@@ -1762,9 +1762,12 @@ def preaudit_and_follow(candidate, rpc, sol_usd):
         import wallet_twin
         ref = wallet_twin.reference_style(rpc, sol_usd)
         if not ref:
+            logging.warning("twin search: não consegui medir a carteira de referência ainda")
             return "full"                 # reference wallet not measured yet: try again later
         ok, sim, why = wallet_twin.judge(audit.get("style"), audit, ref)
         TWIN_LOG[:] = (TWIN_LOG + [(time.strftime("%H:%M"), address, sim, why or "aprovada")])[-8:]
+        logging.info("twin search: %s… %.0f%% parecida — %s | ref: %s | ela: %s", address[:6], sim, why or "APROVADA",
+                     wallet_twin.describe(ref), wallet_twin.describe(audit.get("style")))
         if not ok:
             _reject([address])
             return "rejected"
