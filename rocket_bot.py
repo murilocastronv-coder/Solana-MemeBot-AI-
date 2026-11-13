@@ -27,10 +27,10 @@ import signals as sg
 ORDER_USD = sg._f("ROCKET_ORDER_USD", 10)
 MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 5))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
-MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 5_000)
+MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 30_000)
 # coins still on the pump.fun launch curve: DexScreener shows little or no "liquidity" for them,
 # so their size is checked by market cap instead (the curve ends at ~US$ 69k-100k)
-MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 5_000)
+MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 30_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
 MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 80) * 60
 MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 48 * 60) * 60
@@ -145,19 +145,45 @@ def _dca_buy(mint, pos, send, chat):
     return "" if settled else "compra não confirmada"
 
 
-def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None):
-    """Sell part of a rocket position at 2x and 5x (runs every scan, even with the sniper off)."""
+# Basket stop (owner's choice): once the sniper holds MAX_OPEN coins, if all of them together are
+# BASKET_DROP below what they cost, it closes every sniper order.
+BASKET_DROP = sg._f("ROCKET_BASKET_DROP", 0.25)
+
+
+def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None, closer=None):
+    """Sell part of a rocket position at 2x and 5x, rebuy at -20%, basket stop (runs every scan, even off)."""
     import live_trade_state as st
     done = []
+    if quote is None:
+        from live_exit_monitor import quote_value_usd as quote
+    values = {}
     for mint, pos in list(st._load()["positions"].items()):
         if pos.get("mode") != "rocket":
             continue
         try:
-            if quote is None:
-                from live_exit_monitor import quote_value_usd as quote
-            ratio = float(quote(mint, int(pos["token_amount_raw"]))) / float(pos["cost_usd"])
+            values[mint] = (pos, float(quote(mint, int(pos["token_amount_raw"]))))
         except Exception:
             continue
+    rocket_open = st.positions_by_mode("rocket")
+    cost = sum(float(p.get("cost_usd") or 0) for p, _ in values.values())
+    worth = sum(v for _, v in values.values())
+    if rocket_open >= MAX_OPEN and len(values) == rocket_open and cost > 0 and worth <= (1 - BASKET_DROP) * cost:
+        if send and chat:
+            send(chat, "🛑 SNIPER: as " + str(rocket_open) + " ordens juntas caíram " + format((1 - worth / cost) * 100, ".0f") +
+                 "% (US$ " + format(cost, ".2f") + " → US$ " + format(worth, ".2f") + "). Fechando todas.")
+        for mint in values:
+            try:
+                if closer:
+                    closer(mint)
+                else:
+                    import live_engine
+                    live_engine.sell_now(mint, "rocket_basket_stop", send, chat)
+            except Exception as exc:
+                logging.warning("rocket basket stop %s failed: %s", mint[:8], type(exc).__name__)
+            done.append((mint, "basket"))
+        return done
+    for mint, (pos, value) in values.items():
+        ratio = value / float(pos["cost_usd"])
         if pos.get("dca_done"):
             continue                                # after the rebuy: sells all at +20% over the average
         if ratio <= 1 - DCA_DROP and not pos.get("tp_2x"):
@@ -370,7 +396,8 @@ def status_text():
              "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · 📉 se cair " +
              format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") + " e fecha tudo em +" +
              format(DCA_TARGET * 100, ".0f") + "% sobre o preço médio · 💰 em 2x vende metade "
-             "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
+             "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · 🛑 com " + str(MAX_OPEN) +
+             " abertas, se todas juntas caírem " + format(BASKET_DROP * 100, ".0f") + "% fecha todas · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
              " perdas seguidas · sem limite diário."]
     try:
         hist = [h for h in st.history() if h.get("mode") == "rocket" and h.get("pnl_usd") is not None]
