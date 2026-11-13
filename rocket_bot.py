@@ -2,7 +2,7 @@
 
 Real money in the owner's wallet, separate from the signals bot and the Dip Bot (mode "rocket").
 - Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 1 h 20 min to 7 days old; the most popular first
-  (most buyers in the last 5 minutes). Shares the 50% limit of the copy trade (rest stays in SOL).
+  (most buyers in the last 5 minutes). Shares the 70% limit of the copy trade (rest stays in SOL).
 - Explosion: up 5-60% in the last 5 minutes and green in the hour (not more than +400%), 30+ buys in
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
 - Anti-scam checks of the signals bot (holders, freeze/mint authority, token program, RugCheck).

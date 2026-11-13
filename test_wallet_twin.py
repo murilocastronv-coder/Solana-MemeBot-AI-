@@ -33,11 +33,11 @@ class TwinTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def test_at_most_half_of_the_account_in_coins(self):
-        self.assertEqual(c.exposure_cap(10, 100, 30)[0], 10)        # 30% in coins: room for 20
-        self.assertEqual(c.exposure_cap(10, 100, 45)[0], 5)         # only 5 left to reach 50%
-        self.assertIsNone(c.exposure_cap(10, 100, 50)[0])           # already 50%: keep the rest in SOL
-        self.assertIn("máximo 50%", c.status_text().replace("no máximo 50%", "máximo 50%"))
+    def test_at_most_70_percent_of_the_account_in_coins(self):
+        self.assertEqual(c.exposure_cap(10, 100, 50)[0], 10)        # 50% in coins: room for 20
+        self.assertEqual(c.exposure_cap(10, 100, 65)[0], 5)         # only 5 left to reach 70%
+        self.assertIsNone(c.exposure_cap(10, 100, 70)[0])           # already 70%: keep the rest in SOL
+        self.assertIn("no máximo 70%", c.status_text())
 
     def test_similarity(self):
         self.assertEqual(wt.similarity(REF_STYLE, REF_STYLE), 100.0)
