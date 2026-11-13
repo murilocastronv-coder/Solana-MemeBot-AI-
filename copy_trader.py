@@ -35,9 +35,9 @@ def _env(name, default):
 
 
 ORDER_USD = _env("COPY_ORDER_USD", 32)   # US$ per copied position
-MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 12))   # at most 12 copied operations open
+MAX_POSITIONS = int(_env("COPY_MAX_POSITIONS", 4))   # at most 4 copied operations open
 # Simulation: copy + strategy robot together never hold more than this many open orders.
-MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 12))
+MAX_OPEN_TOTAL = int(_env("MAX_OPEN_ORDERS", 4))
 STOP_LOSS = _env("COPY_STOP_LOSS", 0.15)
 # "wallet" (default): no fixed TP/SL, exit only when the copied wallet sells (same movement).
 # "tp_sl": also use COPY_TAKE_PROFIT / COPY_STOP_LOSS.

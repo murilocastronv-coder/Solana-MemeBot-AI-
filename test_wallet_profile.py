@@ -154,7 +154,7 @@ class NewRulesTests(unittest.TestCase):
 
     def test_defaults_three_orders(self):
         import live_trade_state
-        self.assertEqual((c.MAX_POSITIONS, c.MAX_OPEN_TOTAL, live_trade_state.MAX_POSITIONS), (12, 12, 12))
+        self.assertEqual((c.MAX_POSITIONS, c.MAX_OPEN_TOTAL, live_trade_state.MAX_POSITIONS), (4, 4, 4))
 
     def test_cloned_fast_wallet_never_opens(self):
         c.set_mode(True)
