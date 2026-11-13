@@ -31,7 +31,7 @@ class RocketTests(unittest.TestCase):
         self.assertEqual(rb.rocket_reason(pair(), NOW), "")
 
     def test_rejections(self):
-        self.assertIn("velha", rb.rocket_reason(pair(pairCreatedAt=(NOW - 50 * 3600) * 1000), NOW))
+        self.assertIn("velha", rb.rocket_reason(pair(pairCreatedAt=(NOW - 8 * 86400) * 1000), NOW))
         self.assertIn("nova demais", rb.rocket_reason(pair(pairCreatedAt=(NOW - 70 * 60) * 1000), NOW))
         self.assertIn("sem explosão", rb.rocket_reason(pair(priceChange={"m5": 1, "h1": 50}), NOW))
         self.assertIn("pico vertical", rb.rocket_reason(pair(priceChange={"m5": 95, "h1": 150}), NOW))

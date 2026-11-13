@@ -1,7 +1,7 @@
-"""Rocket Sniper: buys the hottest new pump.fun coins (1 h 20 min - 48 h old) the moment they explode in buys, lets winners run.
+"""Rocket Sniper: buys the hottest new pump.fun coins (1 h 20 min - 7 days old) the moment they explode in buys, lets winners run.
 
 Real money in the owner's wallet, separate from the signals bot and the Dip Bot (mode "rocket").
-- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 1 h 20 min to 48 hours old; the most popular first
+- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 1 h 20 min to 7 days old; the most popular first
   (most buyers in the last 5 minutes). Shares the 50% limit of the copy trade (rest stays in SOL).
 - Explosion: up 5-60% in the last 5 minutes and green in the hour (not more than +400%), 30+ buys in
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
@@ -33,7 +33,7 @@ MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 30_000)
 MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 30_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
 MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 80) * 60
-MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 48 * 60) * 60
+MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 7 * 24 * 60) * 60     # 7 days
 MIN_UP_5M = sg._f("ROCKET_MIN_UP_5M", 2)
 MAX_UP_5M = sg._f("ROCKET_MAX_UP_5M", 80)
 MAX_UP_1H = sg._f("ROCKET_MAX_UP_1H", 400)
@@ -218,6 +218,8 @@ def _age_txt(seconds):
     m = int(round(seconds / 60))
     if m < 60:
         return str(m) + " min"
+    if m >= 48 * 60 and m % (24 * 60) == 0:
+        return str(m // (24 * 60)) + " dias"
     return str(m // 60) + " h" + (" " + str(m % 60) + " min" if m % 60 else "")
 
 

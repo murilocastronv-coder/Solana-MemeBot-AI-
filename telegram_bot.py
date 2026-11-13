@@ -232,7 +232,7 @@ def handle(update):
  if action in ("rk_on","rk_off","rk_status","/sniper"):
   import rocket_bot
   try:
-   if action=="rk_on":rocket_bot.set_enabled(True);pre="🚀 SNIPER LIGADO (dinheiro real): compra US$ "+format(rocket_bot.ORDER_USD,".0f")+" nas moedas mais populares da pump.fun com 1 h 20 min a 48 h de vida que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
+   if action=="rk_on":rocket_bot.set_enabled(True);pre="🚀 SNIPER LIGADO (dinheiro real): compra US$ "+format(rocket_bot.ORDER_USD,".0f")+" nas moedas mais populares da pump.fun com 1 h 20 min a 7 dias de vida que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
    elif action=="rk_off":rocket_bot.set_enabled(False);pre="⏹️ Sniper parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
    else:pre=""
    send(chat,pre+rocket_bot.status_text(),keyboard())
