@@ -78,6 +78,10 @@ def should_send(text,now=None,chat=None):
    for k in sorted(SENT_AT,key=SENT_AT.get)[:1000]:SENT_AT.pop(k,None)
  return True
 def send(chat,text,keyboard=None):
+ try:
+  import dashboard
+  dashboard.record(text)          # the web panel shows every notice, even when Telegram is down
+ except Exception:pass
  if not should_send(text,chat=chat):
   logging.info("repeated notice held back (%.0f h): %s",NOTIFY_REPEAT_S/3600,(text or "")[:80].replace("\n"," "))
   return {}
@@ -671,6 +675,17 @@ def export_page():
  """Private key export was removed from the bot (for every account)."""
  return Response("<!doctype html><meta charset='utf-8'><p>Exportação de chave privada desativada.</p>",status=410,
   mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY"})
+@app.get("/painel")
+def panel():
+ """Web panel (read-only, password DASHBOARD_PASSWORD): follow the bot without Telegram."""
+ import dashboard
+ if len(dashboard.password())<12:
+  return Response("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><p style='font-family:sans-serif'>"
+   "Painel desligado: crie a variável <b>DASHBOARD_PASSWORD</b> (12+ caracteres) no Render &gt; Environment.</p>",status=503,mimetype="text/html")
+ if not dashboard.authorized(request.authorization):
+  return Response("Senha do painel",status=401,headers={"WWW-Authenticate":'Basic realm="Painel do bot"',"Cache-Control":"no-store"})
+ return Response(dashboard.page(),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
+  "X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer"})
 @app.get("/")
 def health():return {"service":"solana-memecoin-copytrade","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":live_engine.ready()}
 if __name__=="__main__":
