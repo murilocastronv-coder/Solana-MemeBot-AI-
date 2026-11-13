@@ -1,7 +1,7 @@
 """Rocket Sniper: buys the hottest new pump.fun coins (5-15 min old) the moment they explode in buys, lets winners run.
 
 Real money in the owner's wallet, separate from the signals bot and the Dip Bot (mode "rocket").
-- Coins: pump.fun, liquidity US$ 10k-150k, SOL/USDC pair, 5-15 minutes old; the most popular first
+- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 5-15 minutes old; the most popular first
   (most buyers in the last 5 minutes). Shares the 50% limit of the copy trade (rest stays in SOL).
 - Explosion: up 5-60% in the last 5 minutes and green in the hour (not more than +400%), 30+ buys in
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
@@ -27,10 +27,10 @@ import signals as sg
 ORDER_USD = sg._f("ROCKET_ORDER_USD", 10)
 MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 5))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
-MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 10_000)
+MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 5_000)
 # coins still on the pump.fun launch curve: DexScreener shows little or no "liquidity" for them,
 # so their size is checked by market cap instead (the curve ends at ~US$ 69k-100k)
-MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 8_000)
+MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 5_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
 MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 5) * 60
 MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 15) * 60
