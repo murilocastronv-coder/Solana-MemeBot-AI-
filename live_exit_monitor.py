@@ -65,22 +65,16 @@ def position_signal(position, cost, proceeds):
             signal.update(action="sell", reason="time_stop")
         return signal
     if position.get("mode") == "rocket":
-        # Rocket Sniper: stop -40%, from +30% trailing 15% below the top, out after 90 min if it never took off
+        # Rocket Sniper: no stop loss; from +30% trailing 15% below the top; after the -20% rebuy, all at +20%
         import rocket_bot
         if position.get("dca_done"):
-            # rebought lower: close everything at +20% over the average price (stop -40% of the average)
+            # rebought lower: close everything at +20% over the average price
             signal = trailing_exit_signal(cost, proceeds, 0, **rocket_bot.DCA_EXIT)
             if signal["action"] == "sell" and signal["reason"] != "stop_loss":
                 signal["reason"] = "rocket_dca_target"
-            held = time.time() - float(position.get("dca_at") or position.get("opened_at") or time.time())
-            if signal["action"] == "hold" and held > rocket_bot.MAX_HOLD_S:
-                signal.update(action="sell", reason="time_stop")
             return signal
-        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rocket_bot.EXIT)
-        held = time.time() - float(position.get("opened_at") or time.time())
-        if signal["action"] == "hold" and held > rocket_bot.MAX_HOLD_S and signal["reason"] != "trailing":
-            signal.update(action="sell", reason="time_stop")
-        return signal
+        # no stop loss and no time stop (owner's choice): sells only with profit
+        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rocket_bot.EXIT)
     if position.get("mode") in REMOVED_BOT_EXIT:
         # robot removed: stop -40%, trailing stop once in profit, out after 6 h if it never took off
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **REMOVED_BOT_EXIT[position["mode"]])

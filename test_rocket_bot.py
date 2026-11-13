@@ -58,11 +58,11 @@ class RocketTests(unittest.TestCase):
         import live_exit_monitor as lem
         pos = {"mode": "rocket", "peak_ratio": 0, "opened_at": time.time()}
         self.assertEqual(lem.position_signal(pos, 10, 6.5)["action"], "hold")                 # -35%
-        self.assertEqual(lem.position_signal(pos, 10, 5.9)["reason"], "stop_loss")            # -41%
+        self.assertEqual(lem.position_signal(pos, 10, 1.0)["action"], "hold")                 # -90%: no stop loss
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 27)["action"], "hold")   # 3x, -10% from top
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 25)["action"], "sell")   # -17% from top
-        old = dict(pos, opened_at=time.time() - 2 * 3600)
-        self.assertEqual(lem.position_signal(old, 10, 11)["reason"], "time_stop")
+        old = dict(pos, opened_at=time.time() - 20 * 3600)
+        self.assertEqual(lem.position_signal(old, 10, 8)["action"], "hold")                   # no time stop
 
     def test_take_profit_ladder(self):
         import live_trade_state as st
@@ -98,7 +98,7 @@ class RocketTests(unittest.TestCase):
         self.assertEqual(lem.position_signal(pos, 20, 23)["action"], "hold")             # +15%
         out = lem.position_signal(pos, 20, 24.2)                                         # +21%: close all
         self.assertEqual((out["action"], out["reason"]), ("sell", "rocket_dca_target"))
-        self.assertEqual(lem.position_signal(pos, 20, 11.9)["reason"], "stop_loss")      # -40%
+        self.assertEqual(lem.position_signal(pos, 20, 5)["action"], "hold")              # -75%: no stop loss
 
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())

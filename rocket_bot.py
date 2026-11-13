@@ -7,8 +7,9 @@ Real money in the owner's wallet, separate from the signals bot and the Dip Bot 
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
 - Anti-scam checks of the signals bot (holders, freeze/mint authority, token program, RugCheck).
 - US$ 10 per buy, at most 5 open, one try per coin every 6 hours.
-- Exit (live_exit_monitor, quotes every 20 s): stop -40%; from +30% trailing stop 15% below the top
-  (lets a 2x-10x run); after 90 minutes without reaching +30% it sells.
+- Exit (live_exit_monitor, quotes every 20 s): NO stop loss and no time stop (owner's choice): it only
+  sells with profit - from +30% trailing stop 15% below the top, 2x/5x ladder, or +20% over the average
+  after the -20% rebuy. A coin that dies (no route to sell for 10 min) is written off.
 - Take-profit ladder: at 2x sells half (money back), at 5x half of the rest; the rest rides the trailing stop.
 - Pauses itself after 5 losses in a row (no daily loss limit).
 Most snipes lose; the result comes from the few that run. Nothing here guarantees profit.
@@ -41,7 +42,8 @@ MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 15_000)
 MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 5))
 COOLDOWN_S = sg._f("ROCKET_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("ROCKET_SCAN_SECONDS", 45)
-STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.40)
+STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0)          # 0 = no stop loss (owner's choice)
+_SL = str(STOP_LOSS) if STOP_LOSS > 0 else "1"      # "1" = only at -100%: never triggers
 TRAIL_ARM = sg._f("ROCKET_TRAIL_ARM", 0.30)
 TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.15)
 MAX_HOLD_S = sg._f("ROCKET_MAX_HOLD_MINUTES", 90) * 60
@@ -52,9 +54,9 @@ MAX_HOLD_S = sg._f("ROCKET_MAX_HOLD_MINUTES", 90) * 60
 DCA_DROP = sg._f("ROCKET_DCA_DROP", 0.20)
 DCA_USD = sg._f("ROCKET_DCA_USD", 10)
 DCA_TARGET = sg._f("ROCKET_DCA_TARGET", 0.20)
-DCA_EXIT = {"stop_loss": str(STOP_LOSS), "arm": str(1 + DCA_TARGET), "drop": "0"}
+DCA_EXIT = {"stop_loss": _SL, "arm": str(1 + DCA_TARGET), "drop": "0"}
 LADDER = ((2.0, 0.5, "tp_2x", "2x: tirou o dinheiro investido"), (5.0, 0.5, "tp_5x", "5x: realizou mais lucro"))
-EXIT = {"stop_loss": str(STOP_LOSS), "arm": str(1 + TRAIL_ARM), "drop": str(TRAIL_DROP)}
+EXIT = {"stop_loss": _SL, "arm": str(1 + TRAIL_ARM), "drop": str(TRAIL_DROP)}
 RULES = 2
 
 _LOCK = threading.RLock()
@@ -346,13 +348,13 @@ def status_text():
              "% a +" + format(MAX_UP_5M, ".0f") + "% em 5 min, " + str(MIN_BUYS_5M) + "+ compras em 5 min (" +
              format(MIN_BUY_RATIO_5M, "g") + "x mais que vendas), " + str(MIN_BUYS_1H) + "+ compras na hora. Liquidez US$ " +
              format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil, anti-golpe.",
-             "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · 🛑 stop -" +
-             format(STOP_LOSS * 100, ".0f") + "% · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
+             "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · " +
+             ("🛑 stop -" + format(STOP_LOSS * 100, ".0f") + "%" if STOP_LOSS > 0 else "🚫 sem stop loss (só vende no lucro)") +
+             " · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
              "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · 📉 se cair " +
              format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") + " e fecha tudo em +" +
              format(DCA_TARGET * 100, ".0f") + "% sobre o preço médio · 💰 em 2x vende metade "
-             "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · ⏱️ sai em " +
-             format(MAX_HOLD_S / 60, ".0f") + " min se não decolar · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
+             "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
              " perdas seguidas · sem limite diário."]
     try:
         hist = [h for h in st.history() if h.get("mode") == "rocket" and h.get("pnl_usd") is not None]
