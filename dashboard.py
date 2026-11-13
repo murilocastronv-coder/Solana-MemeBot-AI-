@@ -138,6 +138,12 @@ a{color:#9db4ff}.pill{display:inline-block;padding:2px 8px;border-radius:99px;fo
 .btn.go{background:#2e8b57}.btn.stop{background:#b23b3b}
 .trail{border-color:#5b4bd1}.flash{animation:fl 1s ease-in-out 4}
 @keyframes fl{50%{background:#2b2560;border-color:#a594ff}}
+.tabs{display:flex;gap:6px;overflow-x:auto;margin:12px 0 4px;padding-bottom:4px}
+.tabs button{flex:0 0 auto;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:99px;padding:8px 12px;font-size:14px;cursor:pointer}
+.tabs button.on{background:var(--acc);border-color:var(--acc)}.tab{display:none}.tab.on{display:block}
+.big{font-size:17px;font-weight:600}
+.pos{border-top:1px solid var(--line);padding:10px 0}.pos:first-of-type{border-top:0}.ph{margin-bottom:6px}
+.pg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px}.pg .l{color:var(--mut);font-size:12px}
 .note{border-bottom:1px solid var(--line);padding:8px 0}.note:last-child{border:0}.note .t{color:var(--mut);font-size:12px}
 """
 
@@ -221,6 +227,97 @@ def trailing_card(notes):
     return "".join(out)
 
 
+def trail_rule(p):
+    """(arm %, drop %) of the position's trailing stop, or None when it has none (sells with the wallet / fixed target)."""
+    import live_exit_monitor as lem
+    mode = p.get("mode", "normal")
+    if mode == "rocket":
+        if p.get("dca_done"):
+            return None
+        import rocket_bot
+        return rocket_bot.TRAIL_ARM * 100, rocket_bot.TRAIL_DROP * 100
+    if mode == "copy":
+        if p.get("copy_orphan"):
+            return (float(lem.ORPHAN_EXIT["arm"]) - 1) * 100, float(lem.ORPHAN_EXIT["drop"]) * 100
+        return None
+    rules = {"consensus": lem.CONSENSUS_EXIT, "sniper": lem.SNIPER_EXIT, "pumpfun": lem.PUMPFUN_EXIT}
+    rules.update(lem.REMOVED_BOT_EXIT)
+    r = rules.get(mode)
+    if r:
+        return (float(r["arm"]) - 1) * 100, float(r["drop"]) * 100
+    return 15.0, 10.0
+
+
+def trailing_rows():
+    import live_exit_monitor as lem
+    import live_trade_state as st
+    rows = []
+    for mint, p in st._load()["positions"].items():
+        cost = float(p.get("cost_usd") or 0)
+        last = lem.LAST_VALUE.get(mint)
+        now = (last[1] / cost - 1) * 100 if last and cost else None
+        peak = float(p.get("peak_ratio") or 0)
+        rule = trail_rule(p)
+        sell_at = (peak * (1 - rule[1] / 100) - 1) * 100 if rule and peak and p.get("trail_armed") else None
+        rows.append({"symbol": p.get("symbol") or mint[:6], "mint": mint, "mode": MODE.get(p.get("mode"), p.get("mode") or "?"),
+                     "cost": cost, "now": now, "peak": (peak - 1) * 100 if peak else None, "armed": bool(p.get("trail_armed")),
+                     "rule": rule, "sell_at": sell_at, "quoted": last[0] if last else None})
+    rows.sort(key=lambda r: (not r["armed"], -(r["now"] or -999)))
+    return rows
+
+
+def trailing_tab():
+    rows = _safe(trailing_rows, [])
+    out = ["<div class='card'><h2>🚀 Stop móvel das posições abertas</h2>"]
+    if not isinstance(rows, list):
+        return "".join(out + ["<div class='mut'>", _e(rows), "</div></div>"])
+    armed = [r for r in rows if r["armed"]]
+    out.append("<div class='mut' style='margin-bottom:8px'>" + str(len(armed)) + " ativo(s) de " + str(len(rows)) +
+               " posição(ões) aberta(s). Atualiza a cada 30 s.</div>")
+    if not rows:
+        out.append("<div class='mut'>Nenhuma posição aberta.</div>")
+    else:
+        for r in rows:
+            rule = r["rule"]
+            if r["armed"]:
+                status = "<span class='pill ok'>✅ ATIVO</span>"
+            elif rule:
+                status = "<span class='pill'>liga em +" + format(rule[0], ".0f") + "%</span>"
+            else:
+                status = "<span class='pill'>sem stop móvel</span>"
+            rule_txt = ("liga em +" + format(rule[0], ".0f") + "%, vende " + format(rule[1], ".0f") + "% abaixo do topo"
+                        if rule else ("vende junto com a carteira copiada" if "Copy" in r["mode"] else "alvo fixo"))
+            out += ["<div class='pos'><div class='ph'><b>", _e(r["symbol"]), "</b> <span class='mut'>", _e(r["mode"]),
+                    " · ", _usd(r["cost"]), "</span> ", status, "</div><div class='pg'>",
+                    "<div><div class='l'>Agora</div>", _pct(r["now"]), "</div>",
+                    "<div><div class='l'>Topo</div>", _pct(r["peak"]), "</div>",
+                    "<div><div class='l'>Vende se cair para</div><span class='big'>",
+                    _pct(r["sell_at"]) if r["sell_at"] is not None else "—", "</span></div></div>",
+                    "<div class='mut'>", _e(rule_txt), " · <a href='https://dexscreener.com/solana/", _e(r["mint"]),
+                    "' target='_blank'>gráfico</a></div></div>"]
+    out.append("</div>")
+    return "".join(out)
+
+
+TABS_JS = """
+<script>
+(function(){
+  var btns=document.querySelectorAll('.tabs button'), tabs=document.querySelectorAll('.tab');
+  function show(id){ tabs.forEach(function(t){t.classList.toggle('on',t.id===id);});
+    btns.forEach(function(b){b.classList.toggle('on',b.dataset.t===id);});
+    try{localStorage.setItem('tab',id);}catch(e){} }
+  btns.forEach(function(b){ b.onclick=function(){show(b.dataset.t);}; });
+  var first='t-resumo'; try{ first=localStorage.getItem('tab')||first; }catch(e){}
+  if(!document.getElementById(first)) first='t-resumo';
+  show(first);
+})();
+</script>
+"""
+
+TAB_LIST = (("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
+            ("t-bots", "🤖 Robôs"), ("t-avisos", "🔔 Avisos"))
+
+
 def page(msg=""):
     import copy_trader as ct
     try:
@@ -234,10 +331,11 @@ def page(msg=""):
            "</div>"]
     if msg:
         out += ["<div class='card' style='border-color:var(--acc)'>✅ ", _e(msg), "</div>"]
+    out.append("<nav class='tabs'>" + "".join("<button type='button' data-t='" + t + "'>" + label + "</button>" for t, label in TAB_LIST) + "</nav>")
+
+    # ---- Resumo
+    out.append("<section class='tab' id='t-resumo'>")
     out.append(controls(s))
-    with _LOCK:
-        all_notes = list(NOTICES)[::-1]
-    out.append(trailing_card(all_notes))
     if isinstance(s, dict):
         state = ("<span class='pill ok'>robô pronto</span>" if s["ready"] else
                  "<span class='pill bad'>parado: " + _e(s["why"] or "?") + "</span>")
@@ -258,9 +356,16 @@ def page(msg=""):
                     _e(s["address"]), "</a></div>"]
     else:
         out += ["<div class='card'>", _e(s), "</div>"]
+    out.append("</section>")
 
+    # ---- Stop móvel
+    with _LOCK:
+        notes = list(NOTICES)[::-1]
+    out += ["<section class='tab' id='t-stop'>", trailing_tab(), trailing_card(notes), "</section>"]
+
+    # ---- Posições
     rows = _safe(positions_rows, [])
-    out.append("<div class='card'><h2>📦 Posições abertas</h2>")
+    out.append("<section class='tab' id='t-pos'><div class='card'><h2>📦 Posições abertas</h2>")
     if isinstance(rows, list) and rows:
         out.append("<div class='tw'><table><tr><th>Moeda</th><th>Robô</th><th>Custo</th><th>Agora</th><th>Topo</th>"
                    "<th>Stop móvel</th><th>Aberta há</th><th></th></tr>")
@@ -273,10 +378,11 @@ def page(msg=""):
         out.append("</table></div>")
     else:
         out.append("<div class='mut'>Nenhuma posição aberta.</div>" if isinstance(rows, list) else _e(rows))
-    out.append("</div>")
+    out.append("</div><div class='card'><h2>👥 Cópias abertas</h2><pre>" + _e(_safe(ct.positions_text)) + "</pre></div></section>")
 
+    # ---- Operações
     hist = _safe(lambda: __import__("live_trade_state").history()[-40:][::-1], [])
-    out.append("<div class='card'><h2>🧾 Últimas operações fechadas</h2>")
+    out.append("<section class='tab' id='t-ops'><div class='card'><h2>🧾 Últimas operações fechadas</h2>")
     if isinstance(hist, list) and hist:
         out.append("<div class='tw'><table><tr><th>Quando</th><th>Moeda</th><th>Robô</th><th>Custo</th><th>Resultado</th>"
                    "<th>Saída</th><th>Durou</th></tr>")
@@ -289,21 +395,21 @@ def page(msg=""):
         out.append("</table></div>")
     else:
         out.append("<div class='mut'>Nenhuma operação fechada ainda.</div>")
-    out.append("</div>")
+    out.append("</div></section>")
 
+    # ---- Robôs
+    out.append("<section class='tab' id='t-bots'>")
     if rocket_bot:
         out += ["<div class='card'><h2>🚀 Sniper</h2><pre>", _e(_safe(rocket_bot.status_text)), "</pre></div>"]
-    out += ["<div class='card'><h2>👥 Copy trade</h2><pre>", _e(_safe(ct.status_text)), "</pre></div>",
-            "<div class='card'><h2>📦 Cópias abertas</h2><pre>", _e(_safe(ct.positions_text)), "</pre></div>"]
+    out += ["<div class='card'><h2>👥 Copy trade</h2><pre>", _e(_safe(ct.status_text)), "</pre></div></section>"]
 
-    with _LOCK:
-        notes = list(NOTICES)[::-1]
-    out.append("<div class='card'><h2>🔔 Avisos do bot (os mesmos do Telegram)</h2>")
+    # ---- Avisos
+    out.append("<section class='tab' id='t-avisos'><div class='card'><h2>🔔 Avisos do bot (os mesmos do Telegram)</h2>")
     if notes:
         for t, text in notes[:100]:
             out += ["<div class='note'><div class='t'>há ", _ago(t), "</div><pre>", _e(text), "</pre></div>"]
     else:
         out.append("<div class='mut'>Nenhum aviso desde que o bot reiniciou.</div>")
-    out.append("</div><div class='mut'>O painel não vende nem mostra chaves; só liga/desliga os robôs.</div></main>" + NOTIFY_JS +
-               "</body></html>")
+    out.append("</div></section><div class='mut'>O painel não vende nem mostra chaves; só liga/desliga os robôs.</div></main>" +
+               TABS_JS + NOTIFY_JS + "</body></html>")
     return "".join(out)

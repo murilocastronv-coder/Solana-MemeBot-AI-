@@ -44,6 +44,22 @@ class PanelTests(unittest.TestCase):
         self.assertIn("ABC +45%", body)
         self.assertIn("Notification", body)
 
+    def test_trailing_tab_lists_every_position(self):
+        import live_trade_state as st
+        import live_exit_monitor as lem
+        positions = {"M1": {"mode": "rocket", "symbol": "inuhao", "cost_usd": 20, "peak_ratio": 1.462, "trail_armed": True},
+                     "M2": {"mode": "rocket", "symbol": "Krillion", "cost_usd": 20, "peak_ratio": 0.998},
+                     "M3": {"mode": "copy", "symbol": "CPY", "cost_usd": 10}}
+        lem.LAST_VALUE.update({"M1": (0, 29.24), "M2": (0, 14.6)})
+        with patch.object(st, "_load", return_value={"positions": positions, "pending": {}, "enabled": True, "halted": False,
+                                                     "daily_loss_usd": 0, "day": "x"}):
+            html = dashboard.trailing_tab()
+        self.assertIn("1 ativo(s) de 3", html)
+        self.assertIn("✅ ATIVO", html)
+        self.assertIn("+24.3%", html)                        # 1.462 x 0.85 -> sells at +24%
+        self.assertIn("liga em +30%", html)
+        self.assertIn("vende junto com a carteira copiada", html)
+
     def test_off_without_a_password(self):
         with patch.dict(os.environ, {"DASHBOARD_PASSWORD": ""}):
             self.assertEqual(self.client.get("/painel").status_code, 503)
