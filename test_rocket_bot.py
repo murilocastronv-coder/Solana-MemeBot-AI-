@@ -79,6 +79,27 @@ class RocketTests(unittest.TestCase):
             rb.take_profits(quote=lambda m, a: 55, seller=lambda *a: sold.append(a))      # 5.5x: half of the rest
             self.assertEqual(sold[-1][1:3], (0.5, "rocket_tp_5x"))
 
+    def test_rebuys_once_when_it_falls_20_percent(self):
+        import live_trade_state as st
+        positions = {MINT: {"mode": "rocket", "token_amount_raw": "1000", "cost_usd": 10}}
+        bought = []
+        with patch.object(st, "_load", return_value={"positions": positions}), \
+             patch.object(st, "set_position_fields", side_effect=lambda m, **f: positions[m].update(f)):
+            rb.take_profits(quote=lambda m, a: 8.5, dca_buyer=lambda *a: bought.append(1) or "")   # -15%: wait
+            self.assertEqual(bought, [])
+            rb.take_profits(quote=lambda m, a: 7.9, dca_buyer=lambda *a: bought.append(1) or "")   # -21%: rebuy
+            rb.take_profits(quote=lambda m, a: 7.0, dca_buyer=lambda *a: bought.append(1) or "")   # only once
+            self.assertEqual(bought, [1])
+            self.assertTrue(positions[MINT]["dca_done"])
+
+    def test_after_the_rebuy_it_closes_at_20_percent_over_the_average(self):
+        import live_exit_monitor as lem
+        pos = {"mode": "rocket", "dca_done": True, "dca_at": time.time(), "peak_ratio": 0}
+        self.assertEqual(lem.position_signal(pos, 20, 23)["action"], "hold")             # +15%
+        out = lem.position_signal(pos, 20, 24.2)                                         # +21%: close all
+        self.assertEqual((out["action"], out["reason"]), ("sell", "rocket_dca_target"))
+        self.assertEqual(lem.position_signal(pos, 20, 11.9)["reason"], "stop_loss")      # -40%
+
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())
 

@@ -47,6 +47,12 @@ TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.15)
 MAX_HOLD_S = sg._f("ROCKET_MAX_HOLD_MINUTES", 90) * 60
 # take-profit ladder (the most common memecoin rule): at 2x take back the money put in (sell half),
 # at 5x sell half of what is left; the rest rides the trailing stop for a 10x+.
+# Average down (owner's choice): if the coin falls DCA_DROP below our buy, buy DCA_USD more once
+# (lower average price) and then close the WHOLE position at +DCA_TARGET over the average price.
+DCA_DROP = sg._f("ROCKET_DCA_DROP", 0.20)
+DCA_USD = sg._f("ROCKET_DCA_USD", 10)
+DCA_TARGET = sg._f("ROCKET_DCA_TARGET", 0.20)
+DCA_EXIT = {"stop_loss": str(STOP_LOSS), "arm": str(1 + DCA_TARGET), "drop": "0"}
 LADDER = ((2.0, 0.5, "tp_2x", "2x: tirou o dinheiro investido"), (5.0, 0.5, "tp_5x", "5x: realizou mais lucro"))
 EXIT = {"stop_loss": str(STOP_LOSS), "arm": str(1 + TRAIL_ARM), "drop": str(TRAIL_DROP)}
 RULES = 2
@@ -111,7 +117,30 @@ def loss_streak(trades):
     return n
 
 
-def take_profits(send=None, chat=None, quote=None, seller=None):
+def _dca_buy(mint, pos, send, chat):
+    """Buy DCA_USD more of a rocket position that fell DCA_DROP. '' when bought, else why not."""
+    import copy_trader as ct
+    import live_engine
+    import live_trade_state as st
+    if not live_engine.ready():
+        return "robô real não está pronto"
+    free = ct.wallet_usd(live_engine.get_address(), max_age=0)
+    if free is None or free < DCA_USD + RESERVE_USD:
+        return "saldo livre baixo"
+    invested = sum(float(p.get("cost_usd") or 0) for p in st._load()["positions"].values())
+    if ct.exposure_cap(DCA_USD, free + invested, invested, min_usd=DCA_USD)[0] is None:
+        return "limite de " + format(ct.MAX_EXPOSURE * 100, ".0f") + "% da conta em moedas"
+    symbol = pos.get("symbol") or mint[:6]
+    if send and chat:
+        send(chat, "🚀 SNIPER: " + symbol + " caiu " + format(DCA_DROP * 100, ".0f") + "% — comprando mais US$ " +
+             format(DCA_USD, ".0f") + " (preço médio menor). Fecha tudo em +" + format(DCA_TARGET * 100, ".0f") +
+             "% sobre o preço médio.")
+    settled = live_engine._execute_buy({"baseToken": {"address": mint, "symbol": symbol}}, mint, symbol, send, chat,
+                                       live_engine.get_address(), None, "rocket", usd=DCA_USD, add_on=True)
+    return "" if settled else "compra não confirmada"
+
+
+def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None):
     """Sell part of a rocket position at 2x and 5x (runs every scan, even with the sniper off)."""
     import live_trade_state as st
     done = []
@@ -123,6 +152,20 @@ def take_profits(send=None, chat=None, quote=None, seller=None):
                 from live_exit_monitor import quote_value_usd as quote
             ratio = float(quote(mint, int(pos["token_amount_raw"]))) / float(pos["cost_usd"])
         except Exception:
+            continue
+        if pos.get("dca_done"):
+            continue                                # after the rebuy: sells all at +20% over the average
+        if ratio <= 1 - DCA_DROP and not pos.get("tp_2x"):
+            st.set_position_fields(mint, dca_done=True, dca_at=time.time())
+            try:
+                r = (dca_buyer or _dca_buy)(mint, pos, send, chat)
+            except Exception as exc:
+                r = type(exc).__name__
+            if r:
+                st.set_position_fields(mint, dca_done=False)
+                if send and chat:
+                    send(chat, "🚀 Sniper não recomprou " + str(pos.get("symbol") or mint[:6]) + ": " + r)
+            done.append((mint, "dca"))
             continue
         for x, part, key, note in LADDER:
             if ratio >= x and not pos.get(key):
@@ -305,7 +348,9 @@ def status_text():
              format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil, anti-golpe.",
              "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · 🛑 stop -" +
              format(STOP_LOSS * 100, ".0f") + "% · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
-             "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · 💰 em 2x vende metade "
+             "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · 📉 se cair " +
+             format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") + " e fecha tudo em +" +
+             format(DCA_TARGET * 100, ".0f") + "% sobre o preço médio · 💰 em 2x vende metade "
              "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · ⏱️ sai em " +
              format(MAX_HOLD_S / 60, ".0f") + " min se não decolar · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
              " perdas seguidas · sem limite diário."]
