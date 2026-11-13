@@ -12,7 +12,7 @@ MINT = "ROCKcoin111111111111111111111111111111pump"
 
 
 def pair(**kw):
-    p = {"chainId": "solana", "dexId": "pumpfun", "pairAddress": "POOL", "baseToken": {"address": MINT, "symbol": "RK"},
+    p = {"chainId": "solana", "dexId": "pumpfun", "marketCap": 30_000, "pairAddress": "POOL", "baseToken": {"address": MINT, "symbol": "RK"},
          "quoteToken": {"address": sg.SOL_MINT}, "liquidity": {"usd": 40_000}, "pairCreatedAt": (NOW - 10 * 60) * 1000,
          "txns": {"h1": {"buys": 400, "sells": 150}, "m5": {"buys": 80, "sells": 20}}, "volume": {"h1": 60_000},
          "priceChange": {"m5": 15, "h1": 120}, "priceUsd": "0.0001"}
@@ -38,7 +38,7 @@ class RocketTests(unittest.TestCase):
         self.assertIn("vermelho", rb.rocket_reason(pair(priceChange={"m5": 10, "h1": -20}), NOW))
         self.assertIn("pouca compra", rb.rocket_reason(pair(txns={"h1": {"buys": 400, "sells": 150},
                                                                   "m5": {"buys": 40, "sells": 30}}), NOW))
-        self.assertIn("liquidez alta", rb.rocket_reason(pair(liquidity={"usd": 200_000}), NOW))
+        self.assertIn("liquidez alta", rb.rocket_reason(pair(dexId="pumpswap", liquidity={"usd": 200_000}), NOW))
 
     def test_buys_once_per_coin(self):
         bought = []
@@ -99,6 +99,20 @@ class RocketTests(unittest.TestCase):
         out = lem.position_signal(pos, 20, 24.2)                                         # +21%: close all
         self.assertEqual((out["action"], out["reason"]), ("sell", "rocket_dca_target"))
         self.assertEqual(lem.position_signal(pos, 20, 5)["action"], "hold")              # -75%: no stop loss
+
+    def test_coin_on_the_launch_curve_is_judged_by_market_cap(self):
+        curve = pair(dexId="pumpfun", liquidity={"usd": 0}, marketCap=30_000)
+        self.assertEqual(rb.rocket_reason(curve, NOW), "")
+        self.assertIn("market cap baixo", rb.rocket_reason(dict(curve, marketCap=3_000), NOW))
+
+    def test_most_bought_first(self):
+        less = pair(baseToken={"address": "A" * 40 + "pump", "symbol": "A"})
+        more = pair(baseToken={"address": "B" * 40 + "pump", "symbol": "B"},
+                    txns={"h1": {"buys": 900, "sells": 150}, "m5": {"buys": 200, "sells": 20}})
+        order = []
+        rb.cycle(pairs=[less, more], now=NOW, safety=lambda m, curve=False: "",
+                 buyer=lambda p, s, c: order.append(p["baseToken"]["symbol"]) or "")
+        self.assertEqual(order, ["B"])
 
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())
