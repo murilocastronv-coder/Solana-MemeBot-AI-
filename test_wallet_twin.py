@@ -9,7 +9,7 @@ import copy_trader as c
 import wallet_twin as wt
 
 REF = str(Keypair().pubkey())
-REF_STYLE = {"hold_min": 20.0, "trades_day": 30.0, "size_usd": 50.0, "scale_out": 0.6, "scale_in": 0.3,
+REF_STYLE = {"entry_age_min": 4.0, "curve_share": 0.7, "hold_min": 12.0, "trades_day": 30.0, "size_usd": 50.0, "scale_out": 0.6, "scale_in": 0.3,
              "pump_share": 0.9, "win_rate": 0.6, "positions": 200, "pnl_usd": 900.0}
 
 
@@ -38,6 +38,16 @@ class TwinTests(unittest.TestCase):
         other = dict(REF_STYLE, hold_min=600.0, trades_day=1.0, pump_share=0.0, scale_out=0.0)
         self.assertLess(wt.similarity(REF_STYLE, other), 30)
 
+    def test_sniper_search(self):
+        snipe = dict(REF_STYLE, hold_min=12.0, entry_age_min=3.0, curve_share=0.8, trades_day=3.0, size_usd=500.0)
+        self.assertTrue(wt.judge(snipe, audit(snipe), REF_STYLE)[0])            # style differs, but it snipes
+        self.assertIn("segura pouco", wt.judge(dict(snipe, hold_min=2.0), audit(snipe), REF_STYLE)[2])
+        self.assertIn("segura muito", wt.judge(dict(snipe, hold_min=60.0), audit(snipe), REF_STYLE)[2])
+        self.assertIn("não é sniper", wt.judge(dict(snipe, entry_age_min=300.0), audit(snipe), REF_STYLE)[2])
+        no_age = dict(snipe, entry_age_min=None)
+        self.assertTrue(wt.judge(no_age, audit(snipe), REF_STYLE)[0])           # most buys on the launch curve
+        self.assertFalse(wt.judge(dict(no_age, curve_share=0.1), audit(snipe), REF_STYLE)[0])
+
     def test_hit_rate_is_compared_with_the_reference_wallet(self):
         low = dict(REF_STYLE, win_rate=0.13)
         ok, _, _ = wt.judge(low, audit(low, win=0.15), low)          # wins as often as the reference: ok
@@ -61,7 +71,7 @@ class TwinTests(unittest.TestCase):
 
     def test_same_style_and_profitable_wallet_is_followed(self):
         w = cand()
-        with patch.object(c, "measure", return_value=([60] * 5, audit(dict(REF_STYLE, hold_min=25.0)))):
+        with patch.object(c, "measure", return_value=([60] * 5, audit(dict(REF_STYLE, hold_min=15.0)))):
             self.assertEqual(c.preaudit_and_follow(w, None, 200.0), "added")
         self.assertEqual(c.holder_status(c._load()["wallets"][w["wallet"]])[0], "ok")
         self.assertTrue(c.prefilter(cand()))                   # small buyer / quick holds pass the cheap filter

@@ -23,6 +23,14 @@ MIN_WIN = float(os.getenv("COPY_TWIN_MIN_WIN", "0.45"))
 MIN_TRADES = int(float(os.getenv("COPY_TWIN_MIN_TRADES", "15")))
 PROFILE_MAX_AGE_S = float(os.getenv("COPY_TWIN_PROFILE_HOURS", "12")) * 3600
 PUMP = ("pump.fun", "PumpSwap")
+# Sniper search (owner's choice): wallets that snipe memecoins - buy the coin right after it is born
+# (median coin age at its buy <= SNIPE_MAX_AGE_MIN, or most buys still on the pump.fun launch curve)
+# and hold each coin SNIPE_HOLD_MIN-SNIPE_HOLD_MAX minutes (median). Style similarity is then only shown.
+SNIPER = os.getenv("COPY_SNIPER_SEARCH", "true").strip().lower() != "false"
+SNIPE_MAX_AGE_MIN = float(os.getenv("COPY_SNIPE_MAX_COIN_AGE_MINUTES", "15"))
+SNIPE_MIN_CURVE = float(os.getenv("COPY_SNIPE_MIN_CURVE_SHARE", "0.5"))
+SNIPE_HOLD_MIN = float(os.getenv("COPY_SNIPE_HOLD_MIN_MINUTES", "5"))
+SNIPE_HOLD_MAX = float(os.getenv("COPY_SNIPE_HOLD_MAX_MINUTES", "20"))
 _LOCK = threading.RLock()
 
 
@@ -36,6 +44,8 @@ def style(summary):
     return {"hold_min": float(s.get("hold_median") or 0), "trades_day": float(s.get("trades_per_day") or 0),
             "size_usd": float(s.get("size_median") or 0), "scale_out": float(s.get("scale_out") or 0),
             "scale_in": float(s.get("scale_in") or 0), "pump_share": sum(plats.get(p, 0) for p in PUMP) / total,
+            "curve_share": plats.get("pump.fun", 0) / total,
+            "entry_age_min": s.get("token_age_median"),
             "win_rate": float(s.get("win_rate") or 0), "positions": int(s.get("positions") or 0),
             "pnl_usd": float(s.get("pnl_usd") or 0)}
 
@@ -116,7 +126,19 @@ def judge(cand_style, audit, ref):
     a = audit or {}
     if not cand_style:
         return False, 0.0, "sem histórico"
-    if sim < MIN_SIMILARITY:
+    if SNIPER:
+        hold = cand_style.get("hold_min") or 0
+        if hold < SNIPE_HOLD_MIN:
+            return False, sim, "segura pouco (" + format(hold, ".0f") + " min)"
+        if hold > SNIPE_HOLD_MAX:
+            return False, sim, "segura muito (" + format(hold, ".0f") + " min)"
+        age = cand_style.get("entry_age_min")
+        sniper = (age is not None and age <= SNIPE_MAX_AGE_MIN) or (
+            age is None and (cand_style.get("curve_share") or 0) >= SNIPE_MIN_CURVE)
+        if not sniper:
+            return False, sim, ("não é sniper (compra moeda com " + format(age, ".0f") + " min)" if age is not None
+                                else "não é sniper (pouco na curva da pump.fun)")
+    elif sim < MIN_SIMILARITY:
         return False, sim, "estilo diferente (" + format(sim, ".0f") + "%)"
     if a.get("trades_recent", 0) < MIN_TRADES:
         return False, sim, "poucas operações recentes"
@@ -133,6 +155,8 @@ def judge(cand_style, audit, ref):
 def describe(st):
     if not st:
         return "ainda medindo"
-    return ("segura " + format(st["hold_min"], ".0f") + " min · " + format(st["trades_day"], ".0f") + " operações/dia · US$ " +
+    age = st.get("entry_age_min")
+    return (("compra moeda com " + format(age, ".0f") + " min · " if age is not None else "") +
+            format((st.get("curve_share") or 0) * 100, ".0f") + "% na curva · segura " + format(st["hold_min"], ".0f") + " min · " + format(st["trades_day"], ".0f") + " operações/dia · US$ " +
             format(st["size_usd"], ".0f") + " por moeda · " + format(st["pump_share"] * 100, ".0f") + "% pump.fun · acerta " +
             format(st["win_rate"] * 100, ".0f") + "%")
