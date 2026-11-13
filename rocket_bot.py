@@ -1,7 +1,7 @@
-"""Rocket Sniper: buys the hottest new pump.fun coins (1 h 20 min - 7 days old) the moment they explode in buys, lets winners run.
+"""Rocket Sniper: buys the hottest new Solana coins (pump.fun and any DEX listed on DexScreener) (1 h 20 min - 7 days old) the moment they explode in buys, lets winners run.
 
 Real money in the owner's wallet, separate from the signals bot and the Dip Bot (mode "rocket").
-- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 1 h 20 min to 7 days old; the most popular first
+- Coins: pump.fun or any other Solana DEX on DexScreener (Raydium, Meteora...), liquidity US$ 15k-150k, SOL/USDC pair, 1 h 20 min to 7 days old; the most popular first
   (most buyers in the last 5 minutes). Shares the 70% limit of the copy trade (rest stays in SOL).
 - Explosion: up 5-60% in the last 5 minutes and green in the hour (not more than +400%), 30+ buys in
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
@@ -28,6 +28,8 @@ ORDER_USD = sg._f("ROCKET_ORDER_USD", 20)
 MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 4))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
 MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 15_000)
+# false (owner's choice): also coins launched on other Solana DEXes listed on DexScreener
+PUMP_ONLY = os.getenv("ROCKET_PUMP_ONLY", "false").strip().lower() == "true"
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
 MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 80) * 60
 MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 7 * 24 * 60) * 60     # 7 days
@@ -245,7 +247,9 @@ def rocket_reason(p, now=None):
     """'' when a new pump.fun coin is exploding in buys right now; else why not."""
     now = now or time.time()
     liq = float((p.get("liquidity") or {}).get("usd") or 0)
-    if not sg.is_pump(p):
+    if p.get("chainId", "solana") != "solana":
+        return "não é da Solana"
+    if PUMP_ONLY and not sg.is_pump(p):
         return "não é da pump.fun"
     # real liquidity of the pool, for EVERY coin (also on the launch curve): owner's minimum US$ 15k
     if liq < MIN_LIQ:
@@ -401,7 +405,7 @@ def status_text():
     d = _load()
     lines = ["🚀 SNIPER (dinheiro real) — " + ("LIGADO" if d["enabled"] else "DESLIGADO") +
              (" (" + d["paused_why"] + ")" if not d["enabled"] and d.get("paused_why") else ""),
-             "Compra as moedas mais populares da pump.fun com " + _age_txt(MIN_AGE_S) + " a " +
+             "Compra as moedas mais populares da " + ("pump.fun" if PUMP_ONLY else "pump.fun e das outras DEX da DexScreener") + " com " + _age_txt(MIN_AGE_S) + " a " +
              _age_txt(MAX_AGE_S) + " de vida no momento em que explodem: +" + format(MIN_UP_5M, ".0f") +
              "% a +" + format(MAX_UP_5M, ".0f") + "% em 5 min, " + str(MIN_BUYS_5M) + "+ compras em 5 min (" +
              format(MIN_BUY_RATIO_5M, "g") + "x mais que vendas), " + str(MIN_BUYS_1H) + "+ compras na hora. Liquidez US$ " +

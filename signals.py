@@ -69,7 +69,8 @@ DEX = "https://api.dexscreener.com"
 DEX_FEEDS = ("/token-profiles/latest/v1", "/token-boosts/latest/v1", "/token-boosts/top/v1",
              "/community-takeovers/latest/v1", "/ads/latest/v1")
 # DexScreener search (pairs): GeckoTerminal and pump.fun block the server, DexScreener does not
-DEX_SEARCHES = ("pumpswap", "pumpfun", "pump", "pump sol", "solana meme", "sol pump", "pumpswap sol", "pump.fun")
+DEX_SEARCHES = ("pumpswap", "pumpfun", "pump", "pump sol", "solana meme", "sol pump", "pumpswap sol", "pump.fun",
+                "raydium", "meteora", "launchlab", "solana")
 GECKO = "https://api.geckoterminal.com/api/v2"
 GECKO_FEEDS = tuple("/networks/solana/trending_pools?page=" + str(n) for n in (1, 2, 3)) + tuple(
     "/networks/solana/new_pools?page=" + str(n) for n in (1, 2)) + tuple(

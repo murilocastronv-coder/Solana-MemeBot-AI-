@@ -133,3 +133,11 @@ class RocketTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnyDexTests(unittest.TestCase):
+    def test_coins_from_other_dexes_on_dexscreener(self):
+        ray = pair(dexId="raydium", baseToken={"address": "RAYcoin11111111111111111111111111111111", "symbol": "R"})
+        self.assertEqual(rb.rocket_reason(ray, NOW), "")
+        self.assertIn("SOL/USDC", rb.rocket_reason(dict(ray, quoteToken={"address": "OTHER"}), NOW))
+        self.assertIn("Solana", rb.rocket_reason(dict(ray, chainId="base"), NOW))
