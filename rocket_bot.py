@@ -28,6 +28,9 @@ ORDER_USD = sg._f("ROCKET_ORDER_USD", 10)
 MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 5))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
 MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 10_000)
+# coins still on the pump.fun launch curve: DexScreener shows little or no "liquidity" for them,
+# so their size is checked by market cap instead (the curve ends at ~US$ 69k-100k)
+MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 8_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
 MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 5) * 60
 MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 15) * 60
@@ -189,14 +192,19 @@ def rocket_reason(p, now=None):
     """'' when a new pump.fun coin is exploding in buys right now; else why not."""
     now = now or time.time()
     liq = float((p.get("liquidity") or {}).get("usd") or 0)
-    if liq < MIN_LIQ:
-        return "liquidez baixa"
-    if liq > MAX_LIQ:
-        return "liquidez alta"
-    if ((p.get("quoteToken") or {}).get("address")) not in sg.QUOTES:
-        return "par sem SOL/USDC"
     if not sg.is_pump(p):
         return "não é da pump.fun"
+    if p.get("dexId") == "pumpfun":                       # still on the launch curve
+        mcap = float(p.get("marketCap") or p.get("fdv") or 0)
+        if mcap < MIN_CURVE_MCAP:
+            return "curva da pump.fun no começo (market cap baixo)"
+    else:
+        if liq < MIN_LIQ:
+            return "liquidez baixa"
+        if liq > MAX_LIQ:
+            return "liquidez alta"
+        if ((p.get("quoteToken") or {}).get("address")) not in sg.QUOTES:
+            return "par sem SOL/USDC"
     created = p.get("pairCreatedAt")
     age = now - float(created) / 1000 if created else None
     if age is None or age < MIN_AGE_S:
@@ -297,8 +305,9 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
             why[r] = why.get(r, 0) + 1
         else:
             rockets.append(p)
-    # strongest buying pressure first
-    rockets.sort(key=lambda p: int(((p.get("txns") or {}).get("m5") or {}).get("buys") or 0), reverse=True)
+    # the most bought first (most buys in the last 5 minutes, then in the hour)
+    rockets.sort(key=lambda p: (int(((p.get("txns") or {}).get("m5") or {}).get("buys") or 0),
+                                int(((p.get("txns") or {}).get("h1") or {}).get("buys") or 0)), reverse=True)
     bought = []
     d = _load()
     for p in rockets:
