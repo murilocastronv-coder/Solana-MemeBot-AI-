@@ -216,6 +216,20 @@ def fraction_limits(address, w=None):
     return PROPORTIONAL_MIN_FRACTION, PROPORTIONAL_MAX_FRACTION
 
 
+# At most this share of the account (free SOL + open positions) is in coins; the rest stays in SOL.
+MAX_EXPOSURE = _env("COPY_MAX_EXPOSURE", 0.50)
+
+
+def exposure_cap(size, value, invested, min_usd=None):
+    """Cut a buy so that all open positions together stay <= MAX_EXPOSURE of the account.
+    Returns (usd or None, room)."""
+    if size is None or value is None or MAX_EXPOSURE >= 1:
+        return size, None
+    room = MAX_EXPOSURE * float(value) - float(invested)
+    usd = round(min(float(size), room), 2)
+    return (usd if usd >= (PROPORTIONAL_MIN_USD if min_usd is None else min_usd) else None), room
+
+
 def proportional_usd(fraction, wallet_value_usd, free_usd=None, limits=None):
     """Our order for a proportional wallet: the wallet's % of its balance, kept between the min and max
     share of our wallet value (free SOL + open positions); never more than the free SOL (minus fees reserve).
@@ -2075,23 +2089,23 @@ def cycle(send=None, chat=None):
                 if not owner_on:
                     continue
                 size = None
+                free = value = invested = None
+                try:
+                    if real_enabled():
+                        import live_engine
+                        import live_trade_state as st
+                        free = wallet_usd(live_engine.get_address(), max_age=0)
+                        invested = sum(float(p.get("cost_usd") or 0) for p in st._load()["positions"].values())
+                    else:
+                        dd = _load()
+                        free = dd["balance"]
+                        invested = sum(float(p.get("cost_usd") or 0) for p in dd["positions"].values()
+                                       if not p.get("real"))
+                    value = None if free is None else free + invested
+                except Exception:
+                    free = value = invested = None
                 if prop:
                     frac = BUY_FRACTION.pop((wallet, mint), None)
-                    free = value = None
-                    try:
-                        if real_enabled():
-                            import live_engine
-                            import live_trade_state as st
-                            free = wallet_usd(live_engine.get_address(), max_age=0)
-                            value = None if free is None else free + sum(
-                                float(p.get("cost_usd") or 0) for p in st._load()["positions"].values())
-                        else:
-                            dd = _load()
-                            free = dd["balance"]
-                            value = free + sum(float(p.get("cost_usd") or 0) for p in dd["positions"].values()
-                                               if not p.get("real"))
-                    except Exception:
-                        free = value = None
                     size = proportional_usd(frac, value, free, limits=fraction_limits(wallet, wi))
                     already = coin_cost_usd(mint, real_enabled()) if size else 0
                     coin_cap = MIRROR_MAX_COIN_FRACTION if is_mirror else PROPORTIONAL_MAX_COIN_FRACTION
@@ -2108,6 +2122,15 @@ def cycle(send=None, chat=None):
                         continue
                     _event("proporcional " + wallet[:6] + "…: ela usou " + format(frac * 100, ".0f") + "% → compro US$ " +
                            format(size, ".2f") + " (" + format(size / value * 100, ".0f") + "% da carteira)")
+                if value:
+                    capped, room = exposure_cap(size if size is not None else ORDER_USD, value, invested or 0)
+                    if capped is None:
+                        _skip(mint, wallet, "já tenho " + format((invested or 0) / value * 100, ".0f") +
+                              "% da conta em moedas (máx. " + format(MAX_EXPOSURE * 100, ".0f") +
+                              "%, o resto fica em SOL)", send, chat)
+                        continue
+                    if size is not None or capped < ORDER_USD:
+                        size = capped
                 m = _open(mint, wallet, send, chat, usd=size)
                 if m:
                     msgs.append(m)
@@ -2125,6 +2148,8 @@ def status_text():
     d = _load()       # panel: atomic file, never waits for a background job
     mode = "REAL" if d["enabled"] and d["real"] else ("SIMULAÇÃO" if d["enabled"] else "DESLIGADO")
     lines = ["👥 COPY TRADE — " + mode,
+             "💰 Usa no máximo " + format(MAX_EXPOSURE * 100, ".0f") + "% da conta em moedas (o resto fica em SOL), "
+             "dividido nas compras na mesma proporção que a carteira copiada compra",
              "US$ " + format(ORDER_USD, ".0f") + " por cópia · máx. " + str(MAX_POSITIONS) + " posições · " +
              ("sai só quando a carteira vender (mesmo movimento, sem TP/SL fixo)" if EXIT_MODE == "wallet" else
               "vende quando a carteira vender, stop −" + format(STOP_LOSS * 100, ".0f") + "%, alvo +" +
