@@ -373,7 +373,9 @@ def auto_follow(candidate):
     address = str(candidate.get("wallet") or "")
     Pubkey.from_string(address)
     holds = [max(0, int(x)) for x in candidate.get("hold_samples", [])]
-    if len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS or long_share(holds) < MIN_LONG_SHARE:
+    twin = twin_mode() and bool(candidate.get("twin_ok"))
+    if not twin and (len(holds) < MIN_ROUND_TRIPS or _median(holds) < MIN_HOLD_SECONDS or
+                     long_share(holds) < MIN_LONG_SHARE):
         return False
     if int(candidate.get("closed_trades", 0)) < MIN_ROUND_TRIPS:
         return False
@@ -388,7 +390,7 @@ def auto_follow(candidate):
         auto_count = sum(bool(w.get("auto_discovered")) for w in d["wallets"].values())
         if auto_count >= MAX_AUTO_WALLETS or len(d["wallets"]) >= MAX_WALLETS:
             return False
-    if (not old_enough(candidate) or not active_daily(candidate) or not big_enough_buyer(candidate)
+    if (not old_enough(candidate) or not active_daily(candidate) or (not twin and not big_enough_buyer(candidate))
             or not has_min_balance(address)):
         return False
     usd = wallet_usd(address)          # network: outside the lock (cached by has_min_balance)
@@ -487,7 +489,7 @@ def prune_low_balance():
                 continue
             w["balance_usd"] = round(usd, 2)
             st = w.get("stats") or {}
-            small = st.get("average_buy_lamports") is not None and not big_enough_buyer(st)
+            small = st.get("average_buy_lamports") is not None and not big_enough_buyer(st) and not w.get("audit", {}).get("twin")
             small = small or (st.get("age_days") is not None and not old_enough(st))
             small = small or (st.get("active_days_7") is not None and not active_daily(st))
             if (usd < MIN_WALLET_USD or small) and a not in _busy(d):
@@ -1633,6 +1635,8 @@ def holder_status(w):
     """('ok'|'watching'|'fast', median hold seconds) from the wallet's round trips.
     ok = median >= 5 min AND at least MIN_LONG_SHARE of its positions held >= 5 min."""
     holds = w.get("holds") or []
+    if (w.get("audit") or {}).get("twin") and twin_mode():
+        return "ok", _median(holds)          # same style as the reference wallet: its hold time is fine
     if len(holds) < MIN_ROUND_TRIPS:
         return "watching", _median(holds)
     med = _median(holds)
@@ -1643,7 +1647,8 @@ def holder_status(w):
 def measure(address, rpc, sol_usd, max_tx=None):
     """Read the wallet's history: (hold seconds per closed position, audit dict)."""
     import wallet_profile
-    _, closed, _ = wallet_profile.analyze(address, rpc, sol_usd, max_tx=max_tx or AUDIT_MAX_TX)
+    import wallet_twin
+    summary, closed, _ = wallet_profile.analyze(address, rpc, sol_usd, max_tx=max_tx or AUDIT_MAX_TX)
     holds = wallet_profile.holds_seconds(closed)
     now = time.time()
     recent = [p for p in closed if p.get("closed", 0) >= now - RESULT_DAYS * 86400]
@@ -1651,7 +1656,8 @@ def measure(address, rpc, sol_usd, max_tx=None):
              "long_share": round(long_share(holds), 3),
              "pnl_recent": round(sum(p.get("pnl_usd", 0.0) for p in recent), 2),
              "trades_recent": len(recent),
-             "win_recent": round(sum(1 for p in recent if p.get("pnl_usd", 0) > 0) / len(recent), 3) if recent else 0.0}
+             "win_recent": round(sum(1 for p in recent if p.get("pnl_usd", 0) > 0) / len(recent), 3) if recent else 0.0,
+             "style": wallet_twin.style(summary)}
     return holds, audit
 
 
@@ -1690,13 +1696,57 @@ def is_rejected(address, now=None):
         return (_load().get("rejected") or {}).get(address, 0) > (now or time.time())
 
 
+def twin_mode():
+    import wallet_twin
+    return wallet_twin.ENABLED and bool(wallet_twin.REFERENCE)
+
+
+def apply_reference_only():
+    """Owner's choice: copy ONLY the reference wallet (+ the wallets found that trade like it).
+    Runs once per reference wallet: every other wallet stops buying; one with an open copy stays
+    only to sell together with it, then leaves."""
+    import wallet_twin
+    ref = wallet_twin.REFERENCE
+    if not twin_mode():
+        return []
+    with _LOCK:
+        d = _load()
+        if d.get("reference_only") == ref:
+            return []
+    removed = [a for a in list(_load()["wallets"]) if a != ref]
+    for a in removed:
+        unfollow(a)
+    follow(ref)
+    with _LOCK:
+        d = _load()
+        w = d["wallets"][ref]
+        w.update(mirror=True, proportional=True, paused=False, leaving=False, auto_discovered=False)
+        d["reference_only"] = ref
+        d["rejected"] = {}                   # old rejections were judged by other rules
+        _save(d)
+    _event("copiando só " + ref[:6] + "… (carteira de referência); " + str(len(removed)) + " carteiras saíram")
+    return removed
+
+
 def prefilter(candidate):
     """Cheap checks from the discovery data (no network)."""
     holds = [max(0, int(x)) for x in candidate.get("hold_samples", [])]
+    if twin_mode():                      # the style is compared with the reference wallet in the audit
+        return (int(candidate.get("closed_trades", 0)) >= MIN_ROUND_TRIPS and
+                int(candidate.get("realized_lamports", 0)) > 0 and old_enough(candidate) and active_daily(candidate)
+                and str(candidate.get("wallet")) != _twin_ref())
     return (len(holds) >= MIN_ROUND_TRIPS and _median(holds) >= MIN_HOLD_SECONDS and
             long_share(holds) >= MIN_LONG_SHARE and int(candidate.get("closed_trades", 0)) >= MIN_ROUND_TRIPS and
             int(candidate.get("realized_lamports", 0)) > 0 and old_enough(candidate) and
             active_daily(candidate) and big_enough_buyer(candidate))
+
+
+def _twin_ref():
+    import wallet_twin
+    return wallet_twin.REFERENCE
+
+
+TWIN_LOG = []   # last judged candidates (for the status)
 
 
 def preaudit_and_follow(candidate, rpc, sol_usd):
@@ -1708,10 +1758,21 @@ def preaudit_and_follow(candidate, rpc, sol_usd):
         return "rejected"
     holds, audit = measure(address, rpc, sol_usd)
     probe = {"holds": holds, "audit": audit}
-    if holder_status(probe)[0] != "ok" or result_status(probe) != "ok":
+    if twin_mode():
+        import wallet_twin
+        ref = wallet_twin.reference_style(rpc, sol_usd)
+        if not ref:
+            return "full"                 # reference wallet not measured yet: try again later
+        ok, sim, why = wallet_twin.judge(audit.get("style"), audit, ref)
+        TWIN_LOG[:] = (TWIN_LOG + [(time.strftime("%H:%M"), address, sim, why or "aprovada")])[-8:]
+        if not ok:
+            _reject([address])
+            return "rejected"
+        audit["twin"] = sim
+    elif holder_status(probe)[0] != "ok" or result_status(probe) != "ok":
         _reject([address])
         return "rejected"
-    cand = dict(candidate, hold_samples=holds or candidate.get("hold_samples", []))
+    cand = dict(candidate, hold_samples=holds or candidate.get("hold_samples", []), twin_ok="twin" in audit)
     outcome = "added"
     with _LOCK:
         d = _load()
@@ -1903,6 +1964,10 @@ def cycle(send=None, chat=None):
     active = owner_on or users_on        # signals are read while the owner or any user is copying
     msgs = []
     reset_bad_scores_once()
+    try:
+        apply_reference_only()
+    except Exception as exc:
+        LAST_ERROR["text"] = "só a carteira de referência: " + type(exc).__name__
     ensure_test_start()
     unpause_test_wallets()
     adopt_orphans()
@@ -1982,7 +2047,8 @@ def cycle(send=None, chat=None):
                            else "sem bom resultado nos últimos ") + format(RESULT_DAYS, ".0f") + " dias")
                     continue
                 prop = proportional(wallet, wi)
-                if not is_mirror and MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
+                twin_w = bool((wi.get("audit") or {}).get("twin")) and twin_mode()
+                if not is_mirror and not twin_w and MIN_BUY_USD > 0 and (paid_usd is None or paid_usd < MIN_BUY_USD):
                     _event("ignorou compra pequena de " + wallet[:6] + "…: " +
                            ("valor desconhecido" if paid_usd is None else "US$ " + format(paid_usd, ".0f")) +
                            " < US$ " + format(MIN_BUY_USD, ".0f"))
@@ -2058,6 +2124,16 @@ def status_text():
              "Só copia carteiras que seguram as moedas ≥ " + format(MIN_HOLD_SECONDS / 60, ".0f") +
              " min (mediana de " + str(MIN_ROUND_TRIPS) + "+ operações observadas)",
              "Simulação: saldo US$ " + format(d["balance"], ".2f") + " · posições abertas: " + str(len(d["positions"]))]
+    if twin_mode():
+        import wallet_twin
+        ref = wallet_twin.REFERENCE
+        lines[3] = ("⭐ Carteira de referência: " + ref[:6] + "…" + ref[-4:] + " (copia tudo, mesma %) — estilo: " +
+                    wallet_twin.describe(wallet_twin.reference_style()) +
+                    "\n🔎 Caçando carteiras com o MESMO estilo (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") +
+                    "% parecidas) e com lucro recente (acerto ≥ " + format(wallet_twin.MIN_WIN * 100, ".0f") + "%)")
+        if TWIN_LOG:
+            lines.append("Últimas analisadas: " + " · ".join(t + " " + a[:5] + "… " + format(s, ".0f") + "% " + why
+                                                            for t, a, s, why in TWIN_LOG[-4:]))
     if not d["wallets"]:
         lines.append("Nenhuma carteira seguida ainda: a busca automática adiciona as melhores sozinha (ou use /seguir ENDEREÇO).")
     for addr, w in d["wallets"].items():
