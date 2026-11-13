@@ -6,7 +6,7 @@ Real money in the owner's wallet, separate from the signals bot and the Dip Bot 
 - Explosion: up 5-60% in the last 5 minutes and green in the hour (not more than +400%), 30+ buys in
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
 - Anti-scam checks of the signals bot (holders, freeze/mint authority, token program, RugCheck).
-- US$ 10 per buy, at most 4 open, one try per coin every 6 hours.
+- US$ 20 per buy, at most 4 open, one try per coin every 6 hours.
 - Exit (live_exit_monitor, quotes every 20 s): NO stop loss and no time stop (owner's choice): it only
   sells with profit - from +30% trailing stop 15% below the top, 2x/5x ladder, or +20% over the average
   after the -20% rebuy. A coin that dies (no route to sell for 10 min) is written off.
@@ -24,7 +24,7 @@ import time
 
 import signals as sg
 
-ORDER_USD = sg._f("ROCKET_ORDER_USD", 10)
+ORDER_USD = sg._f("ROCKET_ORDER_USD", 20)
 MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 4))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
 MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 30_000)
