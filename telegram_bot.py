@@ -73,16 +73,7 @@ def send(chat,text,keyboard=None):
  ents=address_entities(text)
  if ents:args["entities"]=ents     # full addresses in monospace: one tap copies them
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
- # A Telegram hiccup must never stop trading (e.g. the exit cycle sending "STOP MÓVEL" / "VENDENDO"
- # before it sells): retry a few times, then log and go on without raising.
- for attempt in range(3):
-  try:return request_api("sendMessage",**args)
-  except RuntimeError as exc:
-   err=exc
-   if "HTTP 4" in str(exc) and "429" not in str(exc):break
-   time.sleep(1.5*(attempt+1))
- logging.warning("message not delivered after retries (%s): %s",err,(text or "")[:80].replace("\n"," "))
- return {}
+ return request_api("sendMessage",**args)
 ADDRESS_RE=re.compile(r"(?<![/\w.])[1-9A-HJ-NP-Za-km-z]{32,44}(?![\w])")
 def address_entities(text):
  """Telegram 'code' entities for every full Solana address that is not part of a link (UTF-16 offsets)."""

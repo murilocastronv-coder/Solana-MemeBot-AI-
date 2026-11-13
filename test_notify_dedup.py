@@ -84,16 +84,3 @@ class StartRealTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class SendNeverRaisesTests(unittest.TestCase):
-    def test_telegram_failure_does_not_stop_trading(self):
-        import telegram_bot as tb
-        calls = []
-
-        def boom(method, **kw):
-            calls.append(method)
-            raise RuntimeError("Telegram API transport failed")
-        with patch.object(tb, "request_api", side_effect=boom), patch.object(tb.time, "sleep"):
-            self.assertEqual(tb.send(1, "🚀 STOP MÓVEL ATIVADO — X +40%"), {})
-        self.assertEqual(len(calls), 3)          # retried, then gave up quietly
