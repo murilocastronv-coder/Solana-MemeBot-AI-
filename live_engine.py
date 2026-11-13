@@ -331,6 +331,27 @@ def _safe_sender(send):
     return safe
 
 
+_POS_LOG = [0.0]
+
+
+def _log_positions(signals, every=300):
+    """Every 5 min, one log line per open position (Render logs): robot, result, top and trailing stop."""
+    if time.monotonic() - _POS_LOG[0] < every:
+        return
+    _POS_LOG[0] = time.monotonic()
+    positions = state._load()["positions"]
+    seen = {m: s for m, _, s in signals}
+    logging.info("open positions: %s", len(positions))
+    for mint, p in positions.items():
+        s = seen.get(mint) or {}
+        peak = float(s.get("peak_ratio") or p.get("peak_ratio") or 0)
+        logging.info("position %s (%s) mode=%s cost=US$%.2f now=%s top=%s trailing=%s",
+                     p.get("symbol") or mint[:6], mint[:8], p.get("mode", "normal"), float(p.get("cost_usd") or 0),
+                     format(s["change_pct"], "+.1f") + "%" if "change_pct" in s else "?",
+                     format((peak - 1) * 100, "+.1f") + "%" if peak else "?",
+                     "ATIVO" if p.get("trail_armed") else "não")
+
+
 def exit_cycle(send, chat):
     """Sell positions that hit TP/SL. Runs even after 'Parar' to protect funds."""
     send = _safe_sender(send)
@@ -345,6 +366,7 @@ def exit_cycle(send, chat):
         return
     now = time.monotonic()
     signals = sell_signals()
+    _log_positions(signals)
     from live_exit_monitor import ARMED, trail_text
     while ARMED:
         m, p, sig = ARMED.pop(0)
