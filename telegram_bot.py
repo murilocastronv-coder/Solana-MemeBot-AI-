@@ -710,6 +710,11 @@ def web_action(action):
   if chat:send(chat,note)
   else:__import__("dashboard").record(note)
  except Exception:__import__("dashboard").record(note)
+@app.get("/painel-sw.js")
+def panel_sw():
+ """Empty service worker: lets the panel show notifications on phones (no data, no caching)."""
+ return Response("self.addEventListener('notificationclick',function(e){e.notification.close();e.waitUntil(clients.openWindow('/painel'));});",
+  mimetype="application/javascript",headers={"Cache-Control":"no-store"})
 @app.post("/painel/acao")
 def panel_action():
  import dashboard

@@ -35,6 +35,15 @@ class PanelTests(unittest.TestCase):
         self.assertIn("SNIPER COMPROU &lt;b&gt;XYZ&lt;/b&gt;", body)      # escaped
         self.assertIn("Posições abertas", body)
 
+    def test_trailing_stop_card(self):
+        dashboard.record("🚀 STOP MÓVEL ATIVADO — ABC +45%\nAgora vendo se cair 15% abaixo do topo")
+        with patch("copy_trader.wallet_usd", return_value=100.0):
+            body = self.client.get("/painel", headers=basic("senha-forte-123")).get_data(as_text=True)
+        self.assertIn("id='trail' data-latest='", body)
+        self.assertNotIn("data-latest='0'", body)
+        self.assertIn("ABC +45%", body)
+        self.assertIn("Notification", body)
+
     def test_off_without_a_password(self):
         with patch.dict(os.environ, {"DASHBOARD_PASSWORD": ""}):
             self.assertEqual(self.client.get("/painel").status_code, 503)
