@@ -1,7 +1,7 @@
-"""Rocket Sniper: buys the hottest new pump.fun coins (3-30 min old) the moment they explode in buys, lets winners run.
+"""Rocket Sniper: buys the hottest new pump.fun coins (1 h 20 min - 48 h old) the moment they explode in buys, lets winners run.
 
 Real money in the owner's wallet, separate from the signals bot and the Dip Bot (mode "rocket").
-- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 3-30 minutes old; the most popular first
+- Coins: pump.fun, liquidity US$ 5k-150k, SOL/USDC pair, 1 h 20 min to 48 hours old; the most popular first
   (most buyers in the last 5 minutes). Shares the 50% limit of the copy trade (rest stays in SOL).
 - Explosion: up 5-60% in the last 5 minutes and green in the hour (not more than +400%), 30+ buys in
   5 min with 2x more buys than sells, 150+ buys in the hour (60%+ buyers), US$ 15k+ volume in the hour.
@@ -32,14 +32,14 @@ MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 5_000)
 # so their size is checked by market cap instead (the curve ends at ~US$ 69k-100k)
 MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 5_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
-MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 3) * 60
-MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 30) * 60
+MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 80) * 60
+MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 48 * 60) * 60
 MIN_UP_5M = sg._f("ROCKET_MIN_UP_5M", 2)
 MAX_UP_5M = sg._f("ROCKET_MAX_UP_5M", 80)
 MAX_UP_1H = sg._f("ROCKET_MAX_UP_1H", 400)
 MIN_BUYS_5M = int(sg._f("ROCKET_MIN_BUYS_5M", 15))
 MIN_BUY_RATIO_5M = sg._f("ROCKET_MIN_BUY_RATIO_5M", 1.3)
-MIN_BUYS_1H = int(sg._f("ROCKET_MIN_BUYS_1H", 50))      # coin is only 3-30 min old: its whole life
+MIN_BUYS_1H = int(sg._f("ROCKET_MIN_BUYS_1H", 50))      # buys in the last hour
 MIN_BUY_SHARE_1H = sg._f("ROCKET_MIN_BUY_SHARE_1H", 0.52)
 MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 5_000)
 MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 5))
@@ -188,6 +188,13 @@ def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None):
     return done
 
 
+def _age_txt(seconds):
+    m = int(round(seconds / 60))
+    if m < 60:
+        return str(m) + " min"
+    return str(m // 60) + " h" + (" " + str(m % 60) + " min" if m % 60 else "")
+
+
 def rocket_reason(p, now=None):
     """'' when a new pump.fun coin is exploding in buys right now; else why not."""
     now = now or time.time()
@@ -208,9 +215,9 @@ def rocket_reason(p, now=None):
     created = p.get("pairCreatedAt")
     age = now - float(created) / 1000 if created else None
     if age is None or age < MIN_AGE_S:
-        return "moeda nova demais (< " + format(MIN_AGE_S / 60, ".0f") + " min)"
+        return "moeda nova demais (< " + _age_txt(MIN_AGE_S) + ")"
     if age > MAX_AGE_S:
-        return "moeda velha (> " + format(MAX_AGE_S / 60, ".0f") + " min)"
+        return "moeda velha (> " + _age_txt(MAX_AGE_S) + ")"
     tx = p.get("txns") or {}
     h1, m5 = tx.get("h1") or {}, tx.get("m5") or {}
     b1, s1 = int(h1.get("buys") or 0), int(h1.get("sells") or 0)
@@ -350,10 +357,10 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
 def status_text():
     import live_trade_state as st
     d = _load()
-    lines = ["🚀 SNIPER DE MOEDA NOVA (dinheiro real) — " + ("LIGADO" if d["enabled"] else "DESLIGADO") +
+    lines = ["🚀 SNIPER (dinheiro real) — " + ("LIGADO" if d["enabled"] else "DESLIGADO") +
              (" (" + d["paused_why"] + ")" if not d["enabled"] and d.get("paused_why") else ""),
-             "Compra as moedas mais populares da pump.fun com " + format(MIN_AGE_S / 60, ".0f") + "–" +
-             format(MAX_AGE_S / 60, ".0f") + " min de vida no momento em que explodem: +" + format(MIN_UP_5M, ".0f") +
+             "Compra as moedas mais populares da pump.fun com " + _age_txt(MIN_AGE_S) + " a " +
+             _age_txt(MAX_AGE_S) + " de vida no momento em que explodem: +" + format(MIN_UP_5M, ".0f") +
              "% a +" + format(MAX_UP_5M, ".0f") + "% em 5 min, " + str(MIN_BUYS_5M) + "+ compras em 5 min (" +
              format(MIN_BUY_RATIO_5M, "g") + "x mais que vendas), " + str(MIN_BUYS_1H) + "+ compras na hora. Liquidez US$ " +
              format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil, anti-golpe.",
