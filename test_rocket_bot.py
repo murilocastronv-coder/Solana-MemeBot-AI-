@@ -12,8 +12,8 @@ MINT = "ROCKcoin111111111111111111111111111111pump"
 
 
 def pair(**kw):
-    p = {"chainId": "solana", "dexId": "pumpfun", "marketCap": 30_000, "pairAddress": "POOL", "baseToken": {"address": MINT, "symbol": "RK"},
-         "quoteToken": {"address": sg.SOL_MINT}, "liquidity": {"usd": 40_000}, "pairCreatedAt": (NOW - 3 * 3600) * 1000,
+    p = {"chainId": "solana", "dexId": "pumpfun", "marketCap": 60_000, "pairAddress": "POOL", "baseToken": {"address": MINT, "symbol": "RK"},
+         "quoteToken": {"address": sg.SOL_MINT}, "liquidity": {"usd": 60_000}, "pairCreatedAt": (NOW - 3 * 3600) * 1000,
          "txns": {"h1": {"buys": 400, "sells": 150}, "m5": {"buys": 80, "sells": 20}}, "volume": {"h1": 60_000},
          "priceChange": {"m5": 15, "h1": 120}, "priceUsd": "0.0001"}
     p.update(kw)
@@ -101,9 +101,9 @@ class RocketTests(unittest.TestCase):
         self.assertEqual(lem.position_signal(pos, 20, 5)["action"], "hold")              # -75%: no stop loss
 
     def test_coin_on_the_launch_curve_is_judged_by_market_cap(self):
-        curve = pair(dexId="pumpfun", liquidity={"usd": 0}, marketCap=30_000)
+        curve = pair(dexId="pumpfun", liquidity={"usd": 0}, marketCap=60_000)
         self.assertEqual(rb.rocket_reason(curve, NOW), "")
-        self.assertIn("market cap baixo", rb.rocket_reason(dict(curve, marketCap=3_000), NOW))
+        self.assertIn("market cap baixo", rb.rocket_reason(dict(curve, marketCap=20_000), NOW))
 
     def test_most_bought_first(self):
         less = pair(baseToken={"address": "A" * 40 + "pump", "symbol": "A"})
@@ -113,6 +113,24 @@ class RocketTests(unittest.TestCase):
         rb.cycle(pairs=[less, more], now=NOW, safety=lambda m, curve=False: "",
                  buyer=lambda p, s, c: order.append(p["baseToken"]["symbol"]) or "")
         self.assertEqual(order, ["B"])
+
+    def test_closes_all_when_5_orders_together_fall_25_percent(self):
+        import live_trade_state as st
+        positions = {"M%d" % i: {"mode": "rocket", "token_amount_raw": "1000", "cost_usd": 10, "dca_done": True}
+                     for i in range(5)}
+        closed = []
+        with patch.object(st, "_load", return_value={"positions": positions}), \
+             patch.object(st, "positions_by_mode", return_value=5), \
+             patch.object(st, "set_position_fields", side_effect=lambda m, **f: positions[m].update(f)):
+            rb.take_profits(quote=lambda m, a: 8, closer=closed.append)        # all -20%: keep
+            self.assertEqual(closed, [])
+            rb.take_profits(quote=lambda m, a: 7.4, closer=closed.append)      # all -26%: close all
+            self.assertEqual(sorted(closed), sorted(positions))
+        with patch.object(st, "_load", return_value={"positions": dict(list(positions.items())[:3])}), \
+             patch.object(st, "positions_by_mode", return_value=3):
+            closed.clear()
+            rb.take_profits(quote=lambda m, a: 5, closer=closed.append)        # only 3 open: no basket stop
+            self.assertEqual(closed, [])
 
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())
