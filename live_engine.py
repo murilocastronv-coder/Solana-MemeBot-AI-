@@ -339,15 +339,16 @@ def _log_positions(signals, every=300):
     if time.monotonic() - _POS_LOG[0] < every:
         return
     _POS_LOG[0] = time.monotonic()
+    from live_exit_monitor import LAST_VALUE
     positions = state._load()["positions"]
-    seen = {m: s for m, _, s in signals}
     logging.info("open positions: %s", len(positions))
     for mint, p in positions.items():
-        s = seen.get(mint) or {}
-        peak = float(s.get("peak_ratio") or p.get("peak_ratio") or 0)
+        cost = float(p.get("cost_usd") or 0)
+        last = LAST_VALUE.get(mint)
+        peak = float(p.get("peak_ratio") or 0)
         logging.info("position %s (%s) mode=%s cost=US$%.2f now=%s top=%s trailing=%s",
-                     p.get("symbol") or mint[:6], mint[:8], p.get("mode", "normal"), float(p.get("cost_usd") or 0),
-                     format(s["change_pct"], "+.1f") + "%" if "change_pct" in s else "?",
+                     p.get("symbol") or mint[:6], mint[:8], p.get("mode", "normal"), cost,
+                     format((last[1] / cost - 1) * 100, "+.1f") + "%" if last and cost else "?",
                      format((peak - 1) * 100, "+.1f") + "%" if peak else "?",
                      "ATIVO" if p.get("trail_armed") else "não")
 
