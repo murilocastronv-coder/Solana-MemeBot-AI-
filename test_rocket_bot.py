@@ -130,8 +130,23 @@ class RocketTests(unittest.TestCase):
         with patch.object(st, "_load", return_value={"positions": dict(list(positions.items())[:3])}), \
              patch.object(st, "positions_by_mode", return_value=3):
             closed.clear()
-            rb.take_profits(quote=lambda m, a: 5, closer=closed.append)        # only 3 open: no basket stop
+            rb.take_profits(quote=lambda m, a: 6, closer=closed.append)        # only 3 open, -40%: no basket stop
             self.assertEqual(closed, [])
+
+    def test_one_coin_down_50_percent_closes_all(self):
+        import live_trade_state as st
+        positions = {"A": {"mode": "rocket", "token_amount_raw": "1", "cost_usd": 20, "dca_done": True},
+                     "B": {"mode": "rocket", "token_amount_raw": "1", "cost_usd": 10},
+                     "C": {"mode": "copy", "token_amount_raw": "1", "cost_usd": 10}}
+        closed = []
+        price = {"A": 11.0, "B": 12.0, "C": 1.0}
+        with patch.object(st, "_load", return_value={"positions": positions}), \
+             patch.object(st, "set_position_fields", side_effect=lambda m, **f: positions[m].update(f)):
+            rb.take_profits(quote=lambda m, a: price[m], closer=closed.append)     # A -45%: keep
+            self.assertEqual(closed, [])
+            price["A"] = 9.9                                                        # A -50.5%: close all
+            rb.take_profits(quote=lambda m, a: price[m], closer=closed.append)
+            self.assertEqual(sorted(closed), ["A", "B"])                            # copy position untouched
 
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())
