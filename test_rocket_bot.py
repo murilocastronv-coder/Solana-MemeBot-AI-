@@ -58,7 +58,8 @@ class RocketTests(unittest.TestCase):
         import live_exit_monitor as lem
         pos = {"mode": "rocket", "peak_ratio": 0, "opened_at": time.time()}
         self.assertEqual(lem.position_signal(pos, 10, 6.5)["action"], "hold")                 # -35%
-        self.assertEqual(lem.position_signal(pos, 10, 1.0)["action"], "hold")                 # -90%: no stop loss
+        self.assertEqual(lem.position_signal(pos, 10, 5.5)["action"], "hold")                 # -45%
+        self.assertEqual(lem.position_signal(pos, 10, 4.9)["reason"], "stop_loss")            # -51%: fixed stop
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 27)["action"], "hold")   # 3x, -10% from top
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 25)["action"], "sell")   # -17% from top
         old = dict(pos, opened_at=time.time() - 20 * 3600)
@@ -78,27 +79,6 @@ class RocketTests(unittest.TestCase):
             self.assertEqual(len(sold), 1)
             rb.take_profits(quote=lambda m, a: 55, seller=lambda *a: sold.append(a))      # 5.5x: half of the rest
             self.assertEqual(sold[-1][1:3], (0.5, "rocket_tp_5x"))
-
-    def test_rebuys_once_when_it_falls_20_percent(self):
-        import live_trade_state as st
-        positions = {MINT: {"mode": "rocket", "token_amount_raw": "1000", "cost_usd": 10}}
-        bought = []
-        with patch.object(st, "_load", return_value={"positions": positions}), \
-             patch.object(st, "set_position_fields", side_effect=lambda m, **f: positions[m].update(f)):
-            rb.take_profits(quote=lambda m, a: 8.5, dca_buyer=lambda *a: bought.append(1) or "")   # -15%: wait
-            self.assertEqual(bought, [])
-            rb.take_profits(quote=lambda m, a: 7.9, dca_buyer=lambda *a: bought.append(1) or "")   # -21%: rebuy
-            rb.take_profits(quote=lambda m, a: 7.0, dca_buyer=lambda *a: bought.append(1) or "")   # only once
-            self.assertEqual(bought, [1])
-            self.assertTrue(positions[MINT]["dca_done"])
-
-    def test_after_the_rebuy_it_closes_at_20_percent_over_the_average(self):
-        import live_exit_monitor as lem
-        pos = {"mode": "rocket", "dca_done": True, "dca_at": time.time(), "peak_ratio": 0}
-        self.assertEqual(lem.position_signal(pos, 20, 23)["action"], "hold")             # +15%
-        out = lem.position_signal(pos, 20, 24.2)                                         # +21%: close all
-        self.assertEqual((out["action"], out["reason"]), ("sell", "rocket_dca_target"))
-        self.assertEqual(lem.position_signal(pos, 20, 5)["action"], "hold")              # -75%: no stop loss
 
     def test_minimum_liquidity_30k_for_every_coin(self):
         curve = pair(dexId="pumpfun", liquidity={"usd": 5_000}, marketCap=60_000)
@@ -133,20 +113,18 @@ class RocketTests(unittest.TestCase):
             rb.take_profits(quote=lambda m, a: 6, closer=closed.append)        # only 3 open, -40%: no basket stop
             self.assertEqual(closed, [])
 
-    def test_one_coin_down_50_percent_closes_all(self):
+    def test_no_rebuy_and_fixed_50_percent_stop_closes_only_that_coin(self):
         import live_trade_state as st
-        positions = {"A": {"mode": "rocket", "token_amount_raw": "1", "cost_usd": 20, "dca_done": True},
-                     "B": {"mode": "rocket", "token_amount_raw": "1", "cost_usd": 10},
-                     "C": {"mode": "copy", "token_amount_raw": "1", "cost_usd": 10}}
-        closed = []
-        price = {"A": 11.0, "B": 12.0, "C": 1.0}
+        positions = {"A": {"mode": "rocket", "token_amount_raw": "1", "cost_usd": 10},
+                     "B": {"mode": "rocket", "token_amount_raw": "1", "cost_usd": 10}}
+        bought, closed = [], []
         with patch.object(st, "_load", return_value={"positions": positions}), \
              patch.object(st, "set_position_fields", side_effect=lambda m, **f: positions[m].update(f)):
-            rb.take_profits(quote=lambda m, a: price[m], closer=closed.append)     # A -45%: keep
-            self.assertEqual(closed, [])
-            price["A"] = 9.9                                                        # A -50.5%: close all
-            rb.take_profits(quote=lambda m, a: price[m], closer=closed.append)
-            self.assertEqual(sorted(closed), ["A", "B"])                            # copy position untouched
+            rb.take_profits(quote=lambda m, a: 4.0 if m == "A" else 12.0, closer=closed.append,
+                            dca_buyer=lambda *a: bought.append(1) or "")
+        self.assertEqual((bought, closed), ([], []))     # never averages down, never closes everything
+        import live_exit_monitor as lem
+        self.assertEqual(lem.position_signal(positions["A"], 10, 4.0)["reason"], "stop_loss")   # A alone is sold
 
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())

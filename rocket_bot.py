@@ -42,7 +42,7 @@ MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 5_000)
 MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 5))
 COOLDOWN_S = sg._f("ROCKET_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("ROCKET_SCAN_SECONDS", 45)
-STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0)          # 0 = no stop loss (owner's choice)
+STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.50)       # fixed stop: the coin falls 50% -> that position is sold
 _SL = str(STOP_LOSS) if STOP_LOSS > 0 else "1"      # "1" = only at -100%: never triggers
 TRAIL_ARM = sg._f("ROCKET_TRAIL_ARM", 0.30)
 TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.15)
@@ -51,7 +51,7 @@ MAX_HOLD_S = sg._f("ROCKET_MAX_HOLD_MINUTES", 90) * 60
 # at 5x sell half of what is left; the rest rides the trailing stop for a 10x+.
 # Average down (owner's choice): if the coin falls DCA_DROP below our buy, buy DCA_USD more once
 # (lower average price) and then close the WHOLE position at +DCA_TARGET over the average price.
-DCA_DROP = sg._f("ROCKET_DCA_DROP", 0.20)
+DCA_DROP = sg._f("ROCKET_DCA_DROP", 0)            # 0 = no rebuy (owner's choice: never averages down)
 DCA_USD = sg._f("ROCKET_DCA_USD", 10)
 DCA_TARGET = sg._f("ROCKET_DCA_TARGET", 0.20)
 DCA_EXIT = {"stop_loss": _SL, "arm": str(1 + DCA_TARGET), "drop": "0"}
@@ -147,7 +147,7 @@ def _dca_buy(mint, pos, send, chat):
 BASKET_DROP = sg._f("ROCKET_BASKET_DROP", 0.25)
 # Coin crash (owner's choice): if ANY sniper coin is COIN_CRASH below what it cost (average price,
 # rebuy included), every sniper position is closed.
-COIN_CRASH = sg._f("ROCKET_COIN_CRASH", 0.50)
+COIN_CRASH = sg._f("ROCKET_COIN_CRASH", 0)        # 0 = off (replaced by the fixed 50% stop per coin)
 
 
 def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None, closer=None):
@@ -166,7 +166,7 @@ def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None, 
             continue
     crashed = [(m, v / float(p["cost_usd"])) for m, (p, v) in values.items()
                if float(p.get("cost_usd") or 0) > 0 and v <= (1 - COIN_CRASH) * float(p["cost_usd"])]
-    if crashed:
+    if crashed and COIN_CRASH > 0:
         m0, r0 = crashed[0]
         if send and chat:
             send(chat, "🛑 SNIPER: " + str(values[m0][0].get("symbol") or m0[:6]) + " caiu " + format((1 - r0) * 100, ".0f") +
@@ -204,7 +204,7 @@ def take_profits(send=None, chat=None, quote=None, seller=None, dca_buyer=None, 
         ratio = value / float(pos["cost_usd"])
         if pos.get("dca_done"):
             continue                                # after the rebuy: sells all at +20% over the average
-        if ratio <= 1 - DCA_DROP and not pos.get("tp_2x"):
+        if DCA_DROP > 0 and ratio <= 1 - DCA_DROP and not pos.get("tp_2x"):
             st.set_position_fields(mint, dca_done=True, dca_at=time.time())
             try:
                 r = (dca_buyer or _dca_buy)(mint, pos, send, chat)
@@ -407,14 +407,17 @@ def status_text():
              format(MIN_BUY_RATIO_5M, "g") + "x mais que vendas), " + str(MIN_BUYS_1H) + "+ compras na hora. Liquidez US$ " +
              format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil, anti-golpe.",
              "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · " +
-             ("🛑 stop -" + format(STOP_LOSS * 100, ".0f") + "%" if STOP_LOSS > 0 else "🚫 sem stop loss por moeda") +
+             ("🛑 stop fixo -" + format(STOP_LOSS * 100, ".0f") + "% (fecha a moeda, não recompra)" if STOP_LOSS > 0
+              else "🚫 sem stop loss por moeda") +
              " · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
-             "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · 📉 se cair " +
-             format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") + " e fecha tudo em +" +
-             format(DCA_TARGET * 100, ".0f") + "% sobre o preço médio · 💰 em 2x vende metade "
+             "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · " +
+             ("📉 se cair " + format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") +
+              " e fecha tudo em +" + format(DCA_TARGET * 100, ".0f") + "% sobre o preço médio · " if DCA_DROP > 0 else "") +
+             "💰 em 2x vende metade "
              "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · 🛑 com " + str(MAX_OPEN) +
-             " abertas, se todas juntas caírem " + format(BASKET_DROP * 100, ".0f") + "% fecha todas · 🛑 se UMA moeda cair " +
-             format(COIN_CRASH * 100, ".0f") + "% fecha todas · ⏸️ pausa com " + str(MAX_LOSS_STREAK) +
+             " abertas, se todas juntas caírem " + format(BASKET_DROP * 100, ".0f") + "% fecha todas · " +
+             ("🛑 se UMA moeda cair " + format(COIN_CRASH * 100, ".0f") + "% fecha todas · " if COIN_CRASH > 0 else "") +
+             "⏸️ pausa com " + str(MAX_LOSS_STREAK) +
              " perdas seguidas · sem limite diário."]
     try:
         hist = [h for h in st.history() if h.get("mode") == "rocket" and h.get("pnl_usd") is not None]
