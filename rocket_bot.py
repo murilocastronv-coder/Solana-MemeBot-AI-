@@ -28,9 +28,6 @@ ORDER_USD = sg._f("ROCKET_ORDER_USD", 10)
 MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 4))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
 MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 30_000)
-# coins still on the pump.fun launch curve: DexScreener shows little or no "liquidity" for them,
-# so their size is checked by market cap instead (the curve ends at ~US$ 69k-100k)
-MIN_CURVE_MCAP = sg._f("ROCKET_MIN_CURVE_MCAP_USD", 30_000)
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
 MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 80) * 60
 MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 7 * 24 * 60) * 60     # 7 days
@@ -229,17 +226,13 @@ def rocket_reason(p, now=None):
     liq = float((p.get("liquidity") or {}).get("usd") or 0)
     if not sg.is_pump(p):
         return "não é da pump.fun"
-    if p.get("dexId") == "pumpfun":                       # still on the launch curve
-        mcap = float(p.get("marketCap") or p.get("fdv") or 0)
-        if mcap < MIN_CURVE_MCAP:
-            return "curva da pump.fun no começo (market cap baixo)"
-    else:
-        if liq < MIN_LIQ:
-            return "liquidez baixa"
-        if liq > MAX_LIQ:
-            return "liquidez alta"
-        if ((p.get("quoteToken") or {}).get("address")) not in sg.QUOTES:
-            return "par sem SOL/USDC"
+    # real liquidity of the pool, for EVERY coin (also on the launch curve): owner's minimum US$ 30k
+    if liq < MIN_LIQ:
+        return "liquidez baixa (< US$ " + format(MIN_LIQ / 1000, ".0f") + " mil)"
+    if liq > MAX_LIQ:
+        return "liquidez alta"
+    if p.get("dexId") != "pumpfun" and ((p.get("quoteToken") or {}).get("address")) not in sg.QUOTES:
+        return "par sem SOL/USDC"
     created = p.get("pairCreatedAt")
     age = now - float(created) / 1000 if created else None
     if age is None or age < MIN_AGE_S:
