@@ -136,6 +136,8 @@ a{color:#9db4ff}.pill{display:inline-block;padding:2px 8px;border-radius:99px;fo
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
 .btn{border:0;border-radius:10px;padding:10px 14px;font-size:15px;font-weight:600;color:#fff;background:#3a3f4b;cursor:pointer;margin:2px 4px 2px 0}
 .btn.go{background:#2e8b57}.btn.stop{background:#b23b3b}
+.trail{border-color:#5b4bd1}.flash{animation:fl 1s ease-in-out 4}
+@keyframes fl{50%{background:#2b2560;border-color:#a594ff}}
 .note{border-bottom:1px solid var(--line);padding:8px 0}.note:last-child{border:0}.note .t{color:var(--mut);font-size:12px}
 """
 
@@ -164,6 +166,61 @@ def controls(s):
             "elas continuam com stop, stop móvel e alvos até fechar.</div></div>")
 
 
+TRAIL_MARK = "STOP MÓVEL ATIVADO"
+
+NOTIFY_JS = """
+<script>
+(function(){
+  var box=document.getElementById('trail'); if(!box) return;
+  var latest=Number(box.dataset.latest||0), seen=0;
+  try{seen=Number(localStorage.getItem('trailSeen')||0);}catch(e){}
+  var btn=document.getElementById('notif');
+  function perm(){return ('Notification' in window)?Notification.permission:'unsupported';}
+  function label(){ if(!btn) return; var p=perm();
+    btn.textContent = p==='granted'?'🔔 Notificações ligadas':(p==='denied'?'🔕 Notificações bloqueadas no navegador':
+      (p==='unsupported'?'🔕 Este navegador não tem notificações':'🔔 Ativar notificações'));
+    btn.disabled = p!=='default'; }
+  label();
+  if(btn) btn.onclick=function(){ if(perm()==='default') Notification.requestPermission().then(label); };
+  if('serviceWorker' in navigator){ navigator.serviceWorker.register('/painel-sw.js').catch(function(){}); }
+  if(latest>seen && seen>0){
+    box.classList.add('flash');
+    try{var c=new (window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator();o.frequency.value=880;
+        o.connect(c.destination);o.start();setTimeout(function(){o.stop();},350);}catch(e){}
+    if(perm()==='granted'){
+      var title='🚀 Stop móvel ativado', opts={body:box.dataset.text||'',tag:'trail-'+latest};
+      // phones (Android) only show page notifications through a service worker
+      if('serviceWorker' in navigator){
+        navigator.serviceWorker.register('/painel-sw.js').then(function(r){return navigator.serviceWorker.ready;})
+          .then(function(r){r.showNotification(title,opts);}).catch(function(){try{new Notification(title,opts);}catch(e){}});
+      } else { try{new Notification(title,opts);}catch(e){} }
+    }
+  }
+  try{ if(latest) localStorage.setItem('trailSeen', String(latest)); }catch(e){}
+})();
+</script>
+"""
+
+
+def trailing_card(notes):
+    """Highlighted list of trailing-stop activations, with browser notification + beep when a new one comes."""
+    trail = [(t, text) for t, text in notes if TRAIL_MARK in text]
+    latest = int(trail[0][0] * 1000) if trail else 0
+    first = trail[0][1].split("\n")[0] if trail else ""
+    out = ["<div class='card trail' id='trail' data-latest='", str(latest), "' data-text='", _e(first), "'>",
+           "<h2>🚀 Stop móvel ativado</h2>",
+           "<button id='notif' class='btn' type='button'>🔔 Ativar notificações</button>",
+           "<div class='mut' style='margin:6px 0 8px'>Com a página aberta (pode estar em outra aba), toca um bip e chega uma "
+           "notificação no celular/computador quando o stop móvel de uma moeda for ativado.</div>"]
+    if trail:
+        for t, text in trail[:10]:
+            out += ["<div class='note'><div class='t'>há ", _ago(t), "</div><pre>", _e(text), "</pre></div>"]
+    else:
+        out.append("<div class='mut'>Nenhum stop móvel ativado desde que o bot reiniciou.</div>")
+    out.append("</div>")
+    return "".join(out)
+
+
 def page(msg=""):
     import copy_trader as ct
     try:
@@ -178,6 +235,9 @@ def page(msg=""):
     if msg:
         out += ["<div class='card' style='border-color:var(--acc)'>✅ ", _e(msg), "</div>"]
     out.append(controls(s))
+    with _LOCK:
+        all_notes = list(NOTICES)[::-1]
+    out.append(trailing_card(all_notes))
     if isinstance(s, dict):
         state = ("<span class='pill ok'>robô pronto</span>" if s["ready"] else
                  "<span class='pill bad'>parado: " + _e(s["why"] or "?") + "</span>")
@@ -244,5 +304,6 @@ def page(msg=""):
             out += ["<div class='note'><div class='t'>há ", _ago(t), "</div><pre>", _e(text), "</pre></div>"]
     else:
         out.append("<div class='mut'>Nenhum aviso desde que o bot reiniciou.</div>")
-    out.append("</div><div class='mut'>Painel só de leitura: não compra, não vende e não mostra chaves.</div></main></body></html>")
+    out.append("</div><div class='mut'>O painel não vende nem mostra chaves; só liga/desliga os robôs.</div></main>" + NOTIFY_JS +
+               "</body></html>")
     return "".join(out)
