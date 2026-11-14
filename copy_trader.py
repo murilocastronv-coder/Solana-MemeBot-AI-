@@ -379,6 +379,40 @@ def follow(address):
         _save(d)
 
 
+def add_owner_wallet(address):
+    """Owner's pick (Nov 14): copy this wallet's every buy and sell (mirror, proportional size; anti-scam and
+    the 70% / positions limits stay). Never paused or removed automatically."""
+    address = address.strip()
+    follow(address)
+    with _LOCK:
+        d = _load()
+        w = d["wallets"][address]
+        w.update(mirror=True, proportional=True, owner_pick=True, paused=False, leaving=False,
+                 auto_discovered=False, added_at=time.time())
+        d.setdefault("rejected", {}).pop(address, None)
+        _save(d)
+    _event("carteira escolhida pelo dono: " + address[:6] + "…")
+
+
+def owner_wallets():
+    """[(address, info)] of every wallet being copied, the owner's picks first."""
+    d = _load()
+    rows = [(a, w) for a, w in d["wallets"].items() if not w.get("leaving")]
+    return sorted(rows, key=lambda kv: (not kv[1].get("owner_pick"), not mirror(kv[0], kv[1]), kv[0]))
+
+
+def picks_text():
+    rows = owner_wallets()
+    if not rows:
+        return "📋 Nenhuma carteira sendo copiada. Toque em ➕ Adicionar carteira."
+    lines = ["📋 CARTEIRAS COPIADAS (" + str(len(rows)) + ") — toque no endereço para copiar"]
+    for a, w in rows:
+        tag = "⭐ sua escolha" if w.get("owner_pick") else "🔁 referência" if mirror(a, w) else "🤖 achada pelo bot"
+        lines.append(tag + (" · ⏸️ pausada" if w.get("paused") else "") + "\n`" + a + "`\n" + str(int(w.get("copies") or 0)) +
+                     " cópias · " + str(int(w.get("wins") or 0)) + " no lucro · " + format(float(w.get("pnl_usd") or 0), "+.2f") + " USD")
+    return "\n\n".join(lines)
+
+
 def open_sim_total():
     """Simulated open copy orders."""
     return sum(1 for p in _load()["positions"].values() if not p.get("real"))
