@@ -386,6 +386,7 @@ def add_owner_wallet(address):
     follow(address)
     with _LOCK:
         d = _load()
+        (d.get("owner_removed") or {}).pop(address, None)
         w = d["wallets"][address]
         w.update(mirror=True, proportional=True, owner_pick=True, paused=False, leaving=False,
                  auto_discovered=False, added_at=time.time())
@@ -1814,6 +1815,60 @@ TWIN_LOG = []   # last judged candidates (for the status)
 
 
 def preaudit_and_follow(candidate, rpc, sol_usd):
+    """Audit a candidate and count the result for the status (owner: how many wallets were analyzed)."""
+    outcome = _preaudit_and_follow(candidate, rpc, sol_usd)
+    if outcome in ("added", "replaced", "rejected"):
+        with _LOCK:
+            d = _load()
+            s = d.setdefault("search_stats", {"analyzed": 0, "approved": 0, "rejected": 0, "since": time.time()})
+            s["analyzed"] = int(s.get("analyzed", 0)) + 1
+            key = "rejected" if outcome == "rejected" else "approved"
+            s[key] = int(s.get(key, 0)) + 1
+            _save(d)
+    return outcome
+
+
+def _mins(m):
+    m = float(m)
+    return format(m / 1440, "g") + " dias" if m >= 1440 else format(m / 60, "g") + " h" if m >= 60 else format(m, ".0f") + " min"
+
+
+def search_line():
+    s = _load().get("search_stats") or {}
+    if not s.get("analyzed"):
+        return "🔢 Carteiras analisadas até agora: 0"
+    return ("🔢 Carteiras analisadas até agora: " + str(s["analyzed"]) + " · ✅ aprovadas " + str(s.get("approved", 0)) +
+            " · ❌ recusadas " + str(s.get("rejected", 0)) + " (desde " +
+            time.strftime("%d/%m %H:%M", time.gmtime(float(s.get("since") or time.time()))) + " UTC)")
+
+
+def mark_owner_removed(address):
+    """The owner removed this wallet: the reference wallet is not put back automatically."""
+    with _LOCK:
+        d = _load()
+        d.setdefault("owner_removed", {})[address] = time.time()
+        _save(d)
+
+
+def ensure_reference():
+    """The reference wallet (COPY_REFERENCE_WALLET) is always copied unless the owner removed it."""
+    import wallet_twin
+    ref = wallet_twin.REFERENCE
+    if not ref or not twin_mode():
+        return False
+    d = _load()
+    if ref in d["wallets"] or ref in (d.get("owner_removed") or {}):
+        return False
+    add_owner_wallet(ref)
+    with _LOCK:
+        d = _load()
+        d["wallets"][ref]["owner_pick"] = False
+        _save(d)
+    _event("carteira de referência " + ref[:6] + "… voltou para a lista")
+    return True
+
+
+def _preaudit_and_follow(candidate, rpc, sol_usd):
     """Audit a discovered wallet BEFORE following it. Returns 'added', 'replaced', 'rejected' or 'full'.
     Rejected wallets cannot come back for REJECT_DAYS."""
     address = str(candidate.get("wallet") or "")
@@ -2035,6 +2090,10 @@ def cycle(send=None, chat=None):
         apply_reference_only()
     except Exception as exc:
         LAST_ERROR["text"] = "só a carteira de referência: " + type(exc).__name__
+    try:
+        ensure_reference()
+    except Exception as exc:
+        LAST_ERROR["text"] = "carteira de referência: " + type(exc).__name__
     ensure_test_start()
     unpause_test_wallets()
     adopt_orphans()
@@ -2213,8 +2272,10 @@ def status_text():
                     ("\n🎯 Caçando carteiras SNIPER: compram a moeda com até " + format(wallet_twin.SNIPE_MAX_AGE_MIN, ".0f") +
                      " min de vida, seguram " + format(wallet_twin.SNIPE_HOLD_MIN, ".0f") + "–" +
                      format(wallet_twin.SNIPE_HOLD_MAX, ".0f") + " min, operam parecido com ela (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") + "%) e estão no lucro" if wallet_twin.SNIPER else
-                     "\n🔎 Caçando carteiras com o MESMO estilo (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") +
-                     "% parecidas) e com lucro recente"))
+                     "\n🔎 Caçando carteiras: seguram " + _mins(wallet_twin.SNIPE_HOLD_MIN) + " a " +
+                     _mins(wallet_twin.SNIPE_HOLD_MAX) + " por moeda, lucro ≥ US$ " + format(wallet_twin.MIN_PROFIT, ",.0f") +
+                     " em " + format(wallet_twin.RESULT_DAYS, ".0f") + " dias, carteira com " + format(MIN_WALLET_DAYS, ".0f") +
+                     "+ dias") + "\n" + search_line())
         if TWIN_LOG:
             lines.append("Últimas analisadas: " + " · ".join(t + " " + a[:5] + "… " + format(s, ".0f") + "% " + why
                                                             for t, a, s, why in TWIN_LOG[-4:]))

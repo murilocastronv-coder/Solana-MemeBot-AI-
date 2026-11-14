@@ -378,6 +378,7 @@ def handle(update):
     run_async(audit_job,chat,[parts[1]])
    elif action=="/deixar":
     if len(parts)!=2:send(chat,"Uso: /deixar ENDERECO_DA_CARTEIRA",keyboard());return
+    ct.mark_owner_removed(parts[1])
     pre=("🗑️ Parei de seguir "+parts[1]+".\n\n" if ct.unfollow(parts[1]) else
      "⏳ "+parts[1][:6]+"… tem uma posição copiada aberta: não copio mais compras dela, mas vendo junto quando ela vender e depois tiro da lista.\n\n")
    elif action=="copy_sim":ct.set_mode(True,False);pre="🧪 Copy trade em SIMULAÇÃO (preço real, nenhuma ordem real).\n\n"
@@ -635,7 +636,7 @@ def copy_wallet_action(chat,action,text):
    send(chat,ct.picks_text(),kb);return
   if action.startswith("cw_rm:"):
    a=action.split(":",1)[1]
-   now=ct.unfollow(a)
+   now=ct.unfollow(a);ct.mark_owner_removed(a)
    send(chat,("🗑️ Parei de copiar `"+a+"`." if now else "⏳ `"+a+"` tem uma cópia aberta: não copio mais compras dela, vendo junto quando ela vender e depois ela sai da lista."),keyboard());return
   parts=text.split()
   address=parts[1] if action=="/copiar" and len(parts)>1 else (parts[0] if parts else "")
