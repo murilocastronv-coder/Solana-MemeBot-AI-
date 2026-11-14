@@ -124,16 +124,19 @@ def split_message(text,limit=3800):
   cur+=("\n" if cur else "")+line
  if cur:parts.append(cur)
  return parts
+REMOVED_ROBOT_ACTIONS={"rk_on","rk_off","rk_status","/sniper","rks_on","rks_off","dm_on","dm_off","dm_status","/diamond"}
+def remove_robots_once():
+ """Owner's choice (Nov 14): Sniper (and its signals) and Diamond removed; only the copy trade runs.
+ Their open real positions keep the stop / trailing of the exit monitor."""
+ try:
+  import rocket_bot,diamond_bot
+  rocket_bot.set_enabled(False);rocket_bot.set_signals(False);diamond_bot.stop()
+ except Exception:logging.exception("remove robots failed")
 def keyboard():
- """Owner's menu: only the BTC robot (owner's choice) and the wallet."""
- return [[{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
-  [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
-  [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
-  [{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
+ """Owner's menu (Nov 14): only the copy trade and the wallet (Sniper and Diamond removed)."""
+ return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
-  [{"text":"💎 Diamond: nova rodada 12 h","callback_data":"dm_on"},{"text":"⏹️ Parar Diamond","callback_data":"dm_off"}],
-  [{"text":"💎 Diamond: resultado","callback_data":"dm_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -263,6 +266,9 @@ def handle(update):
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
  if action.startswith("bx_"):
   send(chat,"₿ O robô de BTC foi removido. O bot agora roda só o Sniper.",keyboard());return
+ if action in REMOVED_ROBOT_ACTIONS:
+  send(chat,"🗑️ O Sniper e o Diamond foram removidos: o bot agora roda só o copy trade. "
+   "Posições que eles deixaram abertas continuam com stop e stop móvel até fechar.",keyboard());return
  if action in ("rks_on","rks_off"):
   import rocket_bot
   rocket_bot.set_signals(action=="rks_on")
@@ -764,8 +770,7 @@ def loop():
   import copy_trader
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
- threading.Thread(target=rocket_loop,daemon=True).start()
- threading.Thread(target=diamond_loop,daemon=True).start()
+ remove_robots_once()      # Sniper and Diamond removed (owner, Nov 14): their loops no longer start
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
@@ -811,15 +816,6 @@ def web_action(action):
    if chat:start_real_or_wait(chat,what)
  if action=="copy_real":start_engine("copy trade");ct.set_mode(True,True)
  elif action=="copy_off":ct.set_mode(False)
- elif action=="rk_on":
-  import rocket_bot
-  (None if __import__("sniper_sim").paper() else start_engine("Sniper"));rocket_bot.set_enabled(True)
- elif action=="rk_off":
-  import rocket_bot
-  rocket_bot.set_enabled(False)
- elif action in ("rks_on","rks_off"):
-  import rocket_bot
-  rocket_bot.set_signals(action=="rks_on")
  else:raise ValueError("ação desconhecida")
  note="🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]
  try:

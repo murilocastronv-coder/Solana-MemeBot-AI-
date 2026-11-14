@@ -79,23 +79,19 @@ class ControlTests(unittest.TestCase):
         h.update(headers or {})
         return self.client.post("/painel/acao", data={"acao": acao, "csrf": csrf or dashboard.csrf_token()}, headers=h)
 
-    def test_turn_sniper_and_copy_on_and_off(self):
+    def test_turn_copy_on_and_off(self):
         import copy_trader as ct
-        import rocket_bot
         with patch("live_engine.start"), patch.object(tb, "active_chat", return_value=None):
-            self.assertEqual(self.post("rk_off").status_code, 303)
-            self.assertFalse(rocket_bot.enabled())
-            self.assertEqual(self.post("rk_on").status_code, 303)
-            self.assertTrue(rocket_bot.enabled())
+            self.assertEqual(self.post("rk_on").status_code, 400)          # Sniper removed (owner, Nov 14)
             self.assertEqual(self.post("copy_real").status_code, 303)
             self.assertTrue(ct.real_enabled())
             self.assertEqual(self.post("copy_off").status_code, 303)
             self.assertFalse(ct.enabled())
 
     def test_protected(self):
-        self.assertEqual(self.client.post("/painel/acao", data={"acao": "rk_on"}).status_code, 401)
-        self.assertEqual(self.post("rk_on", csrf="x").status_code, 403)
-        self.assertEqual(self.post("rk_on", headers={"Origin": "https://evil.example"}).status_code, 403)
+        self.assertEqual(self.client.post("/painel/acao", data={"acao": "copy_off"}).status_code, 401)
+        self.assertEqual(self.post("copy_off", csrf="x").status_code, 403)
+        self.assertEqual(self.post("copy_off", headers={"Origin": "https://evil.example"}).status_code, 403)
         self.assertEqual(self.post("sell_everything").status_code, 400)
 
 
