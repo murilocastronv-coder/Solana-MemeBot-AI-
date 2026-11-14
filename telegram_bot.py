@@ -129,6 +129,8 @@ def keyboard():
  return [[{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
   [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
   [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
+  [{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
+  [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"💎 Diamond: nova rodada 12 h","callback_data":"dm_on"},{"text":"⏹️ Parar Diamond","callback_data":"dm_off"}],
   [{"text":"💎 Diamond: resultado","callback_data":"dm_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
@@ -600,6 +602,13 @@ def copy_beat_line():
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
+ try:
+  import copy_trader
+  if copy_trader.relaunch_real_once():
+   try:live_engine.start()
+   except Exception:logging.exception("copy relaunch: real engine not started")
+   logging.info("copy trade back on (real money)")
+ except Exception:logging.exception("copy relaunch failed")
  while True:
   time.sleep(poll)
   try:

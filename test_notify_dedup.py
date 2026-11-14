@@ -53,7 +53,7 @@ class FillWalletsTests(unittest.TestCase):
 class MenuTests(unittest.TestCase):
     def test_menu_has_only_copy_trade_and_bot_wallet(self):
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
-        self.assertEqual(data, {"rk_on", "rk_off", "rk_status", "rks_on", "rks_off", "dm_on", "dm_off", "dm_status", "unstick", "wallet_deposit", "wallet_balance",
+        self.assertEqual(data, {"rk_on", "rk_off", "rk_status", "rks_on", "rks_off", "copy_real", "copy_off", "copy_status", "dm_on", "dm_off", "dm_status", "unstick", "wallet_deposit", "wallet_balance",
                                 "wallet_withdraw"})
 
     def test_removed_buttons_answer_removed(self):
