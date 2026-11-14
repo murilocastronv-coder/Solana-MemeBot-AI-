@@ -18,6 +18,7 @@ import time
 import signals as sg
 
 HIT_UP = sg._f("SIGNAL_Q_HIT_UP", 0.15)
+X2 = sg._f("SIGNAL_Q_X2", 2.0)                      # also measured: how many signals made 2x
 MISS_DOWN = sg._f("SIGNAL_Q_MISS_DOWN", 0.30)
 WINDOW_S = sg._f("SIGNAL_Q_WINDOW_HOURS", 24) * 3600
 TARGET = sg._f("SIGNAL_Q_TARGET", 0.70)
@@ -106,31 +107,48 @@ def open_mints():
 
 
 def update(prices, now=None):
-    """Follow every open signal with the live prices {mint: price} (checked every scan, so the first
-    level touched wins: +HIT_UP = hit, -MISS_DOWN = miss); returns the ones resolved now."""
+    """Follow every open signal with the live prices {mint: price} (checked every scan, so the first level
+    touched wins). Hit: +HIT_UP before -MISS_DOWN. After a hit the signal stays followed to see if it makes 2x
+    (until 2x, -MISS_DOWN from the entry, or WINDOW_S). Returns the ones resolved now."""
     now = now or time.time()
     out = []
     with _LOCK:
         d = _load()
         for mint, s in list(d["open"].items()):
             price = prices.get(mint)
-            hit = None
+            done = False
             if price and price > 0:
                 r = price / s["entry"]
                 s["peak"], s["low"] = max(s["peak"], r), min(s["low"], r)
-                if r <= 1 - MISS_DOWN:
-                    hit = False
-                elif r >= 1 + HIT_UP:
-                    hit = True
-            if hit is None and now - s["at"] > WINDOW_S:
-                hit = False
-            if hit is not None:
-                res = dict(s, mint=mint, hit=hit, closed=now)
+                if "hit" not in s:
+                    if r <= 1 - MISS_DOWN:
+                        s["hit"], done = False, True
+                    elif r >= 1 + HIT_UP:
+                        s["hit"] = True
+                if s.get("hit") and (r >= X2 or r <= 1 - MISS_DOWN):
+                    done = True
+            if not done and now - s["at"] > WINDOW_S:
+                s.setdefault("hit", False)
+                done = True
+            if done:
+                res = dict(s, mint=mint, hit=bool(s.get("hit")), x2=s["peak"] >= X2, closed=now)
                 d["done"] = d["done"][-1000:] + [res]
                 d["open"].pop(mint)
                 out.append(res)
         _save(d)
     return out
+
+
+def measured(d=None):
+    """Signals whose hit / miss is already known: closed ones + open ones that already hit +15%
+    (still followed for 2x) - so the hit rate is not biased toward misses, which close sooner."""
+    d = _load() if d is None else d
+    return d["done"] + [dict(s, hit=True) for s in d["open"].values() if "hit" in s]
+
+
+def x2_rate(done=None):
+    done = _load()["done"] if done is None else done
+    return len(done), (sum(1 for x in done if x.get("x2")) / len(done) if done else 0.0)
 
 
 def band(done, t):
@@ -140,7 +158,7 @@ def band(done, t):
 
 def threshold(done=None):
     """(minimum score, measured hit rate of that band, samples, reaches_target)."""
-    done = _load()["done"] if done is None else done
+    done = measured() if done is None else done
     if len(done) < MIN_RESOLVED:
         n, rate = band(done, START_SCORE)
         return START_SCORE, rate, n, False
@@ -161,24 +179,26 @@ def threshold(done=None):
 
 def line(sc):
     """Text for the signal: its score and the honest measured hit rate."""
-    done = _load()["done"]
+    done = measured()
     t, rate, n, ok = threshold(done)
     if len(done) < MIN_RESOLVED:
         return ("⭐ Nota " + str(sc) + "/100 · medindo o acerto: " + str(len(done)) + "/" + str(MIN_RESOLVED) +
                 " sinais conferidos (acerto = subir +" + format(HIT_UP * 100, ".0f") + "% antes de cair −" +
                 format(MISS_DOWN * 100, ".0f") + "%)")
-    return ("⭐ Nota " + str(sc) + "/100 · acerto medido dos sinais com nota " + str(t) + "+: " +
+    n2, r2 = x2_rate(_load()["done"])
+    return ("⭐ Nota " + str(sc) + "/100 · fizeram 2x: " + format(r2 * 100, ".0f") + "% dos " + str(n2) +
+            " sinais conferidos · acerto medido dos sinais com nota " + str(t) + "+: " +
             format(rate * 100, ".0f") + "% (" + str(n) + " sinais)" + ("" if ok else " — ainda abaixo da meta de " +
                                                                        format(TARGET * 100, ".0f") + "%"))
 
 
 def status_text():
     d = _load()
-    done = d["done"]
+    done = measured(d)
     t, rate, n, ok = threshold(done)
     hits = sum(1 for x in done if x["hit"])
     return ("🎯 Qualidade dos sinais: " + str(len(done)) + " conferidos, " + str(hits) + " acertos (" +
             (format(hits / len(done) * 100, ".0f") + "%" if done else "—") + ") · só manda nota " + str(t) + "+ · " +
             ("acerto dessa faixa " + format(rate * 100, ".0f") + "% em " + str(n) + " sinais" if n else "faixa ainda sem dados") +
             (" ✅ meta de " + format(TARGET * 100, ".0f") + "% atingida" if ok else "") + " · " + str(len(d["open"])) +
-            " sinais sendo acompanhados")
+            " sinais sendo acompanhados · 🚀 fizeram 2x: " + str(sum(1 for x in done if x.get("x2"))) + " de " + str(len(done)))

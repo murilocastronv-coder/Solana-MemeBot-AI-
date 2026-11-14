@@ -37,10 +37,12 @@ class SignalQualityTest(unittest.TestCase):
         sq.record(pair("A"), 80, NOW)
         sq.record(pair("B"), 70, NOW)
         out = sq.update({"A": 1.2, "B": 0.65}, NOW + 60)
-        got = {r["mint"]: r["hit"] for r in out}
-        self.assertEqual(got, {"A": True, "B": False})
+        self.assertEqual({r["mint"]: r["hit"] for r in out}, {"B": False})        # A hit: followed for 2x
+        self.assertEqual({x["mint"] if "mint" in x else x["symbol"]: x["hit"] for x in sq.measured()}, {"B": False, "A": True})
         sq.record(pair("C"), 75, NOW)
-        self.assertEqual(sq.update({"C": 1.05}, NOW + sq.WINDOW_S + 10)[0]["hit"], False)
+        res = {r["mint"]: r for r in sq.update({"C": 1.05}, NOW + sq.WINDOW_S + 10)}
+        self.assertFalse(res["C"]["hit"])
+        self.assertTrue(res["A"]["hit"] and not res["A"]["x2"])
 
     def test_threshold_picks_score_reaching_70(self):
         done = ([{"score": 90, "hit": True}] * 10 + [{"score": 90, "hit": False}] * 3 +
@@ -63,3 +65,28 @@ class SignalQualityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SignalX2Test(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.p = mock.patch.object(sq, "_path", return_value=pathlib.Path(self.tmp.name) / "q.json")
+        self.p.start()
+
+    def tearDown(self):
+        self.p.stop()
+        self.tmp.cleanup()
+
+    def test_hit_then_2x(self):
+        sq.record(pair("A"), 80, NOW)
+        self.assertEqual(sq.update({"A": 1.2}, NOW + 60), [])           # hit, still followed for 2x
+        res = sq.update({"A": 2.1}, NOW + 120)[0]
+        self.assertTrue(res["hit"] and res["x2"])
+        self.assertEqual(sq.x2_rate(), (1, 1.0))
+
+    def test_hit_without_2x_closes_at_window(self):
+        sq.record(pair("A"), 80, NOW)
+        sq.update({"A": 1.3}, NOW + 60)
+        res = sq.update({"A": 1.1}, NOW + sq.WINDOW_S + 5)[0]
+        self.assertTrue(res["hit"])
+        self.assertFalse(res["x2"])
