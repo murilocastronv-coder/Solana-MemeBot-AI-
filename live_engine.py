@@ -141,7 +141,7 @@ EXIT_TEXT = {
     "hot": "🛑 Stop -6% | 🚀 a partir de +8% deixa correr (vende 5% abaixo do topo) | ⏱️ sai em 45 min se não andar",
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
-    "rocket": "🚀 Sniper: 🛑 stop fixo -50% | 💰 2x vende metade, 5x mais metade | 🚀 a partir de +30% stop móvel (15% abaixo do topo)",
+    "rocket": "🚀 Sniper: 🛑 stop fixo -37% | 💰 2x vende metade, 5x mais metade | 🚀 a partir de +30% stop móvel (15% abaixo do topo)",
     "dip": "📉 Dip Bot: 🛑 stop -40% | 🚀 a partir de +12% stop móvel (vende 6% abaixo do topo) | ⏱️ sai em 6 h se não subir",
     "signal": "📡 Sinal: vende 1/2 no TP1, 1/4 no TP2 e o resto no TP3 | 🛑 stop do sinal (abaixo do fundo) | ⏱️ fecha em 24 h se não andar",
     "pumpfun": "🛑 Stop -12% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",

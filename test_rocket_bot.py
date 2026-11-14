@@ -58,8 +58,8 @@ class RocketTests(unittest.TestCase):
         import live_exit_monitor as lem
         pos = {"mode": "rocket", "peak_ratio": 0, "opened_at": time.time()}
         self.assertEqual(lem.position_signal(pos, 10, 6.5)["action"], "hold")                 # -35%
-        self.assertEqual(lem.position_signal(pos, 10, 5.5)["action"], "hold")                 # -45%
-        self.assertEqual(lem.position_signal(pos, 10, 4.9)["reason"], "stop_loss")            # -51%: fixed stop
+        self.assertEqual(lem.position_signal(pos, 10, 6.5)["action"], "hold")                 # -35%
+        self.assertEqual(lem.position_signal(pos, 10, 6.2)["reason"], "stop_loss")            # -38%: fixed stop 37%
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 27)["action"], "hold")   # 3x, -10% from top
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 25)["action"], "sell")   # -17% from top
         old = dict(pos, opened_at=time.time() - 20 * 3600)
