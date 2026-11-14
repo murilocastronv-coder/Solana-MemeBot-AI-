@@ -257,10 +257,10 @@ def handle(update):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
  if action=="bx_rs":
-  import btc_research
-  if btc_research.RESULT["running"]:send(chat,"🔬 A pesquisa já está rodando.",keyboard());return
-  send(chat,"🔬 Testando ~2 mil configurações do robô de BTC em 60 dias (treino 40 + teste 20 dias). Leva alguns minutos…",keyboard())
-  run_async(lambda:btc_research.run(send=send,chat=chat));return
+  import btc_swing
+  if btc_swing.RESULT["running"]:send(chat,"🔬 A pesquisa já está rodando.",keyboard());return
+  send(chat,"🔬 Testando ~1.500 estratégias de BTC em velas de 1 h (1 ano: treino 8 meses + teste 4 meses). Leva 1–3 min…",keyboard())
+  run_async(lambda:btc_swing.run(send=send,chat=chat));return
  if action=="bx_bt":
   import btc_bot
   if btc_bot.BACKTEST["running"]:send(chat,"🧪 O backtest já está rodando, o resultado chega aqui em alguns minutos.",keyboard());return
@@ -577,9 +577,8 @@ def btc_loop():
     "Estou testando outras configurações (treino 40 dias + teste 20 dias); o resultado chega aqui. Nada foi vendido.")
  except Exception:logging.exception("btc pause failed")
  def research():
-  import btc_research
-  if not btc_bot.BACKTEST["text"]:btc_bot.run_backtest(None,None,60)
-  btc_research.run(send=send,chat=active_chat())
+  import btc_swing
+  if not btc_swing.RESULT["text"]:btc_swing.run(send=send,chat=active_chat())
  run_async(research)   # results in the logs / panel / Telegram
  while True:
   time.sleep(btc_bot.CHECK_EVERY_S)
