@@ -704,21 +704,27 @@ def wallet_discovery_loop():
    if source in ("blocks","blocos","ambos","both"):
     wallet_copy.scan_confirmed(max_blocks=100)
    added=[]
-   candidates=wallet_copy.best_wallets(limit=50)
+   # all qualified wallets, best first: the top ones were often already rejected (skipped below), so the
+   # audit budget goes to the next fresh ones instead of finding nothing every round
+   candidates=wallet_copy.best_wallets(limit=int(os.getenv("COPY_DISCOVERY_CANDIDATES","300")))
    followed={c["wallet"] for c in candidates if copy_trader.refresh_stats(c)}
    # audit BEFORE following (a few per round): only approved wallets enter the list
    rpc=dex_rpc()
    checked=0;budget=copy_trader.preaudit_budget()   # more per round while the list has free slots (max 20)
+   skip={"seguida":0,"recusada":0,"filtro":0}
    for candidate in candidates:
     if checked>=budget:break
     a=candidate["wallet"]
-    if a in followed or copy_trader.is_rejected(a) or not copy_trader.prefilter(candidate):continue
+    if a in followed:skip["seguida"]+=1;continue
+    if copy_trader.is_rejected(a):skip["recusada"]+=1;continue
+    if not copy_trader.prefilter(candidate):skip["filtro"]+=1;continue
     checked+=1
     try:outcome=copy_trader.preaudit_and_follow(candidate,rpc,copy_trader._sol_usd())
     except Exception as exc:
      logging.warning("pre-audit failed: %s",type(exc).__name__);continue
     if outcome in ("added","replaced"):added.append(a)
-   logging.info("wallet discovery: %s candidatas, %s analisadas, %s novas",len(candidates),checked,len(added))
+   logging.info("wallet discovery: %s candidatas, %s analisadas, %s novas | puladas: %s",len(candidates),checked,len(added),
+    ", ".join(k+"="+str(v) for k,v in skip.items()))
    removed=copy_trader.prune_low_balance()+copy_trader.remove_fast_wallets()
    chat=active_chat()
    if chat and removed:
