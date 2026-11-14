@@ -25,7 +25,7 @@ _http = requests.Session()
 SOURCES = ("https://api.binance.com", "https://api.binance.us")
 
 
-def hourly(days=365, now=None, get=None):
+def hourly(days=365, now=None, get=None, symbol="BTCUSDT"):
     now = now or time.time()
     start, end, out = int((now - days * 86400) * 1000), int(now * 1000), []
     while start < end:
@@ -35,7 +35,7 @@ def hourly(days=365, now=None, get=None):
         else:
             for base in SOURCES:
                 try:
-                    r = _http.get(base + "/api/v3/klines", params={"symbol": "BTCUSDT", "interval": "1h",
+                    r = _http.get(base + "/api/v3/klines", params={"symbol": symbol, "interval": "1h",
                                                                   "startTime": start, "limit": 1000}, timeout=15)
                     r.raise_for_status()
                     rows = r.json()
@@ -366,3 +366,101 @@ def run_challenge(send=None, chat=None, cs=None):
         logging.warning(CHALLENGE["text"])
     finally:
         CHALLENGE["running"] = False
+
+
+# ------------------------------------------------------------------ monthly challenge on the Jupiter Perps coins
+# Jupiter Perpetuals only lists SOL, ETH and BTC: those are the coins the robot could really trade.
+PERP_COINS = (("SOL", "SOLUSDT"), ("ETH", "ETHUSDT"), ("BTC", "BTCUSDT"))
+
+
+def month_challenge(cs, ind, p, frac, start_usd=150.0, target_usd=400.0, start=0, end=None, days=30, step_days=7,
+                    safe_frac=0.25):
+    """Rolling 30-day windows (a new one every 7 days), each starting with start_usd and compounding.
+    Reaching target_usd -> CONSERVATIVE mode for the rest of the window: only safe_frac of the normal size
+    (and never below the target minus 10%: then it stops). Under 10% of the start = bust."""
+    end = end or len(cs)
+    times = []
+    trades = simulate(cs, ind, p, start, end, times)
+    out, t0, last = [], cs[max(start, 220)][0], cs[end - 1][0]
+    while t0 + days * 86400 <= last:
+        bal, hit, done = start_usd, False, ""
+        for t, r in zip(times, trades):
+            if t < t0 or t >= t0 + days * 86400 or done:
+                continue
+            bal += bal * (safe_frac if hit else 1.0) * frac * r
+            if not hit and bal >= target_usd:
+                hit = True
+            if hit and bal < target_usd * 0.9:
+                done = "locked"                         # gave back 10%: stop and keep the rest
+            if not hit and bal <= start_usd * 0.1:
+                done = "bust"
+        out.append({"hit": hit, "bust": done == "bust", "bal": round(bal, 2)})
+        t0 += step_days * 86400
+    return out
+
+
+def _mo(ws):
+    if not ws:
+        return "sem janelas"
+    hit = sum(1 for w in ws if w["hit"])
+    bust = sum(1 for w in ws if w["bust"])
+    avg = sum(w["bal"] for w in ws) / len(ws)
+    return (str(hit) + "/" + str(len(ws)) + " meses chegaram a US$ 400 · " + str(bust) + " quebraram · saldo médio no fim US$ " +
+            format(avg, ".0f"))
+
+
+def month_search(cs, keep=3):
+    ind = indicators(cs)
+    split = int(len(cs) * 2 / 3)
+    rows = []
+    for base in grid():
+        if base["lev"] != 5:
+            continue
+        for lev in (3, 5, 10, 20):
+            for frac in (0.5, 1.0):
+                p = dict(base, lev=lev)
+                tr = month_challenge(cs, ind, p, frac, start=0, end=split)
+                if not tr:
+                    continue
+                hit = sum(1 for w in tr if w["hit"]) / len(tr)
+                bust = sum(1 for w in tr if w["bust"]) / len(tr)
+                rows.append((hit - 2 * bust, p, frac, tr))
+    rows.sort(key=lambda r: -r[0])
+    out = []
+    for _, p, frac, tr in rows[:keep]:
+        te = month_challenge(cs, ind, p, frac, start=split, end=len(cs))
+        out.append({"p": p, "frac": frac, "train": tr, "test": te,
+                    "ok": bool(te) and sum(1 for w in te if w["hit"]) / len(te) >= 0.5 and not any(w["bust"] for w in te)})
+    return out
+
+
+MONTH = {"running": False, "text": ""}
+
+
+def run_month(send=None, chat=None, data=None):
+    if MONTH["running"]:
+        return
+    MONTH["running"] = True
+    try:
+        lines = ["🎯 DESAFIO US$ 150 → US$ 400 EM 1 MÊS (moedas da Jupiter Perps, velas de 1 h, 1 ano; janelas de 30 dias; "
+                 "chegou em 400 = modo conservador: 25% do tamanho, e para se devolver 10%)"]
+        any_ok = False
+        for name, symbol in PERP_COINS:
+            cs = (data or {}).get(name) or hourly(365, symbol=symbol)
+            rows = month_search(cs)
+            lines.append("\n— " + name + " (no período: " + format((cs[-1][4] / cs[0][4] - 1) * 100, "+.0f") + "%)")
+            for k, r in enumerate(rows, 1):
+                any_ok = any_ok or r["ok"]
+                lines.append(str(k) + ") " + describe(r["p"]) + " · usa " + format(r["frac"] * 100, ".0f") + "% do saldo"
+                             "\n   TREINO: " + _mo(r["train"]) + "\n   TESTE: " + _mo(r["test"]) + (" ✅" if r["ok"] else " ❌"))
+        lines.append("\n" + ("✅ Pelo menos uma configuração passou no TESTE (metade ou mais dos meses chegaram a 400, nenhum quebrou)."
+                             if any_ok else "❌ Nenhuma configuração passou no TESTE em nenhuma moeda."))
+        MONTH["text"] = "\n".join(lines)
+        logging.info("month challenge: %s", MONTH["text"].replace("\n", " | "))
+        if send and chat:
+            send(chat, MONTH["text"])
+    except Exception as exc:
+        MONTH["text"] = "⛔ Desafio do mês falhou: " + type(exc).__name__ + ": " + str(exc)[:150]
+        logging.warning(MONTH["text"])
+    finally:
+        MONTH["running"] = False
