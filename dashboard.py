@@ -67,7 +67,7 @@ def _safe(fn, default=""):
         return default or ("indisponível agora (" + type(exc).__name__ + ")")
 
 
-MODE = {"copy": "👥 Copy", "rocket": "🚀 Sniper", "signal": "📡 Sinal", "dip": "📉 Dip", "clone": "🤖 Clone",
+MODE = {"copy": "👥 Copy", "rocket": "🚀 Sniper", "diamond": "💎 Diamond", "signal": "📡 Sinal", "dip": "📉 Dip", "clone": "🤖 Clone",
         "consensus": "🤝 Consenso", "sniper": "🎯 Sniper antigo"}
 
 
@@ -238,6 +238,9 @@ def trail_rule(p):
             return None
         import rocket_bot
         return rocket_bot.TRAIL_ARM * 100, rocket_bot.TRAIL_DROP * 100
+    if mode == "diamond":
+        import diamond_bot
+        return diamond_bot.TRAIL_ARM * 100, diamond_bot.TRAIL_DROP * 100
     if mode == "copy":
         if p.get("copy_orphan"):
             return (float(lem.ORPHAN_EXIT["arm"]) - 1) * 100, float(lem.ORPHAN_EXIT["drop"]) * 100
@@ -403,6 +406,11 @@ def page(msg=""):
     out.append("<section class='tab' id='t-bots'>")
     if rocket_bot:
         out += ["<div class='card'><h2>🚀 Sniper</h2><pre>", _e(_safe(rocket_bot.status_text)), "</pre></div>"]
+    try:
+        import diamond_bot
+        out += ["<div class='card'><h2>💎 Diamond</h2><pre>", _e(_safe(diamond_bot.status_text)), "</pre></div>"]
+    except Exception:
+        pass
     out.append("</section>")
 
     # ---- Avisos

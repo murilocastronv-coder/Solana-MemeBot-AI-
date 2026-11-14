@@ -129,6 +129,8 @@ def keyboard():
  return [[{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
   [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
   [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
+  [{"text":"💎 Diamond: nova rodada 12 h","callback_data":"dm_on"},{"text":"⏹️ Parar Diamond","callback_data":"dm_off"}],
+  [{"text":"💎 Diamond: resultado","callback_data":"dm_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -264,6 +266,16 @@ def handle(update):
   send(chat,("📡 SINAIS DO SNIPER LIGADOS: cada moeda que o Sniper escolher chega aqui com o contrato, a entrada, o stop loss "
    "e os take profits — é só tocar para copiar. Os sinais funcionam mesmo com o Sniper (compra automática) desligado."
    if action=="rks_on" else "🔕 Sinais do Sniper desligados."),keyboard());return
+ if action in ("dm_on","dm_off","dm_status","/diamond"):
+  import diamond_bot
+  try:
+   if action=="dm_on":
+    live_engine.start();diamond_bot.start_round();pre="💎 DIAMOND LIGADO: nova rodada de "+format(diamond_bot.ROUND_S/3600,".0f")+" h. Decide a cada 15 min e te avisa a cada operação com o motivo.\n\n"
+   elif action=="dm_off":diamond_bot.stop();pre="⏹️ Diamond parado: não compra mais. A posição aberta continua com stop e stop móvel.\n\n"
+   else:pre=""
+   send(chat,pre+diamond_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Diamond: "+str(exc)[:200],keyboard())
+  return
  if action in ("rk_on","rk_off","rk_status","/sniper"):
   import rocket_bot
   try:
@@ -544,6 +556,19 @@ def rocket_loop():
    if not chat or not (rocket_bot.enabled() or rocket_bot.signals_on()):continue
    rocket_bot.cycle(send,chat,pairs=signals.candidate_pairs())
   except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
+def diamond_loop():
+ """Diamond: every 15 minutes one decision (buy / hold), for the 12 h round."""
+ import diamond_bot
+ try:
+  if diamond_bot.launch_round2():logging.info("diamond round 2 started")
+ except Exception:logging.exception("diamond launch failed")
+ time.sleep(60)
+ while True:
+  try:
+   chat=active_chat()
+   if chat and diamond_bot.enabled():diamond_bot.cycle(send,chat)
+  except Exception as exc:logging.exception("diamond cycle failed: %s",type(exc).__name__)
+  time.sleep(diamond_bot.CYCLE_S)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
 def copy_beat_line():
@@ -676,6 +701,7 @@ def loop():
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=rocket_loop,daemon=True).start()
+ threading.Thread(target=diamond_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
