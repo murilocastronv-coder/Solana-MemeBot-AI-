@@ -318,7 +318,7 @@ def handle(update):
  if action in ("copy_following","/copiadas"):
   import copy_trader as ct
   try:
-   send_parts(chat,ct.picks_text(),ct.manage_buttons()+keyboard())
+   send_parts(chat,ct.wallets_text(),ct.manage_buttons()+keyboard())
   except Exception as exc:send(chat,"Lista indisponível: "+type(exc).__name__,keyboard())
   return
  if action.startswith(("cw_off:","cw_on:")) or action in ("/pausar","/retomar","/ativar"):
@@ -336,7 +336,7 @@ def handle(update):
   state=("⏸️ PAUSADA" if w.get("paused") else "✅ COPIANDO")
   send(chat,("⏸️ Pausei "+addr[:6]+"…"+addr[-4:]+": não copio mais as compras dela. Posições abertas dela continuam e vendem quando ela vender." if pause
    else "▶️ Retomei "+addr[:6]+"…"+addr[-4:]+": volto a copiar as compras dela.")+"\nStatus agora: "+state)
-  send_parts(chat,ct.picks_text(),ct.manage_buttons()+keyboard());return
+  send_parts(chat,ct.wallets_text(),ct.manage_buttons()+keyboard());return
  if action=="/proporcional":
   import copy_trader as ct
   parts=(msg or {}).get("text","").split()
