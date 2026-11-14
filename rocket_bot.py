@@ -31,8 +31,10 @@ MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 15_000)
 # false (owner's choice): also coins launched on other Solana DEXes listed on DexScreener
 PUMP_ONLY = os.getenv("ROCKET_PUMP_ONLY", "false").strip().lower() == "true"
 MAX_LIQ = sg._f("ROCKET_MAX_LIQUIDITY_USD", 150_000)
-MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 80) * 60
-MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 7 * 24 * 60) * 60     # 7 days
+# Owner's choice (Nov 14): coins 1 to 30 days old, market cap at least US$ 70k (signals and the Sniper)
+MIN_AGE_S = sg._f("ROCKET_MIN_AGE_MINUTES", 24 * 60) * 60          # 1 day
+MAX_AGE_S = sg._f("ROCKET_MAX_AGE_MINUTES", 30 * 24 * 60) * 60     # 30 days
+MIN_MCAP = sg._f("ROCKET_MIN_MCAP", 70_000)
 MIN_UP_5M = sg._f("ROCKET_MIN_UP_5M", 2)
 MAX_UP_5M = sg._f("ROCKET_MAX_UP_5M", 80)
 MAX_UP_1H = sg._f("ROCKET_MAX_UP_1H", 400)
@@ -418,6 +420,8 @@ def rocket_reason(p, now=None):
         return "moeda nova demais (< " + _age_txt(MIN_AGE_S) + ")"
     if age > MAX_AGE_S:
         return "moeda velha (> " + _age_txt(MAX_AGE_S) + ")"
+    if float(p.get("marketCap") or p.get("fdv") or 0) < MIN_MCAP:
+        return "market cap baixo (< US$ " + format(MIN_MCAP / 1000, ".0f") + " mil)"
     tx = p.get("txns") or {}
     h1, m5 = tx.get("h1") or {}, tx.get("m5") or {}
     b1, s1 = int(h1.get("buys") or 0), int(h1.get("sells") or 0)
@@ -582,7 +586,7 @@ def status_text():
     lines = ["🚀 SNIPER (" + ("🧪 SIMULAÇÃO, sem dinheiro real" if sim_on else "dinheiro real") + ") — " + ("LIGADO" if d["enabled"] else "DESLIGADO") +
              (" (" + d["paused_why"] + ")" if not d["enabled"] and d.get("paused_why") else ""),
              "Compra as moedas mais populares da " + ("pump.fun" if PUMP_ONLY else "pump.fun e das outras DEX da DexScreener") + " com " + _age_txt(MIN_AGE_S) + " a " +
-             _age_txt(MAX_AGE_S) + " de vida no momento em que explodem: +" + format(MIN_UP_5M, ".0f") +
+             _age_txt(MAX_AGE_S) + " de vida e market cap US$ " + format(MIN_MCAP / 1000, ".0f") + " mil+, no momento em que explodem: +" + format(MIN_UP_5M, ".0f") +
              "% a +" + format(MAX_UP_5M, ".0f") + "% em 5 min, " + str(MIN_BUYS_5M) + "+ compras em 5 min (" +
              format(MIN_BUY_RATIO_5M, "g") + "x mais que vendas), " + str(MIN_BUYS_1H) + "+ compras na hora. Liquidez US$ " +
              format(MIN_LIQ / 1000, ".0f") + "–" + format(MAX_LIQ / 1000, ".0f") + " mil, anti-golpe.",

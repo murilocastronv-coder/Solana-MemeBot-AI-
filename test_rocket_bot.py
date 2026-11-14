@@ -12,8 +12,8 @@ MINT = "ROCKcoin111111111111111111111111111111pump"
 
 
 def pair(**kw):
-    p = {"chainId": "solana", "dexId": "pumpfun", "marketCap": 60_000, "pairAddress": "POOL", "baseToken": {"address": MINT, "symbol": "RK"},
-         "quoteToken": {"address": sg.SOL_MINT}, "liquidity": {"usd": 60_000}, "pairCreatedAt": (NOW - 3 * 3600) * 1000,
+    p = {"chainId": "solana", "dexId": "pumpfun", "marketCap": 200_000, "pairAddress": "POOL", "baseToken": {"address": MINT, "symbol": "RK"},
+         "quoteToken": {"address": sg.SOL_MINT}, "liquidity": {"usd": 60_000}, "pairCreatedAt": (NOW - 3 * 86400) * 1000,
          "txns": {"h1": {"buys": 400, "sells": 150}, "m5": {"buys": 80, "sells": 20}}, "volume": {"h1": 60_000},
          "priceChange": {"m5": 15, "h1": 120}, "priceUsd": "0.0001"}
     p.update(kw)
@@ -31,8 +31,9 @@ class RocketTests(unittest.TestCase):
         self.assertEqual(rb.rocket_reason(pair(), NOW), "")
 
     def test_rejections(self):
-        self.assertIn("velha", rb.rocket_reason(pair(pairCreatedAt=(NOW - 8 * 86400) * 1000), NOW))
-        self.assertIn("nova demais", rb.rocket_reason(pair(pairCreatedAt=(NOW - 70 * 60) * 1000), NOW))
+        self.assertIn("velha", rb.rocket_reason(pair(pairCreatedAt=(NOW - 31 * 86400) * 1000), NOW))
+        self.assertIn("nova demais", rb.rocket_reason(pair(pairCreatedAt=(NOW - 20 * 3600) * 1000), NOW))
+        self.assertIn("market cap", rb.rocket_reason(pair(marketCap=60_000), NOW))
         self.assertIn("sem explosão", rb.rocket_reason(pair(priceChange={"m5": 1, "h1": 50}), NOW))
         self.assertIn("pico vertical", rb.rocket_reason(pair(priceChange={"m5": 95, "h1": 150}), NOW))
         self.assertIn("vermelho", rb.rocket_reason(pair(priceChange={"m5": 10, "h1": -20}), NOW))
@@ -80,7 +81,7 @@ class RocketTests(unittest.TestCase):
             self.assertEqual(sold[-1][1:3], (0.5, "rocket_tp_5x"))
 
     def test_minimum_liquidity_30k_for_every_coin(self):
-        curve = pair(dexId="pumpfun", liquidity={"usd": 5_000}, marketCap=60_000)
+        curve = pair(dexId="pumpfun", liquidity={"usd": 5_000}, marketCap=200_000)
         self.assertIn("liquidez baixa", rb.rocket_reason(curve, NOW))        # 5k liquidity: never, even on the curve
         self.assertIn("liquidez baixa", rb.rocket_reason(dict(curve, liquidity={"usd": 0}), NOW))
         self.assertEqual(rb.rocket_reason(dict(curve, liquidity={"usd": 15_000}), NOW), "")
