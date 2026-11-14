@@ -192,6 +192,89 @@ def loss_streak(trades):
     return n
 
 
+# ---- Growth plan (owner's goal: grow fast while small, more conservative as the account grows) ----
+# Locked until the Sniper proves itself: GROWTH_MIN_TRADES closed trades with total profit (the last
+# GROWTH_MIN_TRADES also in profit). Until then every buy stays at ORDER_USD.
+# Then each buy is a share of the account that shrinks as the account grows (tiers below), never under
+# ORDER_USD, never more than GROWTH_MAX_LIQ_SHARE of the coin's pool (slippage), halved while the account
+# is 30%+ under its top. 20% of each positive month's gain is locked (not used for sizing) so a bad month
+# cannot take everything back.
+GROWTH_ON = os.getenv("ROCKET_GROWTH", "true").strip().lower() == "true"
+GROWTH_MIN_TRADES = int(sg._f("ROCKET_GROWTH_MIN_TRADES", 50))
+GROWTH_TIERS = ((1_000, 0.08), (10_000, 0.05), (100_000, 0.03), (500_000, 0.015), (float("inf"), 0.0075))
+GROWTH_DRAWDOWN = sg._f("ROCKET_GROWTH_DRAWDOWN", 0.30)
+GROWTH_LOCK_SHARE = sg._f("ROCKET_GROWTH_LOCK_SHARE", 0.20)
+GROWTH_MAX_LIQ_SHARE = sg._f("ROCKET_GROWTH_MAX_LIQ_SHARE", 0.01)
+
+
+def growth_unlocked(trades=None):
+    """(True, '') when the Sniper proved profit; else (False, why)."""
+    import live_trade_state as st
+    if not GROWTH_ON:
+        return False, "plano de crescimento desligado"
+    if trades is None:
+        trades = [h for h in st.history() if h.get("mode") == "rocket" and h.get("pnl_usd") is not None]
+    if len(trades) < GROWTH_MIN_TRADES:
+        return False, "fase 1: " + str(len(trades)) + "/" + str(GROWTH_MIN_TRADES) + " operações para provar lucro"
+    if sum(h["pnl_usd"] for h in trades) <= 0 or sum(h["pnl_usd"] for h in trades[-GROWTH_MIN_TRADES:]) <= 0:
+        return False, "fase 1: ainda sem lucro no total"
+    return True, ""
+
+
+def growth_pct(base):
+    for limit, pct in GROWTH_TIERS:
+        if base < limit:
+            return pct
+    return GROWTH_TIERS[-1][1]
+
+
+def _month(now):
+    return time.strftime("%Y-%m", time.gmtime(now))
+
+
+def track_account(value, now=None):
+    """Keep the account top, the month's opening value and the locked profit. Returns the state."""
+    now = now or time.time()
+    with _LOCK:
+        d = _load()
+        g = d.setdefault("growth", {})
+        g["peak"] = max(float(g.get("peak") or 0), value)
+        month = _month(now)
+        if g.get("month") != month:
+            start = float(g.get("month_start") or 0)
+            if g.get("month") and start > 0:
+                gain = value - start
+                g.setdefault("months", {})[g["month"]] = round(gain, 2)
+                if gain > 0:
+                    g["locked"] = round(float(g.get("locked") or 0) + gain * GROWTH_LOCK_SHARE, 2)
+            g.update(month=month, month_start=value)
+        _save(d)
+        return dict(g)
+
+
+def order_size(value, liquidity=None, trades=None, now=None):
+    """US$ for the next Sniper buy and a short explanation."""
+    ok, why = growth_unlocked(trades)
+    try:
+        g = track_account(value, now)
+    except Exception:
+        g = {}
+    if not ok:
+        return ORDER_USD, why
+    base = max(value - float(g.get("locked") or 0), 0)
+    pct = growth_pct(base)
+    size = base * pct
+    note = format(pct * 100, "g") + "% da conta"
+    peak = float(g.get("peak") or 0)
+    if peak > 0 and value < peak * (1 - GROWTH_DRAWDOWN):
+        size /= 2
+        note += ", metade (conta " + format((1 - value / peak) * 100, ".0f") + "% abaixo do topo)"
+    if liquidity and liquidity > 0 and size > liquidity * GROWTH_MAX_LIQ_SHARE:
+        size = liquidity * GROWTH_MAX_LIQ_SHARE
+        note += ", limitado a " + format(GROWTH_MAX_LIQ_SHARE * 100, "g") + "% da liquidez"
+    return round(max(size, ORDER_USD), 2), note
+
+
 def _dca_buy(mint, pos, send, chat):
     """Buy DCA_USD more of a rocket position that fell DCA_DROP. '' when bought, else why not."""
     import copy_trader as ct
@@ -385,10 +468,13 @@ def _buy(p, send, chat):
     free = ct.wallet_usd(live_engine.get_address(), max_age=0)
     if free is None:
         return "saldo indisponível"
-    if free < ORDER_USD + RESERVE_USD:
-        return "saldo livre US$ " + format(free, ".2f")
     invested = sum(float(p.get("cost_usd") or 0) for p in positions.values())
-    capped, _ = ct.exposure_cap(ORDER_USD, free + invested, invested, min_usd=ORDER_USD)
+    usd, _ = order_size(free + invested, float((p.get("liquidity") or {}).get("usd") or 0))
+    if free < usd + RESERVE_USD:
+        usd = ORDER_USD
+    if free < usd + RESERVE_USD:
+        return "saldo livre US$ " + format(free, ".2f")
+    capped, _ = ct.exposure_cap(usd, free + invested, invested, min_usd=ORDER_USD)
     if capped is None:
         return "já tem " + format(invested / (free + invested) * 100, ".0f") + "% da conta em moedas (máx. " + \
             format(ct.MAX_EXPOSURE * 100, ".0f") + "%, o resto fica em SOL)"
@@ -397,9 +483,9 @@ def _buy(p, send, chat):
     if send and chat:
         send(chat, "🚀 SNIPER: " + symbol + " explodindo — " + format(float(ch.get("m5") or 0), "+.0f") + "% em 5 min, " +
              str(int(m5.get("buys") or 0)) + " compras x " + str(int(m5.get("sells") or 0)) + " vendas. Comprando US$ " +
-             format(ORDER_USD, ".0f") + ".")
+             format(capped, ".0f") + ".")
     settled = live_engine._execute_buy({"baseToken": {"address": mint, "symbol": symbol}}, mint, symbol, send, chat,
-                                       live_engine.get_address(), None, "rocket", usd=ORDER_USD)
+                                       live_engine.get_address(), None, "rocket", usd=capped)
     return "" if settled else "compra não confirmada"
 
 
@@ -514,6 +600,21 @@ def status_text():
     except Exception:
         hist, open_n = [], 0
     lines.append("📦 Abertas agora: " + str(open_n) + "/" + str(MAX_OPEN))
+    try:
+        ok, gwhy = growth_unlocked(hist)
+        g = d.get("growth") or {}
+        months = g.get("months") or {}
+        txt = "📈 Plano de crescimento: " + ("ATIVO — compra = % da conta (8% até US$ 1 mil, 5% até 10 mil, 3% até "
+                                            "100 mil, 1,5% até 500 mil, 0,75% acima)" if ok else gwhy + " (compras de US$ " +
+                                            format(ORDER_USD, ".0f") + ")")
+        if g.get("locked"):
+            txt += " · 🔒 lucro guardado US$ " + format(float(g["locked"]), ",.2f")
+        if months:
+            pos_m = sum(1 for v in months.values() if v > 0)
+            txt += " · meses no lucro: " + str(pos_m) + "/" + str(len(months))
+        lines.append(txt)
+    except Exception:
+        pass
     if hist:
         won = sum(1 for h in hist if h["pnl_usd"] > 0)
         pnl = sum(h["pnl_usd"] for h in hist)

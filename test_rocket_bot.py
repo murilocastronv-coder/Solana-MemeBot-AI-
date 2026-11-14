@@ -191,3 +191,43 @@ class CopySpanTests(unittest.TestCase):
         first = ents[0]
         self.assertEqual(text.encode("utf-16-le")[first["offset"] * 2:(first["offset"] + first["length"]) * 2].decode("utf-16-le"),
                          "0.0001")
+
+
+class GrowthPlanTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile, pathlib
+        from unittest import mock
+        self.tmp = tempfile.TemporaryDirectory()
+        path = pathlib.Path(self.tmp.name) / "rocket_bot.json"
+        self.p = mock.patch.object(rb, "_path", return_value=path)
+        self.p.start()
+
+    def tearDown(self):
+        self.p.stop()
+        self.tmp.cleanup()
+
+    def test_locked_until_proven(self):
+        few = [{"pnl_usd": 5}] * 10
+        self.assertEqual(rb.order_size(500, trades=few)[0], rb.ORDER_USD)
+        losing = [{"pnl_usd": -1}] * 60
+        self.assertEqual(rb.order_size(500, trades=losing)[0], rb.ORDER_USD)
+
+    def test_tiers_get_more_conservative(self):
+        good = [{"pnl_usd": 1}] * 60
+        self.assertAlmostEqual(rb.order_size(500, trades=good)[0], 40)        # 8%
+        self.assertAlmostEqual(rb.order_size(5_000, trades=good)[0], 250)     # 5%
+        self.assertLess(rb.growth_pct(200_000), rb.growth_pct(50_000))
+        self.assertEqual(rb.order_size(100, trades=good)[0], rb.ORDER_USD)    # never under the base size
+
+    def test_drawdown_halves_and_liquidity_caps(self):
+        good = [{"pnl_usd": 1}] * 60
+        rb.order_size(5_000, trades=good)
+        self.assertAlmostEqual(rb.order_size(3_000, trades=good)[0], 75)      # 40% under top: 5% / 2
+        self.assertAlmostEqual(rb.order_size(3_000, liquidity=2_000, trades=good)[0], 20)   # 1% of the pool
+
+    def test_month_profit_is_locked(self):
+        jan = 1767225600   # 2026-01-01
+        rb.track_account(1_000, now=jan)
+        g = rb.track_account(2_000, now=jan + 32 * 86400)
+        self.assertAlmostEqual(g["locked"], 200)
+        self.assertEqual(g["months"], {"2026-01": 1000})
