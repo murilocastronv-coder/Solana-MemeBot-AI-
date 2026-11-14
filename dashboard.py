@@ -42,8 +42,7 @@ def csrf_ok(token):
 
 ACTIONS = {"copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado",
            "rk_on": "Sniper ligado", "rk_off": "Sniper desligado",
-           "rks_on": "Sinais do Sniper ligados", "rks_off": "Sinais do Sniper desligados",
-           "bx_on": "BTC 20x ligado", "bx_off": "BTC 20x desligado"}
+           "rks_on": "Sinais do Sniper ligados", "rks_off": "Sinais do Sniper desligados"}
 
 
 def _e(x):
@@ -163,11 +162,6 @@ def controls(s):
         rks_on = rocket_bot.signals_on()
     except Exception:
         rk_on = rks_on = None
-    try:
-        import btc_bot
-        bx_on = btc_bot.enabled()
-    except Exception:
-        bx_on = None
     copy_on = isinstance(s, dict) and s.get("copy_real")
     return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>🚀 Sniper</b> — " +
             ("<span class='pill ok'>ligado</span>" if rk_on else "<span class='pill bad'>desligado</span>") +
@@ -175,10 +169,7 @@ def controls(s):
             "</div></div><div><b>📡 Sinais do Sniper</b> — " +
             ("<span class='pill ok'>ligados</span>" if rks_on else "<span class='pill bad'>desligados</span>") +
             "<div style='margin-top:8px'>" + _button("rks_on", "📡 Ligar", "go") + _button("rks_off", "🔕 Parar", "stop") +
-            "</div></div><div><b>₿ BTC 20x (Jupiter)</b> — " +
-            ("<span class='pill ok'>ligado</span>" if bx_on else "<span class='pill bad'>desligado</span>") +
-            "<div style='margin-top:8px'>" + _button("bx_on", "₿ Ligar", "go") + _button("bx_off", "⏹️ Parar", "stop") +
-            "</div></div></div><div class='mut' style='margin-top:10px'>O bot roda no servidor 24 h: pode fechar esta aba "
+"</div></div></div><div class='mut' style='margin-top:10px'>O bot roda no servidor 24 h: pode fechar esta aba "
             "ou o celular que ele continua operando até você tocar em Parar. Parar não vende as posições abertas: "
             "elas continuam com stop, stop móvel e alvos até fechar.</div></div>")
 
@@ -412,30 +403,7 @@ def page(msg=""):
     out.append("<section class='tab' id='t-bots'>")
     if rocket_bot:
         out += ["<div class='card'><h2>🚀 Sniper</h2><pre>", _e(_safe(rocket_bot.status_text)), "</pre></div>"]
-    try:
-        import btc_bot
-        out += ["<div class='card'><h2>₿ BTC 20x</h2><pre>", _e(_safe(btc_bot.status_text)), "</pre></div>"]
-        try:
-            import btc_swing
-            if btc_swing.MONTH["text"]:
-                out += ["<div class='card'><h2>🪙 Desafio 1 mês</h2><pre>", _e(btc_swing.MONTH["text"]), "</pre></div>"]
-            if btc_swing.CHALLENGE["text"]:
-                out += ["<div class='card'><h2>🎯 Desafio 150 → 400</h2><pre>", _e(btc_swing.CHALLENGE["text"]), "</pre></div>"]
-            if btc_swing.RESULT["text"]:
-                out += ["<div class='card'><h2>🔬 Pesquisa BTC (1 h, 1 ano)</h2><pre>", _e(btc_swing.RESULT["text"]), "</pre></div>"]
-        except Exception:
-            pass
-        try:
-            import btc_research
-            if btc_research.RESULT["text"]:
-                out += ["<div class='card'><h2>🔬 Pesquisa de estratégia</h2><pre>", _e(btc_research.RESULT["text"]), "</pre></div>"]
-        except Exception:
-            pass
-        if btc_bot.BACKTEST["text"]:
-            out += ["<div class='card'><h2>🧪 Backtest 60 dias</h2><pre>", _e(btc_bot.BACKTEST["text"]), "</pre></div>"]
-    except Exception:
-        pass
-    out += ["<div class='card'><h2>👥 Copy trade</h2><pre>", _e(_safe(ct.status_text)), "</pre></div></section>"]
+    out.append("</section>")
 
     # ---- Avisos
     out.append("<section class='tab' id='t-avisos'><div class='card'><h2>🔔 Avisos do bot (os mesmos do Telegram)</h2>")
