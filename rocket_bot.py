@@ -116,6 +116,53 @@ def enabled():
     return bool(_load()["enabled"])
 
 
+def signals_on():
+    """Signals mode: send entry / SL / TPs of every coin the Sniper picks (independent of buying)."""
+    return bool(_load().get("signals", True))
+
+
+def set_signals(on):
+    with _LOCK:
+        d = _load()
+        d["signals"] = bool(on)
+        _save(d)
+
+
+def _px(x):
+    x = float(x)
+    if x >= 1:
+        return format(x, ",.4f")
+    return format(x, ".12f").rstrip("0").rstrip(".") if x > 0 else "0"
+
+
+def signal_text(p):
+    """Signal with the same rules the Sniper uses; values between backticks are tap-to-copy in Telegram."""
+    mint = p["baseToken"]["address"]
+    symbol = (p.get("baseToken") or {}).get("symbol") or mint[:6]
+    price = float(p.get("priceUsd") or 0)
+    ch = p.get("priceChange") or {}
+    m5 = (p.get("txns") or {}).get("m5") or {}
+    liq = float((p.get("liquidity") or {}).get("usd") or 0)
+    mcap = float(p.get("marketCap") or p.get("fdv") or 0)
+    lines = ["📡 SINAL SNIPER — " + symbol + " (" + str(p.get("dexId") or "?") + ")",
+             "📄 Contrato (toque para copiar):", "`" + mint + "`",
+             "💵 Entrada: `" + _px(price) + "`",
+             "🛑 Stop loss (−" + format(STOP_LOSS * 100, ".0f") + "%): `" + _px(price * (1 - STOP_LOSS)) + "`",
+             "🎯 TP1 (+" + format(TRAIL_ARM * 100, ".0f") + "%): `" + _px(price * (1 + TRAIL_ARM)) + "` → daí stop móvel " +
+             format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo",
+             "🎯 TP2 (2x): `" + _px(price * 2) + "` → vender metade",
+             "🎯 TP3 (5x): `" + _px(price * 5) + "` → vender metade do resto"]
+    if NO_MOVE_S > 0:
+        lines.append("⏱️ Se não chegar a +" + format(NO_MOVE_ARM * 100, ".0f") + "% em " + format(NO_MOVE_S / 60, ".0f") +
+                     " min: sair")
+    lines.append("📊 " + format(float(ch.get("m5") or 0), "+.0f") + "% em 5 min · " + str(int(m5.get("buys") or 0)) +
+                 " compras x " + str(int(m5.get("sells") or 0)) + " vendas · liquidez US$ " + format(liq / 1000, ",.0f") +
+                 " mil · market cap US$ " + format(mcap / 1000, ",.0f") + " mil")
+    lines.append("🔗 https://dexscreener.com/solana/" + mint)
+    lines.append("⚠️ Sinal, não garantia: memecoin pode cair rápido (rug).")
+    return "\n".join(lines)
+
+
 def closed_trades(since=None):
     import live_trade_state as st
     since = _load().get("since", 0) if since is None else since
@@ -344,11 +391,13 @@ def _buy(p, send, chat):
 
 
 def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
-    """One scan: find exploding new coins and buy them (at most one buy per scan)."""
-    if not enabled():
+    """One scan: find exploding new coins, send their signal (signals mode) and buy them (Sniper on;
+    at most one buy per scan)."""
+    buying, signaling = enabled(), signals_on()
+    if not buying and not signaling:
         return []
     try:
-        streak = loss_streak(closed_trades())
+        streak = loss_streak(closed_trades()) if buying else 0
     except Exception:
         streak = 0
     if streak >= MAX_LOSS_STREAK:
@@ -390,6 +439,13 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
             key = "anti-golpe: " + r.split(" (")[0]
             why[key] = why.get(key, 0) + 1
             continue
+        if signaling and send and chat:
+            try:
+                send(chat, signal_text(p))
+            except Exception as exc:
+                logging.warning("sniper signal not sent: %s", type(exc).__name__)
+        if not buying or bought:
+            continue                               # signals only, or already bought one this scan
         try:
             r = (buyer or _buy)(p, send, chat)
         except Exception as exc:
@@ -404,7 +460,8 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
             dd = _load()
             dd["buys"] = int(dd.get("buys", 0)) + 1
             _save(dd)
-        break
+        if not signaling:
+            break
     LAST.update(at=now, coins=len(pairs), rockets=len(rockets), bought=len(bought), why=why)
     top = ", ".join(k + "=" + str(v) for k, v in sorted(why.items(), key=lambda kv: -kv[1])[:6])
     logging.info("rocket scan: %s coins, %s rockets, %s bought | %s", len(pairs), len(rockets), len(bought), top)
