@@ -59,10 +59,11 @@ class RocketTests(unittest.TestCase):
         pos = {"mode": "rocket", "peak_ratio": 0, "opened_at": time.time()}
         self.assertEqual(lem.position_signal(pos, 10, 7.2)["action"], "hold")                 # -28%
         self.assertEqual(lem.position_signal(pos, 10, 6.9)["reason"], "stop_loss")            # -31%: fixed stop 30%
-        self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 27)["action"], "hold")   # 3x, -10% from top
-        self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 25)["action"], "sell")   # -17% from top
-        old = dict(pos, opened_at=time.time() - 20 * 3600)
-        self.assertEqual(lem.position_signal(old, 10, 8)["action"], "hold")                   # no time stop
+        self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 27.5)["action"], "hold")  # 3x, -8% from top
+        self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 26.5)["action"], "sell")  # -12% from top
+        old = dict(pos, opened_at=time.time() - 61 * 60)
+        self.assertEqual(lem.position_signal(old, 10, 9)["reason"], "time_stop")              # 60 min, never +15%
+        self.assertEqual(lem.position_signal(dict(old, peak_ratio=1.2), 10, 11.5)["action"], "hold")  # moved: keep
 
     def test_take_profit_ladder(self):
         import live_trade_state as st
@@ -129,9 +130,9 @@ class RocketTests(unittest.TestCase):
     def test_profit_protection_after_15_percent(self):
         import live_exit_monitor as lem
         pos = {"mode": "rocket", "peak_ratio": 1.18, "opened_at": time.time()}
-        self.assertEqual(lem.position_signal(pos, 10, 10.2)["action"], "hold")            # +2% after +18%: keep
-        out = lem.position_signal(pos, 10, 9.4)                                            # -6% after +18%: out
-        self.assertEqual((out["action"], out["reason"]), ("sell", "rocket_protect"))
+        self.assertEqual(lem.position_signal(pos, 10, 11.0)["action"], "hold")            # +10% after +18%: keep
+        out = lem.position_signal(pos, 10, 10.5)                                           # +5% after +18%: out
+        self.assertEqual(out["action"], "sell")                                            # trailing 10% under top
         low = {"mode": "rocket", "peak_ratio": 1.10, "opened_at": time.time()}
         self.assertEqual(lem.position_signal(low, 10, 8.0)["action"], "hold")             # never reached +15%: -20% ok
 

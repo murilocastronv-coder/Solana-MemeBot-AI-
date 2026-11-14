@@ -56,8 +56,8 @@ class PanelTests(unittest.TestCase):
             html = dashboard.trailing_tab()
         self.assertIn("1 ativo(s) de 3", html)
         self.assertIn("✅ ATIVO", html)
-        self.assertIn("+24.3%", html)                        # 1.462 x 0.85 -> sells at +24%
-        self.assertIn("liga em +30%", html)
+        self.assertIn("+31.6%", html)                        # 1.462 x 0.90 -> sells at +31.6%
+        self.assertIn("liga em +15%", html)
         self.assertIn("vende junto com a carteira copiada", html)
 
     def test_off_without_a_password(self):
