@@ -510,6 +510,13 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
         return []
     now = now or time.time()
     pairs = sg.candidate_pairs() if pairs is None else pairs
+    import sniper_sim
+    if sniper_sim.paper():
+        try:
+            sniper_sim.exits(sniper_sim.prices_for(pairs), send, chat, now)
+        except Exception as exc:
+            logging.warning("sniper sim exits failed: %s", type(exc).__name__)
+        buyer = buyer or (lambda p, s, c: sniper_sim.buy(p, s, c, now))
     why, rockets = {}, []
     for p in pairs:
         r = rocket_reason(p, now)
@@ -570,7 +577,9 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
 def status_text():
     import live_trade_state as st
     d = _load()
-    lines = ["🚀 SNIPER (dinheiro real) — " + ("LIGADO" if d["enabled"] else "DESLIGADO") +
+    import sniper_sim
+    sim_on = sniper_sim.paper()
+    lines = ["🚀 SNIPER (" + ("🧪 SIMULAÇÃO, sem dinheiro real" if sim_on else "dinheiro real") + ") — " + ("LIGADO" if d["enabled"] else "DESLIGADO") +
              (" (" + d["paused_why"] + ")" if not d["enabled"] and d.get("paused_why") else ""),
              "Compra as moedas mais populares da " + ("pump.fun" if PUMP_ONLY else "pump.fun e das outras DEX da DexScreener") + " com " + _age_txt(MIN_AGE_S) + " a " +
              _age_txt(MAX_AGE_S) + " de vida no momento em que explodem: +" + format(MIN_UP_5M, ".0f") +
@@ -599,7 +608,14 @@ def status_text():
         open_n = st.positions_by_mode("rocket")
     except Exception:
         hist, open_n = [], 0
-    lines.append("📦 Abertas agora: " + str(open_n) + "/" + str(MAX_OPEN))
+    if sim_on:
+        try:
+            lines += sniper_sim.status_lines()
+        except Exception:
+            pass
+        lines.append("💼 Posições reais antigas ainda abertas: " + str(open_n) + " (seguem com stop e stop móvel)")
+    else:
+        lines.append("📦 Abertas agora: " + str(open_n) + "/" + str(MAX_OPEN))
     try:
         ok, gwhy = growth_unlocked(hist)
         g = d.get("growth") or {}
@@ -619,7 +635,7 @@ def status_text():
         won = sum(1 for h in hist if h["pnl_usd"] > 0)
         pnl = sum(h["pnl_usd"] for h in hist)
         best = max(h["pnl_usd"] for h in hist)
-        lines.append("📊 Resultado: " + str(len(hist)) + " fechadas · " + str(won) + " no lucro (" +
+        lines.append("📊 Resultado real (antes da simulação): " + str(len(hist)) + " fechadas · " + str(won) + " no lucro (" +
                      format(won / len(hist) * 100, ".0f") + "%) · melhor " + format(best, "+.2f") + " · total " +
                      format(pnl, "+.2f") + " USD")
     else:

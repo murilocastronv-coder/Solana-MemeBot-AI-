@@ -279,7 +279,7 @@ def handle(update):
  if action in ("rk_on","rk_off","rk_status","/sniper"):
   import rocket_bot
   try:
-   if action=="rk_on":rocket_bot.set_enabled(True);pre="🚀 SNIPER LIGADO (dinheiro real): compra US$ "+format(rocket_bot.ORDER_USD,".0f")+" nas moedas mais populares da pump.fun com 1 h 20 min a 7 dias de vida que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
+   if action=="rk_on":rocket_bot.set_enabled(True);pre=("🧪 SNIPER LIGADO EM SIMULAÇÃO (sem dinheiro real, preços reais): compra de mentira US$ " if __import__("sniper_sim").paper() else "🚀 SNIPER LIGADO (dinheiro real): compra US$ ")+format(rocket_bot.ORDER_USD,".0f")+" nas moedas mais populares da pump.fun com 1 h 20 min a 7 dias de vida que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
    elif action=="rk_off":rocket_bot.set_enabled(False);pre="⏹️ Sniper parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
    else:pre=""
    send(chat,pre+rocket_bot.status_text(),keyboard())
@@ -547,7 +547,10 @@ def background_loop():
   time.sleep(1)
 def rocket_loop():
  """Rocket Sniper: every ROCKET_SCAN_SECONDS looks for the hottest new pump.fun coins and buys them."""
- import rocket_bot,signals
+ import rocket_bot,signals,sniper_sim
+ try:
+  if sniper_sim.to_simulation_once():logging.info("sniper switched to simulation")
+ except Exception:logging.exception("sniper simulation switch failed")
  while True:
   time.sleep(rocket_bot.SCAN_EVERY_S)
   try:
@@ -764,7 +767,7 @@ def web_action(action):
  elif action=="copy_off":ct.set_mode(False)
  elif action=="rk_on":
   import rocket_bot
-  start_engine("Sniper");rocket_bot.set_enabled(True)
+  (None if __import__("sniper_sim").paper() else start_engine("Sniper"));rocket_bot.set_enabled(True)
  elif action=="rk_off":
   import rocket_bot
   rocket_bot.set_enabled(False)
