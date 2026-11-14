@@ -126,7 +126,10 @@ def split_message(text,limit=3800):
  return parts
 def keyboard():
  """Owner's menu: only the BTC robot (owner's choice) and the wallet."""
- return [[{"text":"₿ Ligar BTC 20x","callback_data":"bx_on"},{"text":"⏹️ Parar BTC","callback_data":"bx_off"}],
+ return [[{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
+  [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
+  [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
+  [{"text":"₿ Ligar BTC 20x","callback_data":"bx_on"},{"text":"⏹️ Parar BTC","callback_data":"bx_off"}],
   [{"text":"📊 BTC 20x: resultado","callback_data":"bx_status"},{"text":"🧪 Backtest 60 dias","callback_data":"bx_bt"}],
   [{"text":"🔬 Pesquisar melhor estratégia","callback_data":"bx_rs"},{"text":"🎯 Desafio 150→400","callback_data":"bx_ch"}],
   [{"text":"🪙 Desafio 1 mês (SOL/ETH/BTC)","callback_data":"bx_mo"}],
@@ -582,6 +585,14 @@ def btc_loop():
  try:
   if btc_bot.apply_only_btc():logging.info("only BTC: copy trade and Sniper turned off (open positions keep their exits)")
  except Exception:logging.exception("only btc failed")
+ try:
+  import rocket_bot
+  if rocket_bot.relaunch_small():
+   try:live_engine.start()
+   except Exception:pass
+   logging.info("sniper relaunched: US$ %.0f per buy, max %s open",rocket_bot.ORDER_USD,rocket_bot.MAX_OPEN)
+   if active_chat():send(active_chat(),"🚀 SNIPER RELIGADO (pequeno): US$ "+format(rocket_bot.ORDER_USD,".0f")+" por compra, máx. "+str(rocket_bot.MAX_OPEN)+" abertas, sinais ligados. Vamos medir 30+ operações antes de aumentar.",keyboard())
+ except Exception:logging.exception("sniper relaunch failed")
  try:
   if btc_bot.pause_for_research() and active_chat():
    send(active_chat(),"⏸️ BTC 20x PAUSADO: no backtest de 60 dias as regras perderam (153 operações, 33% de acerto, −US$ 77). "
