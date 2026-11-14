@@ -145,9 +145,8 @@ class TelegramMenuTests(unittest.TestCase):
     def test_menu_has_only_copy_trade_and_wallet(self):
         import telegram_bot as tb
         data = [b["callback_data"] for row in tb.keyboard() for b in row]
-        self.assertIn("copy_sim", data)
-        self.assertIn("copy_real", data)
-        self.assertIn("copy_wallets", data)
+        self.assertIn("bx_on", data)                   # owner's menu: only the BTC robot now
+        self.assertNotIn("copy_real", data)
         self.assertFalse([x for x in data if x.startswith(("btc", "vol_", "launch", "lev_"))])
 
     def test_discovery_text_without_rpc(self):
