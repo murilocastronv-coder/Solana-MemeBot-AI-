@@ -128,7 +128,7 @@ def keyboard():
  """Owner's menu: only the BTC robot (owner's choice) and the wallet."""
  return [[{"text":"₿ Ligar BTC 20x","callback_data":"bx_on"},{"text":"⏹️ Parar BTC","callback_data":"bx_off"}],
   [{"text":"📊 BTC 20x: resultado","callback_data":"bx_status"},{"text":"🧪 Backtest 60 dias","callback_data":"bx_bt"}],
-  [{"text":"🔬 Pesquisar melhor estratégia","callback_data":"bx_rs"}],
+  [{"text":"🔬 Pesquisar melhor estratégia","callback_data":"bx_rs"},{"text":"🎯 Desafio 150→400","callback_data":"bx_ch"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -256,6 +256,11 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
+ if action=="bx_ch":
+  import btc_swing
+  if btc_swing.CHALLENGE["running"]:send(chat,"🎯 O teste já está rodando.",keyboard());return
+  send(chat,"🎯 Testando quais configurações transformariam US$ 150 em US$ 400 numa semana (1 ano de BTC, semana a semana)…",keyboard())
+  run_async(lambda:btc_swing.run_challenge(send=send,chat=chat));return
  if action=="bx_rs":
   import btc_swing
   if btc_swing.RESULT["running"]:send(chat,"🔬 A pesquisa já está rodando.",keyboard());return
@@ -579,6 +584,7 @@ def btc_loop():
  def research():
   import btc_swing
   if not btc_swing.RESULT["text"]:btc_swing.run(send=send,chat=active_chat())
+  if not btc_swing.CHALLENGE["text"]:btc_swing.run_challenge(send=send,chat=active_chat())
  run_async(research)   # results in the logs / panel / Telegram
  while True:
   time.sleep(btc_bot.CHECK_EVERY_S)
