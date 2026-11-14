@@ -441,6 +441,19 @@ def run_backtest(send=None, chat=None, days=60):
         BACKTEST["running"] = False
 
 
+def pause_for_research():
+    """The first rules lost money in the 60-day backtest: stop opening real trades (once) until a
+    setting that also won on unseen data is chosen. An open position keeps its exits."""
+    with _LOCK:
+        d = _load()
+        if d.get("paused_research_v1"):
+            return False
+        d.update(paused_research_v1=True, enabled=False,
+                 paused_why="pausado: as regras perderam no backtest de 60 dias")
+        _save(d)
+    return True
+
+
 def apply_only_btc():
     """Owner's choice (Nov 14): keep only the BTC robot. Runs once: the copy trade, the Sniper and its
     signals stop opening new trades; open positions keep being sold by their own rules."""

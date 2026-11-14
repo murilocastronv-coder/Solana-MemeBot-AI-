@@ -409,6 +409,12 @@ def page(msg=""):
     try:
         import btc_bot
         out += ["<div class='card'><h2>₿ BTC 20x</h2><pre>", _e(_safe(btc_bot.status_text)), "</pre></div>"]
+        try:
+            import btc_research
+            if btc_research.RESULT["text"]:
+                out += ["<div class='card'><h2>🔬 Pesquisa de estratégia</h2><pre>", _e(btc_research.RESULT["text"]), "</pre></div>"]
+        except Exception:
+            pass
         if btc_bot.BACKTEST["text"]:
             out += ["<div class='card'><h2>🧪 Backtest 60 dias</h2><pre>", _e(btc_bot.BACKTEST["text"]), "</pre></div>"]
     except Exception:
