@@ -44,20 +44,17 @@ class TwinTests(unittest.TestCase):
         other = dict(REF_STYLE, hold_min=600.0, trades_day=1.0, pump_share=0.0, scale_out=0.0)
         self.assertLess(wt.similarity(REF_STYLE, other), 30)
 
-    def test_sniper_search(self):
-        snipe = dict(REF_STYLE, hold_min=12.0, entry_age_min=3.0, curve_share=0.8)
-        self.assertTrue(wt.judge(snipe, audit(snipe), REF_STYLE)[0])
-        far = dict(snipe, trades_day=0.5, size_usd=5000.0, pump_share=0.0, scale_out=0.0, scale_in=0.0)
-        self.assertIn("estilo diferente", wt.judge(far, audit(far), REF_STYLE)[2])   # snipes, but not like it
-        self.assertIn("segura pouco", wt.judge(dict(snipe, hold_min=2.0), audit(snipe), REF_STYLE)[2])
-        self.assertIn("segura muito", wt.judge(dict(snipe, hold_min=60.0), audit(snipe), REF_STYLE)[2])
-        self.assertIn("não é sniper", wt.judge(dict(snipe, entry_age_min=300.0), audit(snipe), REF_STYLE)[2])
-        no_age = dict(snipe, entry_age_min=None)
-        self.assertTrue(wt.judge(no_age, audit(snipe), REF_STYLE)[0])           # most buys on the launch curve
-        self.assertFalse(wt.judge(dict(no_age, curve_share=0.1), audit(snipe), REF_STYLE)[0])
+    def test_hold_30_minutes_to_3_days(self):
+        # owner's choice: hold time 30 min - 3 days, no newborn-coin or style requirement
+        swing = dict(REF_STYLE, hold_min=45.0, entry_age_min=300.0, curve_share=0.0)
+        self.assertTrue(wt.judge(swing, audit(swing), REF_STYLE)[0])
+        self.assertTrue(wt.judge(dict(swing, hold_min=2 * 24 * 60.0), audit(swing), REF_STYLE)[0])
+        self.assertIn("segura pouco", wt.judge(dict(swing, hold_min=12.0), audit(swing), REF_STYLE)[2])
+        self.assertIn("segura muito", wt.judge(dict(swing, hold_min=5 * 24 * 60.0), audit(swing), REF_STYLE)[2])
+        self.assertIn("sem lucro", wt.judge(swing, audit(swing, pnl=-5), REF_STYLE)[2])
 
     def test_hit_rate_is_compared_with_the_reference_wallet(self):
-        low = dict(REF_STYLE, win_rate=0.13)
+        low = dict(REF_STYLE, win_rate=0.13, hold_min=60.0)
         ok, _, _ = wt.judge(low, audit(low, win=0.15), low)          # wins as often as the reference: ok
         self.assertTrue(ok)
         self.assertFalse(wt.judge(low, audit(low, win=0.05), low)[0])
@@ -79,18 +76,18 @@ class TwinTests(unittest.TestCase):
 
     def test_same_style_and_profitable_wallet_is_followed(self):
         w = cand()
-        with patch.object(c, "measure", return_value=([60] * 5, audit(dict(REF_STYLE, hold_min=15.0)))):
+        with patch.object(c, "measure", return_value=([60] * 5, audit(dict(REF_STYLE, hold_min=60.0)))):
             self.assertEqual(c.preaudit_and_follow(w, None, 200.0), "added")
         self.assertEqual(c.holder_status(c._load()["wallets"][w["wallet"]])[0], "ok")
         self.assertTrue(c.prefilter(cand()))                   # small buyer / quick holds pass the cheap filter
 
     def test_different_style_or_losing_wallet_is_rejected(self):
-        far = dict(REF_STYLE, hold_min=900.0, trades_day=0.5, pump_share=0.0, scale_out=0.0, scale_in=0.0)
+        far = dict(REF_STYLE, hold_min=10.0)          # holds less than 30 min
         w = cand()
         with patch.object(c, "measure", return_value=([60] * 5, audit(far))):
             self.assertEqual(c.preaudit_and_follow(w, None, 200.0), "rejected")
         w2 = cand()
-        with patch.object(c, "measure", return_value=([60] * 5, audit(REF_STYLE, pnl=-20))):
+        with patch.object(c, "measure", return_value=([60] * 5, audit(dict(REF_STYLE, hold_min=60.0), pnl=-20))):
             self.assertEqual(c.preaudit_and_follow(w2, None, 200.0), "rejected")
         self.assertNotIn(w["wallet"], c._load()["wallets"])
 
