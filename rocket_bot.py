@@ -41,7 +41,8 @@ MIN_BUY_RATIO_5M = sg._f("ROCKET_MIN_BUY_RATIO_5M", 1.3)
 MIN_BUYS_1H = int(sg._f("ROCKET_MIN_BUYS_1H", 50))      # buys in the last hour
 MIN_BUY_SHARE_1H = sg._f("ROCKET_MIN_BUY_SHARE_1H", 0.52)
 MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 5_000)
-MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 5))
+# 0 = never pauses itself (owner's choice: keep running; the strategy is reviewed and improved every hour)
+MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 0))
 COOLDOWN_S = sg._f("ROCKET_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("ROCKET_SCAN_SECONDS", 45)
 # Fixed stop 30%, chosen from the night of Nov 13-14 (11 trades): the losers that never reached +15% drifted
@@ -412,7 +413,7 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
         streak = loss_streak(closed_trades()) if buying else 0
     except Exception:
         streak = 0
-    if streak >= MAX_LOSS_STREAK:
+    if MAX_LOSS_STREAK > 0 and streak >= MAX_LOSS_STREAK:
         with _LOCK:
             dd = _load()
             dd.update(enabled=False, paused_why=str(streak) + " perdas seguidas")
@@ -505,8 +506,8 @@ def status_text():
              "(tira o investido), em 5x mais metade, o resto vai atrás de 10x+ · 🛑 com " + str(MAX_OPEN) +
              " abertas, se todas juntas caírem " + format(BASKET_DROP * 100, ".0f") + "% fecha todas · " +
              ("🛑 se UMA moeda cair " + format(COIN_CRASH * 100, ".0f") + "% fecha todas · " if COIN_CRASH > 0 else "") +
-             "⏸️ pausa com " + str(MAX_LOSS_STREAK) +
-             " perdas seguidas · sem limite diário."]
+             ("⏸️ pausa com " + str(MAX_LOSS_STREAK) + " perdas seguidas · " if MAX_LOSS_STREAK > 0 else
+              "▶️ não pausa sozinho (estratégia revisada de hora em hora) · ") + "sem limite diário."]
     try:
         hist = [h for h in st.history() if h.get("mode") == "rocket" and h.get("pnl_usd") is not None]
         open_n = st.positions_by_mode("rocket")
