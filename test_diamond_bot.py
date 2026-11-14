@@ -79,3 +79,47 @@ class DiamondCycleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiamondSimulationTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.p = mock.patch.object(db, "_path", return_value=pathlib.Path(self.tmp.name) / "d.json")
+        self.p.start()
+
+    def tearDown(self):
+        self.p.stop()
+        self.tmp.cleanup()
+
+    def test_paper_buy_and_stop_loss_with_real_prices(self):
+        db.start_round(NOW)
+        p = pair(priceUsd="2.0")
+        self.assertEqual(db.cycle(pairs=[p], now=NOW + 60, safety=lambda m: ""), "BUY TOK")
+        sim = db._load()["sim"]
+        self.assertAlmostEqual(sim["cash"], db.SIM_START_USD - db.ORDER_USD)
+        self.assertIn("M1", sim["positions"])
+        crashed = pair(priceUsd="1.7", priceChange={"m5": -3, "h1": -20, "h6": -10, "h24": -10})
+        db.cycle(pairs=[crashed], now=NOW + 120, safety=lambda m: "")
+        sim = db._load()["sim"]
+        self.assertEqual(sim["positions"], {})
+        h = sim["history"][-1]
+        self.assertEqual(h["reason"], "stop_loss")
+        self.assertLess(h["pnl"], -4)
+
+    def test_paper_trailing_takes_profit(self):
+        db.start_round(NOW)
+        db.sim_buy(pair(priceUsd="1.0"), now=NOW)
+        db.sim_exits({"M1": 1.20}, now=NOW + 60)            # +20% peak
+        self.assertIn("M1", db._load()["sim"]["positions"])
+        closed = db.sim_exits({"M1": 1.10}, now=NOW + 120)  # > 6% under the top
+        self.assertEqual(len(closed), 1)
+        self.assertGreater(closed[0]["pnl"], 0)
+
+    def test_round_end_closes_paper_positions(self):
+        db.start_round(NOW)
+        db.sim_buy(pair(priceUsd="1.0"), now=NOW)
+        with mock.patch("live_trade_state._load", return_value={"positions": {}}), \
+                mock.patch.object(db, "status_text", return_value="ok"):
+            db.cycle(pairs=[], now=NOW + db.ROUND_S + 1)
+        self.assertEqual(db._load()["sim"]["positions"], {})
+        self.assertEqual(db._load()["sim"]["history"][-1]["reason"], "round_end")

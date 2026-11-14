@@ -270,7 +270,7 @@ def handle(update):
   import diamond_bot
   try:
    if action=="dm_on":
-    live_engine.start();diamond_bot.start_round();pre="💎 DIAMOND LIGADO: nova rodada de "+format(diamond_bot.ROUND_S/3600,".0f")+" h. Analisa a DEX a cada 1 min e te avisa a cada operação com o motivo.\n\n"
+    (None if diamond_bot.paper() else live_engine.start());diamond_bot.start_round();pre=("🧪 " if diamond_bot.paper() else "")+"💎 DIAMOND LIGADO"+(" EM SIMULAÇÃO (sem dinheiro real, preços reais)" if diamond_bot.paper() else "")+": nova rodada de "+format(diamond_bot.ROUND_S/3600,".0f")+" h. Analisa a DEX a cada 1 min e te avisa a cada operação com o motivo.\n\n"
    elif action=="dm_off":diamond_bot.stop();pre="⏹️ Diamond parado: não compra mais. A posição aberta continua com stop e stop móvel.\n\n"
    else:pre=""
    send(chat,pre+diamond_bot.status_text(),keyboard())
@@ -561,6 +561,7 @@ def diamond_loop():
  thread: one that hangs (a slow API) cannot stop the next minutes, and its stack is logged to find why."""
  import diamond_bot,sys,traceback
  try:
+  if diamond_bot.to_simulation_once():logging.info("diamond switched to simulation")
   if diamond_bot.launch_round2():logging.info("diamond round 2 started")
  except Exception:logging.exception("diamond launch failed")
  time.sleep(60)

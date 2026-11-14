@@ -69,6 +69,10 @@ WATCHLIST = (
     "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",    # JUP
 )
 
+# Simulation (owner's choice Nov 14): real DexScreener prices, same rules, virtual money only.
+SIM_START_USD = sg._f("DIAMOND_SIM_START_USD", 150)
+SIM_COST = sg._f("DIAMOND_SIM_COST", 0.01)        # swap fees + slippage per side (1%)
+
 _LOCK = threading.RLock()
 RULES = 2
 
@@ -79,7 +83,8 @@ def _path():
 
 
 def _load():
-    d = {"enabled": False, "round_start": 0, "tried": {}, "last_trade": 0, "log": [], "reported": True}
+    d = {"enabled": False, "round_start": 0, "tried": {}, "last_trade": 0, "log": [], "reported": True,
+         "paper": True, "sim": {"cash": SIM_START_USD, "positions": {}, "history": []}}
     p = _path()
     if p.exists():
         try:
@@ -115,6 +120,111 @@ def stop():
 
 def enabled():
     return bool(_load()["enabled"])
+
+
+def paper():
+    return bool(_load().get("paper", True))
+
+
+def set_paper(on):
+    with _LOCK:
+        d = _load()
+        d["paper"] = bool(on)
+        _save(d)
+
+
+def to_simulation_once():
+    """Owner's request (Nov 14): Diamond runs as a simulation with real market prices. Runs once."""
+    with _LOCK:
+        d = _load()
+        if d.get("paper_v1"):
+            return False
+        d.update(paper_v1=True, paper=True, sim={"cash": SIM_START_USD, "positions": {}, "history": []})
+        _save(d)
+    return True
+
+
+def _price(p):
+    return _n(p.get("priceUsd"))
+
+
+def sim_buy(p, send=None, chat=None, now=None):
+    """Virtual buy at the real DexScreener price. '' when bought, else why not."""
+    now = now or time.time()
+    mint = p["baseToken"]["address"]
+    symbol = (p.get("baseToken") or {}).get("symbol") or mint[:6]
+    price = _price(p)
+    if price <= 0:
+        return "sem preço"
+    with _LOCK:
+        d = _load()
+        sim = d["sim"]
+        if mint in sim["positions"]:
+            return "já tem a moeda"
+        if len(sim["positions"]) >= MAX_OPEN:
+            return "já tem posição Diamond aberta"
+        if sim["cash"] < ORDER_USD:
+            return "saldo simulado US$ " + format(sim["cash"], ".2f")
+        sim["cash"] = round(sim["cash"] - ORDER_USD, 6)
+        sim["positions"][mint] = {"symbol": symbol, "cost": ORDER_USD, "entry": price, "peak": 1.0, "at": now,
+                                  "qty": ORDER_USD * (1 - SIM_COST) / price}
+        _save(d)
+    if send and chat:
+        send(chat, "🧪 DIAMOND (SIMULAÇÃO, sem dinheiro real) COMPROU " + symbol + " — US$ " + format(ORDER_USD, ".0f") +
+             " a `" + format(price, ".10g") + "`\n📝 Motivo: " + why_text(p) + "\n📄 `" + mint + "`")
+    return ""
+
+
+def _sim_close(d, mint, price, reason, now):
+    sim = d["sim"]
+    pos = sim["positions"].pop(mint)
+    proceeds = pos["qty"] * price * (1 - SIM_COST)
+    sim["cash"] = round(sim["cash"] + proceeds, 6)
+    h = {"symbol": pos["symbol"], "mint": mint, "cost": pos["cost"], "proceeds": round(proceeds, 4),
+         "pnl": round(proceeds - pos["cost"], 4), "peak_pct": round((pos["peak"] - 1) * 100, 1),
+         "reason": reason, "opened": pos["at"], "closed": now}
+    sim["history"] = (sim.get("history") or [])[-200:] + [h]
+    return h
+
+
+SIM_REASON = {"stop_loss": "🛑 stop -" + format(STOP_LOSS * 100, ".0f") + "% (tese quebrou)",
+              "take_profit": "🚀 stop móvel", "trailing": "🚀 stop móvel", "round_end": "🏁 fim da rodada"}
+
+
+def sim_exits(prices, send=None, chat=None, now=None, force=False):
+    """Apply the Diamond exit rules to the virtual positions with the real prices {mint: price}."""
+    import live_exit_monitor as lem
+    now = now or time.time()
+    closed = []
+    with _LOCK:
+        d = _load()
+        for mint, pos in list(d["sim"]["positions"].items()):
+            price = prices.get(mint)
+            if not price or price <= 0:
+                if not force:
+                    continue
+                price = pos["entry"] * pos.get("last_ratio", 1.0)
+            value = pos["qty"] * price * (1 - SIM_COST)
+            pos["last_ratio"] = price / pos["entry"]
+            sig = lem.trailing_exit_signal(pos["cost"], value, pos["peak"], **EXIT)
+            pos["peak"] = max(float(pos["peak"]), float(sig.get("peak_ratio") or 0), value / pos["cost"])
+            if force or sig["action"] == "sell":
+                closed.append(_sim_close(d, mint, price, "round_end" if force else sig["reason"], now))
+        _save(d)
+    for h in closed:
+        if send and chat:
+            send(chat, ("💰 LUCRO" if h["pnl"] >= 0 else "🔻 PREJUÍZO") + " — 🧪 DIAMOND (SIMULAÇÃO) VENDEU " + h["symbol"] +
+                 "\n" + SIM_REASON.get(h["reason"], h["reason"]) + " · topo +" + format(h["peak_pct"], ".1f") + "%" +
+                 "\n💵 US$ " + format(h["cost"], ".2f") + " → US$ " + format(h["proceeds"], ".2f") + " (" +
+                 format(h["pnl"], "+.2f") + ")\n🏦 Saldo simulado: US$ " + format(sim_value(), ".2f"))
+    return closed
+
+
+def sim_value():
+    d = _load()
+    sim = d["sim"]
+    return sim["cash"] + sum(p["qty"] * p["entry"] * p.get("last_ratio", 1.0) * (1 - SIM_COST)
+                             for p in sim["positions"].values())
 
 
 def launch_round2():
@@ -174,8 +284,9 @@ def reason(p, now=None, relaxed=False):
 def watchlist_pairs(fetch=None):
     fetch = fetch or sg._get
     best = {}
+    held = [m for m in _load()["sim"]["positions"] if m not in WATCHLIST]
     try:
-        rows = fetch(sg.DEX + "/tokens/v1/solana/" + ",".join(WATCHLIST))
+        rows = fetch(sg.DEX + "/tokens/v1/solana/" + ",".join(list(WATCHLIST) + held[:20]))
     except Exception:
         return []
     for p in rows if isinstance(rows, list) else []:
@@ -235,6 +346,8 @@ def _buy(p, send, chat):
 def _end_round(send, chat, seller=None):
     import live_engine
     import live_trade_state as st
+    if paper():
+        sim_exits({}, send, chat, force=True)
     for mint, pos in list(st._load()["positions"].items()):
         if pos.get("mode") == "diamond":
             try:
@@ -261,6 +374,14 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None, s
     relaxed = now - float(d.get("last_trade") or d["round_start"]) >= IDLE_RELAX_S
     if pairs is None:
         pairs = watchlist_pairs() + sg.candidate_pairs()
+    if paper():
+        prices = {}
+        for p in pairs:
+            m = (p.get("baseToken") or {}).get("address")
+            if m and _price(p) > 0 and m not in prices:
+                prices[m] = _price(p)
+        sim_exits(prices, send, chat, now)
+        buyer = buyer or (lambda p, s, c: sim_buy(p, s, c, now))
     seen, why, ok = set(), {}, []
     for p in pairs:
         mint = ((p.get("baseToken") or {}).get("address"))
@@ -318,7 +439,8 @@ def status_text():
     d = _load()
     since = float(d.get("round_start") or 0)
     left = max(0, since + ROUND_S - time.time()) if d["enabled"] else 0
-    lines = ["💎 DIAMOND (dinheiro real) — " + ("LIGADO, faltam " + format(left / 3600, ".1f") + " h" if d["enabled"] else "DESLIGADO"),
+    sim = d.get("sim") or {}
+    lines = ["💎 DIAMOND (" + ("🧪 SIMULAÇÃO, sem dinheiro real, preços reais" if d.get("paper", True) else "dinheiro real") + ") — " + ("LIGADO, faltam " + format(left / 3600, ".1f") + " h" if d["enabled"] else "DESLIGADO"),
              "Só tokens estabelecidos (liquidez US$ " + format(MIN_LIQ / 1e3, ".0f") + " mil+, volume 24 h US$ " +
              format(MIN_VOL_24H / 1e6, "g") + " mi+, " + format(MIN_AGE_S / 86400, ".0f") + "+ dias), compra recuo de " +
              format(-PULL_MAX, "g") + "% a " + format(-PULL_MIN, "g") + "% na hora dentro de tendência de alta, quando já vira para cima.",
@@ -335,6 +457,17 @@ def status_text():
                      " no lucro · total " + format(pnl, "+.2f") + " USD")
     else:
         lines.append("📊 Rodada: nenhuma operação fechada ainda.")
+    if d.get("paper", True):
+        sh = sim.get("history") or []
+        lines.append("🧪 Saldo simulado: US$ " + format(sim_value(), ".2f") + " (começou com US$ " +
+                     format(SIM_START_USD, ".0f") + ") · " + str(len(sh)) + " operações · " +
+                     str(sum(1 for h in sh if h["pnl"] > 0)) + " no lucro · total " +
+                     format(sum(h["pnl"] for h in sh), "+.2f") + " USD")
+        for mint, pos in (sim.get("positions") or {}).items():
+            lines.append("📦 Aberta: " + pos["symbol"] + " " + format((pos.get("last_ratio", 1.0) * (1 - SIM_COST) ** 2 - 1) * 100, "+.1f") +
+                         "% (topo " + format((pos["peak"] - 1) * 100, "+.1f") + "%)")
+        for h in sh[-3:]:
+            lines.append("• " + h["symbol"] + " " + format(h["pnl"], "+.2f") + " USD (" + SIM_REASON.get(h["reason"], h["reason"]) + ")")
     log = d.get("log") or []
     if log:
         lines.append("🧾 Últimas decisões:\n" + "\n".join(log[-4:]))
