@@ -146,7 +146,7 @@ class TelegramMenuTests(unittest.TestCase):
         import telegram_bot as tb
         data = [b["callback_data"] for row in tb.keyboard() for b in row]
         self.assertIn("rk_on", data)                   # owner's menu: the Sniper only
-        self.assertNotIn("copy_real", data)
+        self.assertIn("copy_real", data)                # copy trade back (owner, Nov 14)
         self.assertFalse([x for x in data if x.startswith(("btc", "vol_", "launch", "lev_"))])
 
     def test_discovery_text_without_rpc(self):

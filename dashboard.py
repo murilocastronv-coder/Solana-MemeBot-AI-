@@ -163,7 +163,10 @@ def controls(s):
     except Exception:
         rk_on = rks_on = None
     copy_on = isinstance(s, dict) and s.get("copy_real")
-    return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>🚀 Sniper</b> — " +
+    return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>👥 Copy trade (real)</b> — " +
+            ("<span class='pill ok'>ligado</span>" if copy_on else "<span class='pill bad'>desligado</span>") +
+            "<div style='margin-top:8px'>" + _button("copy_real", "💵 Ligar", "go") + _button("copy_off", "⏹️ Parar", "stop") +
+            "</div></div><div><b>🚀 Sniper</b> — " +
             ("<span class='pill ok'>ligado</span>" if rk_on else "<span class='pill bad'>desligado</span>") +
             "<div style='margin-top:8px'>" + _button("rk_on", "🚀 Ligar", "go") + _button("rk_off", "⏹️ Parar", "stop") +
             "</div></div><div><b>📡 Sinais do Sniper</b> — " +

@@ -348,6 +348,17 @@ def enabled():
         return bool(_load()["enabled"])
 
 
+def relaunch_real_once():
+    """Owner's request (Nov 14): copy trade back on with real money. Runs once."""
+    with _LOCK:
+        d = _load()
+        if d.get("relaunch_real_v1"):
+            return False
+        d.update(relaunch_real_v1=True, enabled=True, real=True)
+        _save(d)
+    return True
+
+
 def real_enabled():
     with _LOCK:
         d = _load()
