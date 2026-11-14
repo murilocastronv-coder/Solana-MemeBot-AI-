@@ -168,14 +168,14 @@ def exits(prices, send=None, chat=None, now=None):
     return closed
 
 
-def prices_for(pairs, fetch=None):
-    """{mint: price} from the scan, plus a direct DexScreener read of held coins missing from it."""
+def prices_for(pairs, fetch=None, extra=()):
+    """{mint: price} from the scan, plus a direct DexScreener read of held coins (and `extra` mints) missing from it."""
     out = {}
     for p in pairs or []:
         m = (p.get("baseToken") or {}).get("address")
         if m and m not in out and float(p.get("priceUsd") or 0) > 0:
             out[m] = float(p["priceUsd"])
-    missing = [m for m in held() if m not in out]
+    missing = [m for m in dict.fromkeys(held() + list(extra)) if m not in out]
     if missing:
         try:
             rows = (fetch or sg._get)(sg.DEX + "/tokens/v1/solana/" + ",".join(missing[:30]))

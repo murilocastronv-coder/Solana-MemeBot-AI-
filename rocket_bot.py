@@ -514,10 +514,21 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
         return []
     now = now or time.time()
     pairs = sg.candidate_pairs() if pairs is None else pairs
+    import signal_quality as sq
     import sniper_sim
+    prices = None
+    if signaling or sniper_sim.paper():
+        try:
+            prices = sniper_sim.prices_for(pairs, extra=sq.open_mints())
+            if signaling:
+                for res in sq.update(prices, now):
+                    logging.info("signal checked %s score=%s hit=%s peak=%+.0f%% low=%+.0f%%", res["symbol"], res["score"],
+                                 res["hit"], (res["peak"] - 1) * 100, (res["low"] - 1) * 100)
+        except Exception as exc:
+            logging.warning("signal quality update failed: %s", type(exc).__name__)
     if sniper_sim.paper():
         try:
-            sniper_sim.exits(sniper_sim.prices_for(pairs), send, chat, now)
+            sniper_sim.exits(prices if prices is not None else sniper_sim.prices_for(pairs), send, chat, now)
         except Exception as exc:
             logging.warning("sniper sim exits failed: %s", type(exc).__name__)
         buyer = buyer or (lambda p, s, c: sniper_sim.buy(p, s, c, now))
@@ -551,7 +562,13 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
             continue
         if signaling and send and chat:
             try:
-                send(chat, signal_text(p))
+                sc = sq.score(p)
+                t = sq.threshold()[0]
+                if sc >= t:
+                    send(chat, signal_text(p) + "\n" + sq.line(sc))
+                    sq.record(p, sc, now)
+                else:
+                    why["sinal fraco (nota < " + str(t) + ")"] = why.get("sinal fraco (nota < " + str(t) + ")", 0) + 1
             except Exception as exc:
                 logging.warning("sniper signal not sent: %s", type(exc).__name__)
         if not buying or bought:
@@ -612,6 +629,11 @@ def status_text():
         open_n = st.positions_by_mode("rocket")
     except Exception:
         hist, open_n = [], 0
+    try:
+        import signal_quality
+        lines.append(signal_quality.status_text())
+    except Exception:
+        pass
     if sim_on:
         try:
             lines += sniper_sim.status_lines()
