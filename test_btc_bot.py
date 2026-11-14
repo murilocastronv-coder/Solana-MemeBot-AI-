@@ -71,6 +71,37 @@ class BtcTests(unittest.TestCase):
         bb.cycle(None, None, cs=crash, now=NOW, closer=lambda p: {})
         self.assertFalse(bb.enabled())
 
+    def test_backtest_on_synthetic_candles(self):
+        cs = []
+        for k in range(6):
+            cs += [(t + k * 6000 * 60, o, h, l, c, v, b) for (t, o, h, l, c, v, b) in candles()]
+        cs.sort(key=lambda x: x[0])
+        r = bb.backtest(cs)
+        self.assertGreaterEqual(r["trades"], 1)
+        self.assertIn("BACKTEST", bb.backtest_text(r))
+
+    def test_history_pages(self):
+        pages = {0: [[i * 60_000, 1, 1, 1, 1, 1, 0, 0, 0, 0.5] for i in range(1000)]}
+        calls = []
+        def get(start):
+            calls.append(start)
+            return [[start + i * 60_000, 1, 1, 1, 1, 1, 0, 0, 0, 0.5] for i in range(1000 if len(calls) < 2 else 10)]
+        out = bb.history(days=1, get=get, now=1_000_000)
+        self.assertEqual(len(out), 1010)
+
+    def test_only_btc_turns_the_others_off_once(self):
+        import copy_trader as ct
+        import rocket_bot
+        ct.set_mode(True)
+        rocket_bot.set_enabled(True)
+        self.assertTrue(bb.apply_only_btc())
+        self.assertFalse(ct.enabled())
+        self.assertFalse(rocket_bot.enabled())
+        self.assertFalse(rocket_bot.signals_on())
+        rocket_bot.set_enabled(True)
+        self.assertFalse(bb.apply_only_btc())           # only once: later choices are kept
+        self.assertTrue(rocket_bot.enabled())
+
     def test_status(self):
         self.assertIn("BTC 20x", bb.status_text())
 

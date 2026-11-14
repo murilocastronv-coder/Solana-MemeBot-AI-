@@ -125,15 +125,9 @@ def split_message(text,limit=3800):
  if cur:parts.append(cur)
  return parts
 def keyboard():
- return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"copy_sim"},{"text":"💵 Copiar (REAL)","callback_data":"copy_real"}],
-  [{"text":"⏹️ Parar cópia","callback_data":"copy_off"},{"text":"📊 Status","callback_data":"copy_status"}],
-  [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
-  [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
-  [{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
-  [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
-  [{"text":"₿ Ligar BTC 20x","callback_data":"bx_on"},{"text":"⏹️ Parar BTC","callback_data":"bx_off"}],
-  [{"text":"📊 BTC 20x: resultado","callback_data":"bx_status"}],
-  [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
+ """Owner's menu: only the BTC robot (owner's choice) and the wallet."""
+ return [[{"text":"₿ Ligar BTC 20x","callback_data":"bx_on"},{"text":"⏹️ Parar BTC","callback_data":"bx_off"}],
+  [{"text":"📊 BTC 20x: resultado","callback_data":"bx_status"},{"text":"🧪 Backtest 60 dias","callback_data":"bx_bt"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -261,6 +255,11 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
+ if action=="bx_bt":
+  import btc_bot
+  if btc_bot.BACKTEST["running"]:send(chat,"🧪 O backtest já está rodando, o resultado chega aqui em alguns minutos.",keyboard());return
+  send(chat,"🧪 Rodando o backtest de 60 dias do BTC 20x (baixa ~86 mil velas de 1 min, leva 1–3 min)…",keyboard())
+  run_async(lambda:btc_bot.run_backtest(send,chat,60));return
  if action in ("bx_on","bx_off","bx_status"):
   import btc_bot
   try:
@@ -563,6 +562,10 @@ BTC_ERR={}
 def btc_loop():
  """BTC 20x on Jupiter Perps: every BTC_CHECK_SECONDS manage the open position or look for an entry."""
  import btc_bot
+ try:
+  if btc_bot.apply_only_btc():logging.info("only BTC: copy trade and Sniper turned off (open positions keep their exits)")
+ except Exception:logging.exception("only btc failed")
+ if not btc_bot.BACKTEST["text"]:run_async(lambda:btc_bot.run_backtest(None,None,60))   # result in the logs / panel
  while True:
   time.sleep(btc_bot.CHECK_EVERY_S)
   try:
@@ -616,6 +619,8 @@ def wallet_discovery_loop():
   try:
    import wallet_copy
    import copy_trader
+   if not copy_trader.enabled() and not copy_trader.users_active():
+    time.sleep(interval);continue              # nobody is copying: no wallet search
    if not os.getenv("SOLANA_RPC_URL"):
     if not warned and active_chat():
      warned=True

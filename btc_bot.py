@@ -315,3 +315,150 @@ def status_text():
         lines.append("🔎 Agora: " + LAST["why"] + (" · BTC US$ " + format(LAST["price"], ",.0f") if LAST.get("price") else ""))
     lines.append("⚠️ 20x: o BTC cair 1,5% já leva 30% da garantia. Não há garantia de lucro.")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ backtest (same rules, past candles)
+def history(days=60, get=None, now=None):
+    """1-minute candles of the last `days` days (Binance, 1000 per call), oldest first."""
+    now = now or time.time()
+    start = int((now - days * 86400) * 1000)
+    end = int(now * 1000)
+    out = []
+    while start < end:
+        if get:
+            rows = get(start)
+        else:
+            rows = None
+            for base in SOURCES:
+                try:
+                    r = _http.get(base + "/api/v3/klines", params={"symbol": "BTCUSDT", "interval": "1m",
+                                                                  "startTime": start, "limit": 1000}, timeout=15)
+                    r.raise_for_status()
+                    rows = r.json()
+                    break
+                except Exception:
+                    continue
+            if rows is None:
+                raise RuntimeError("sem dados históricos do BTC")
+        if not rows:
+            break
+        out += [(int(x[0]) / 1000, float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5]), float(x[9]))
+                for x in rows]
+        start = int(rows[-1][0]) + 60_000
+        if len(rows) < 1000:
+            break
+    return out
+
+
+def _price_at_ratio(pos, ratio):
+    """BTC price where the position value / collateral equals `ratio`."""
+    size, entry, coll = pos["size_usd"], pos["entry"], pos["collateral_usd"]
+    return entry * (1 + ((ratio - 1) * coll + 2 * FEE_RATE * size) / size)
+
+
+def backtest(cs, margin=None, leverage=None):
+    """Simulate the live rules minute by minute on past candles (entry at the next candle's open;
+    stop / trailing checked on each candle's low and high; fees included). Returns a summary dict."""
+    margin = margin or MARGIN_USD
+    leverage = leverage or LEVERAGE
+    trades, pos, last_close = [], None, -1e18
+    for i in range(130, len(cs) - 1):
+        c = cs[i]
+        if pos:
+            hi_ratio = position_ratio(pos, c[2])
+            lo_ratio = position_ratio(pos, c[3])
+            exit_ratio, why = None, ""
+            if lo_ratio <= 1 - STOP_LOSS:                          # stop first (conservative)
+                exit_ratio, why = 1 - STOP_LOSS, "stop_loss"
+            else:
+                peak = max(pos["peak"], hi_ratio)
+                if peak >= 1 + TRAIL_ARM and lo_ratio <= peak * (1 - TRAIL_DROP):
+                    exit_ratio, why = peak * (1 - TRAIL_DROP), "trailing"
+                pos["peak"] = peak
+                if not why and c[0] - pos["at"] > NO_MOVE_S and pos["peak"] < 1 + TRAIL_ARM:
+                    exit_ratio, why = position_ratio(pos, c[4]), "time_stop"
+            if why:
+                trades.append({"at": pos["at"], "closed": c[0], "pnl_usd": margin * (exit_ratio - 1), "reason": why})
+                pos, last_close = None, c[0]
+            continue
+        if c[0] - last_close < COOLDOWN_S:
+            continue
+        if entry_reason(cs[i - 129:i + 2]) == "":
+            entry = cs[i + 1][1]
+            pos = {"entry": entry, "size_usd": margin * leverage, "collateral_usd": margin, "at": cs[i + 1][0], "peak": 1.0}
+    pnl = [t["pnl_usd"] for t in trades]
+    equity, peak_eq, max_dd = 0.0, 0.0, 0.0
+    for p in pnl:
+        equity += p
+        peak_eq = max(peak_eq, equity)
+        max_dd = max(max_dd, peak_eq - equity)
+    reasons = {}
+    for t in trades:
+        reasons[t["reason"]] = reasons.get(t["reason"], 0) + 1
+    days = (cs[-1][0] - cs[0][0]) / 86400 if cs else 0
+    return {"days": round(days, 1), "trades": len(trades), "wins": sum(1 for p in pnl if p > 0),
+            "total_usd": round(sum(pnl), 2), "avg_usd": round(sum(pnl) / len(pnl), 2) if pnl else 0.0,
+            "best_usd": round(max(pnl), 2) if pnl else 0.0, "worst_usd": round(min(pnl), 2) if pnl else 0.0,
+            "max_drawdown_usd": round(max_dd, 2), "reasons": reasons,
+            "btc_change_pct": round((cs[-1][4] / cs[0][4] - 1) * 100, 1) if cs else 0.0}
+
+
+def backtest_text(r):
+    if not r["trades"]:
+        return "🧪 BACKTEST BTC 20x — " + format(r["days"], ".0f") + " dias: nenhuma entrada com essas regras."
+    names = {"stop_loss": "stop loss", "trailing": "stop móvel", "time_stop": "60 min sem andar"}
+    return ("🧪 BACKTEST BTC 20x — últimos " + format(r["days"], ".0f") + " dias (mesmas regras do robô, garantia US$ " +
+            format(MARGIN_USD, ".0f") + ", taxas incluídas)\n"
+            "📊 " + str(r["trades"]) + " operações · " + str(r["wins"]) + " no lucro (" +
+            format(r["wins"] / r["trades"] * 100, ".0f") + "%)\n"
+            "💵 Resultado total: " + format(r["total_usd"], "+.2f") + " USD · média " + format(r["avg_usd"], "+.2f") +
+            " por operação\n🏆 Melhor " + format(r["best_usd"], "+.2f") + " · pior " + format(r["worst_usd"], "+.2f") +
+            " · maior queda acumulada −" + format(r["max_drawdown_usd"], ".2f") + " USD\n"
+            "🚪 Saídas: " + ", ".join(names.get(k, k) + " " + str(v) for k, v in r["reasons"].items()) + "\n"
+            "₿ BTC no período: " + format(r["btc_change_pct"], "+.1f") + "%\n"
+            "⚠️ Passado não garante futuro; no real tem atraso de execução e slippage.")
+
+
+BACKTEST = {"running": False, "text": ""}
+
+
+def run_backtest(send=None, chat=None, days=60):
+    if BACKTEST["running"]:
+        return
+    BACKTEST["running"] = True
+    try:
+        r = backtest(history(days))
+        BACKTEST["text"] = backtest_text(r)
+        logging.info("btc backtest %sd: %s", days, json.dumps(r))
+        if send and chat:
+            send(chat, BACKTEST["text"])
+    except Exception as exc:
+        BACKTEST["text"] = "⛔ Backtest BTC falhou: " + type(exc).__name__ + ": " + str(exc)[:150]
+        logging.warning("btc backtest failed: %s", BACKTEST["text"])
+        if send and chat:
+            send(chat, BACKTEST["text"])
+    finally:
+        BACKTEST["running"] = False
+
+
+def apply_only_btc():
+    """Owner's choice (Nov 14): keep only the BTC robot. Runs once: the copy trade, the Sniper and its
+    signals stop opening new trades; open positions keep being sold by their own rules."""
+    with _LOCK:
+        d = _load()
+        if d.get("only_btc_v1"):
+            return False
+        d["only_btc_v1"] = True
+        _save(d)
+    try:
+        import copy_trader as ct
+        ct.set_mode(False)
+    except Exception as exc:
+        logging.warning("only btc: copy off failed: %s", type(exc).__name__)
+    try:
+        import rocket_bot
+        rocket_bot.set_enabled(False)
+        rocket_bot.set_signals(False)
+    except Exception as exc:
+        logging.warning("only btc: sniper off failed: %s", type(exc).__name__)
+    return True
