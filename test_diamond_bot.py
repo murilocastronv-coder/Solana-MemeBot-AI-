@@ -123,3 +123,18 @@ class DiamondSimulationTest(unittest.TestCase):
             db.cycle(pairs=[], now=NOW + db.ROUND_S + 1)
         self.assertEqual(db._load()["sim"]["positions"], {})
         self.assertEqual(db._load()["sim"]["history"][-1]["reason"], "round_end")
+
+
+class DiamondRealSwitchTest(unittest.TestCase):
+    def test_real_once(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            db.to_simulation_once()
+            self.assertTrue(db.paper())
+            self.assertTrue(db.to_real_once())
+            self.assertFalse(db.paper())
+            self.assertFalse(db.to_real_once())
+            db.start_round(NOW)
+            buyer = mock.Mock(return_value="")
+            db.cycle(pairs=[pair(priceUsd="1")], now=NOW + 60, safety=lambda m: "", buyer=buyer)
+            buyer.assert_called_once()
+            self.assertEqual(db._load()["sim"]["positions"], {})

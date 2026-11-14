@@ -565,6 +565,10 @@ def diamond_loop():
  import diamond_bot,sys,traceback
  try:
   if diamond_bot.to_simulation_once():logging.info("diamond switched to simulation")
+  if diamond_bot.to_real_once():
+   logging.info("diamond switched to real money")
+   try:live_engine.start()
+   except Exception:logging.exception("diamond: real engine not started")
   if diamond_bot.launch_round2():logging.info("diamond round 2 started")
  except Exception:logging.exception("diamond launch failed")
  time.sleep(60)

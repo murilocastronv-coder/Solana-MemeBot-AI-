@@ -144,6 +144,17 @@ def to_simulation_once():
     return True
 
 
+def to_real_once():
+    """Owner's request (Nov 14, after the simulation): Diamond trades the real SOL in the wallet. Runs once."""
+    with _LOCK:
+        d = _load()
+        if d.get("real_v1"):
+            return False
+        d.update(real_v1=True, paper=False)
+        _save(d)
+    return True
+
+
 def _price(p):
     return _n(p.get("priceUsd"))
 
