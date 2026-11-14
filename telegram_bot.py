@@ -615,7 +615,8 @@ def copy_wallet_action(chat,action,text):
     "Também funciona: /copiar ENDERECO\n\nO bot copia cada compra e venda dela, no mesmo tamanho proporcional, com anti-golpe e o limite de 70% da conta.",keyboard());return
   if action=="cw_list" or action=="/carteiras":
    rows=ct.owner_wallets()
-   kb=[[{"text":"🗑️ Remover "+a[:4]+"…"+a[-4:],"callback_data":"cw_rm:"+a}] for a,_ in rows[:20]]+keyboard()
+   kb=[[({"text":"▶️ Retomar "+a[:4]+"…","callback_data":"cw_on:"+a} if w.get("paused") else {"text":"⏸️ Pausar "+a[:4]+"…","callback_data":"cw_off:"+a}),
+     {"text":"🗑️ Remover","callback_data":"cw_rm:"+a}] for a,w in rows[:20]]+keyboard()
    send(chat,ct.picks_text(),kb);return
   if action.startswith("cw_rm:"):
    a=action.split(":",1)[1]

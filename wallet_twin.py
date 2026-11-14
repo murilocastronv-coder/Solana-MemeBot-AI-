@@ -18,7 +18,7 @@ import time
 # set on Render: COPY_REFERENCE_WALLET=<wallet>. Empty = old behaviour (no reference wallet).
 REFERENCE = os.getenv("COPY_REFERENCE_WALLET", "").strip()
 ENABLED = os.getenv("COPY_TWIN_SEARCH", "true").strip().lower() != "false"
-MIN_SIMILARITY = float(os.getenv("COPY_TWIN_MIN_SIMILARITY", "50"))
+MIN_SIMILARITY = float(os.getenv("COPY_TWIN_MIN_SIMILARITY", "0"))
 MIN_WIN = float(os.getenv("COPY_TWIN_MIN_WIN", "0.45"))
 MIN_TRADES = int(float(os.getenv("COPY_TWIN_MIN_TRADES", "15")))
 PROFILE_MAX_AGE_S = float(os.getenv("COPY_TWIN_PROFILE_HOURS", "12")) * 3600
@@ -26,11 +26,14 @@ PUMP = ("pump.fun", "PumpSwap")
 # Sniper search (owner's choice): wallets that snipe memecoins - buy the coin right after it is born
 # (median coin age at its buy <= SNIPE_MAX_AGE_MIN, or most buys still on the pump.fun launch curve)
 # and hold each coin SNIPE_HOLD_MIN-SNIPE_HOLD_MAX minutes (median), AND trade like the reference wallet.
-SNIPER = os.getenv("COPY_SNIPER_SEARCH", "true").strip().lower() != "false"
+# Owner's choice (Nov 14): wallets that hold each coin at least 30 min and at most 3 days (median);
+# no "buys newborn coins" requirement and no style match with the reference (it holds ~12 min).
+SNIPER = os.getenv("COPY_SNIPER_SEARCH", "false").strip().lower() == "true"
+HOLD_CHECK = os.getenv("COPY_HOLD_CHECK", "true").strip().lower() != "false"
 SNIPE_MAX_AGE_MIN = float(os.getenv("COPY_SNIPE_MAX_COIN_AGE_MINUTES", "15"))
 SNIPE_MIN_CURVE = float(os.getenv("COPY_SNIPE_MIN_CURVE_SHARE", "0.5"))
-SNIPE_HOLD_MIN = float(os.getenv("COPY_SNIPE_HOLD_MIN_MINUTES", "5"))
-SNIPE_HOLD_MAX = float(os.getenv("COPY_SNIPE_HOLD_MAX_MINUTES", "20"))
+SNIPE_HOLD_MIN = float(os.getenv("COPY_SNIPE_HOLD_MIN_MINUTES", "30"))
+SNIPE_HOLD_MAX = float(os.getenv("COPY_SNIPE_HOLD_MAX_MINUTES", str(3 * 24 * 60)))     # 3 days
 _LOCK = threading.RLock()
 
 
@@ -126,12 +129,13 @@ def judge(cand_style, audit, ref):
     a = audit or {}
     if not cand_style:
         return False, 0.0, "sem histórico"
-    if SNIPER:
+    if HOLD_CHECK or SNIPER:
         hold = cand_style.get("hold_min") or 0
         if hold < SNIPE_HOLD_MIN:
             return False, sim, "segura pouco (" + format(hold, ".0f") + " min)"
         if hold > SNIPE_HOLD_MAX:
             return False, sim, "segura muito (" + format(hold, ".0f") + " min)"
+    if SNIPER:
         age = cand_style.get("entry_age_min")
         sniper = (age is not None and age <= SNIPE_MAX_AGE_MIN) or (
             age is None and (cand_style.get("curve_share") or 0) >= SNIPE_MIN_CURVE)
