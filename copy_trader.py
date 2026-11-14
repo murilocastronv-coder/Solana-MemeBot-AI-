@@ -2005,7 +2005,8 @@ def cycle(send=None, chat=None):
         d = _load()
         busy = _busy(d)
         # mirror wallets are always read: with the copy trade off the owner is told what was not copied
-        wallets = {a: w for a, w in d["wallets"].items() if active or a in busy or mirror(a, w)}
+        # copy trade off: only wallets with an open copy are read (to sell with them), silently
+        wallets = {a: w for a, w in d["wallets"].items() if active or a in busy}
         # mirror wallets first: their buys are copied as fast as possible
         wallets = dict(sorted(wallets.items(), key=lambda kv: not mirror(kv[0], kv[1])))
     if not wallets:
@@ -2052,8 +2053,6 @@ def cycle(send=None, chat=None):
                         msgs += _sell_part_real(mint, frac, send, chat)   # took part of the profit: same part
                     else:
                         msgs += _close(mint, "copy_follow", send, chat)
-            elif (mirror(wallet, info) and not owner_on and not info.get("paused")):
-                _skip(mint, wallet, "o copy trade está DESLIGADO (toque em 💵 Copiar (REAL))", send, chat)
             elif (owner_on or users_on) and not info.get("paused") and not info.get("leaving"):
                 is_mirror = mirror(wallet, info)      # mirror wallet: copy EVERYTHING it does (anti-scam stays)
                 with _LOCK:

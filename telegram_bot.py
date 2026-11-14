@@ -129,10 +129,6 @@ def keyboard():
  return [[{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
   [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
   [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
-  [{"text":"₿ Ligar BTC 20x","callback_data":"bx_on"},{"text":"⏹️ Parar BTC","callback_data":"bx_off"}],
-  [{"text":"📊 BTC 20x: resultado","callback_data":"bx_status"},{"text":"🧪 Backtest 60 dias","callback_data":"bx_bt"}],
-  [{"text":"🔬 Pesquisar melhor estratégia","callback_data":"bx_rs"},{"text":"🎯 Desafio 150→400","callback_data":"bx_ch"}],
-  [{"text":"🪙 Desafio 1 mês (SOL/ETH/BTC)","callback_data":"bx_mo"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -260,38 +256,8 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
- if action=="bx_mo":
-  import btc_swing
-  if btc_swing.MONTH["running"]:send(chat,"🪙 O teste já está rodando.",keyboard());return
-  send(chat,"🪙 Testando SOL, ETH e BTC: o que transformaria US$ 150 em US$ 400 em 1 mês e depois ficaria conservador…",keyboard())
-  run_async(lambda:btc_swing.run_month(send=send,chat=chat));return
- if action=="bx_ch":
-  import btc_swing
-  if btc_swing.CHALLENGE["running"]:send(chat,"🎯 O teste já está rodando.",keyboard());return
-  send(chat,"🎯 Testando quais configurações transformariam US$ 150 em US$ 400 numa semana (1 ano de BTC, semana a semana)…",keyboard())
-  run_async(lambda:btc_swing.run_challenge(send=send,chat=chat));return
- if action=="bx_rs":
-  import btc_swing
-  if btc_swing.RESULT["running"]:send(chat,"🔬 A pesquisa já está rodando.",keyboard());return
-  send(chat,"🔬 Testando ~1.500 estratégias de BTC em velas de 1 h (1 ano: treino 8 meses + teste 4 meses). Leva 1–3 min…",keyboard())
-  run_async(lambda:btc_swing.run(send=send,chat=chat));return
- if action=="bx_bt":
-  import btc_bot
-  if btc_bot.BACKTEST["running"]:send(chat,"🧪 O backtest já está rodando, o resultado chega aqui em alguns minutos.",keyboard());return
-  send(chat,"🧪 Rodando o backtest de 60 dias do BTC 20x (baixa ~86 mil velas de 1 min, leva 1–3 min)…",keyboard())
-  run_async(lambda:btc_bot.run_backtest(send,chat,60));return
- if action in ("bx_on","bx_off","bx_status"):
-  import btc_bot
-  try:
-   if action=="bx_on":
-    try:live_engine.start()
-    except Exception:pass
-    btc_bot.set_enabled(True);pre="₿ BTC 20x LIGADO (dinheiro real na Jupiter): abre LONG de US$ "+format(btc_bot.MARGIN_USD,".0f")+" × "+format(btc_bot.LEVERAGE,".0f")+" quando muita gente estiver comprando o BTC.\n\n"
-   elif action=="bx_off":btc_bot.set_enabled(False);pre="⏹️ BTC 20x parado: não abre novas. Uma posição aberta continua com stop e stop móvel até fechar.\n\n"
-   else:pre=""
-   send(chat,pre+btc_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ BTC: "+str(exc)[:200],keyboard())
-  return
+ if action.startswith("bx_"):
+  send(chat,"₿ O robô de BTC foi removido. O bot agora roda só o Sniper.",keyboard());return
  if action in ("rks_on","rks_off"):
   import rocket_bot
   rocket_bot.set_signals(action=="rks_on")
@@ -578,42 +544,6 @@ def rocket_loop():
    if not chat or not (rocket_bot.enabled() or rocket_bot.signals_on()):continue
    rocket_bot.cycle(send,chat,pairs=signals.candidate_pairs())
   except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
-BTC_ERR={}
-def btc_loop():
- """BTC 20x on Jupiter Perps: every BTC_CHECK_SECONDS manage the open position or look for an entry."""
- import btc_bot
- try:
-  if btc_bot.apply_only_btc():logging.info("only BTC: copy trade and Sniper turned off (open positions keep their exits)")
- except Exception:logging.exception("only btc failed")
- try:
-  import rocket_bot
-  if rocket_bot.relaunch_small():
-   try:live_engine.start()
-   except Exception:pass
-   logging.info("sniper relaunched: US$ %.0f per buy, max %s open",rocket_bot.ORDER_USD,rocket_bot.MAX_OPEN)
-   if active_chat():send(active_chat(),"🚀 SNIPER RELIGADO (pequeno): US$ "+format(rocket_bot.ORDER_USD,".0f")+" por compra, máx. "+str(rocket_bot.MAX_OPEN)+" abertas, sinais ligados. Vamos medir 30+ operações antes de aumentar.",keyboard())
- except Exception:logging.exception("sniper relaunch failed")
- try:
-  if btc_bot.pause_for_research() and active_chat():
-   send(active_chat(),"⏸️ BTC 20x PAUSADO: no backtest de 60 dias as regras perderam (153 operações, 33% de acerto, −US$ 77). "
-    "Estou testando outras configurações (treino 40 dias + teste 20 dias); o resultado chega aqui. Nada foi vendido.")
- except Exception:logging.exception("btc pause failed")
- def research():
-  import btc_swing
-  if not btc_swing.RESULT["text"]:btc_swing.run(send=send,chat=active_chat())
-  if not btc_swing.CHALLENGE["text"]:btc_swing.run_challenge(send=send,chat=active_chat())
-  if not btc_swing.MONTH["text"]:btc_swing.run_month(send=send,chat=active_chat())
- run_async(research)   # results in the logs / panel / Telegram
- while True:
-  time.sleep(btc_bot.CHECK_EVERY_S)
-  try:
-   chat=active_chat()
-   if chat:btc_bot.cycle(send,chat)
-  except Exception as exc:
-   msg=type(exc).__name__+": "+str(exc)[:120]
-   btc_bot.LAST["why"]="erro: "+msg
-   if msg!=BTC_ERR.get("last") or time.time()-BTC_ERR.get("at",0)>600:
-    BTC_ERR.update(last=msg,at=time.time());logging.warning("btc cycle failed: %s",msg)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
 def copy_beat_line():
@@ -746,7 +676,6 @@ def loop():
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=rocket_loop,daemon=True).start()
- threading.Thread(target=btc_loop,daemon=True).start()
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
@@ -801,10 +730,6 @@ def web_action(action):
  elif action in ("rks_on","rks_off"):
   import rocket_bot
   rocket_bot.set_signals(action=="rks_on")
- elif action in ("bx_on","bx_off"):
-  import btc_bot
-  if action=="bx_on":start_engine("BTC 20x")
-  btc_bot.set_enabled(action=="bx_on")
  else:raise ValueError("ação desconhecida")
  note="🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]
  try:

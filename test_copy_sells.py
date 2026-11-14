@@ -606,12 +606,11 @@ class MirrorSkipNoticeTests(unittest.TestCase):
         self.assertIn("robô real parado: desligado", self.sent[-1])
         self.assertIn("última recusa", ct.status_text())
 
-    def test_mirror_buy_with_copy_trade_off_is_reported(self):
+    def test_copy_trade_off_sends_no_notice(self):
         with patch.object(ct, "new_signals", return_value=[("buy", MINT, 100.0)]), \
                 patch.object(ct, "users_active", return_value=False):
             ct.cycle(self.send, 1)
-        self.assertIn("copy trade está DESLIGADO", self.sent[-1])
-        self.assertIn("COPY DESLIGADO", ct.status_text())
+        self.assertFalse([t for t in self.sent if "NÃO COPIEI" in t or "DESLIGADO" in t])   # owner: no copy notices
 
 
 class MonitorTests(unittest.TestCase):
