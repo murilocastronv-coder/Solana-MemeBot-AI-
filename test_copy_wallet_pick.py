@@ -39,3 +39,24 @@ class OwnerWalletPickTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReferenceAndCounterTest(unittest.TestCase):
+    def test_reference_comes_back_unless_owner_removed_and_counter(self):
+        import pathlib
+        import copy_trader as ct
+        import wallet_twin
+        p = pathlib.Path(tempfile.mkdtemp()) / "c.json"
+        with patch.object(ct, "_path", return_value=p), patch.object(wallet_twin, "REFERENCE", ADDR), \
+                patch.object(wallet_twin, "ENABLED", True):
+            self.assertTrue(ct.ensure_reference())
+            self.assertIn(ADDR, ct._load()["wallets"])
+            self.assertTrue(ct.mirror(ADDR))
+            ct.unfollow(ADDR)
+            ct.mark_owner_removed(ADDR)
+            self.assertFalse(ct.ensure_reference())          # the owner removed it: stays out
+            with patch.object(ct, "_preaudit_and_follow", side_effect=["rejected", "added", "full"]):
+                for _ in range(3):
+                    ct.preaudit_and_follow({"wallet": "x"}, None, 200.0)
+            self.assertIn("analisadas até agora: 2", ct.search_line())
+            self.assertIn("aprovadas 1", ct.search_line())
