@@ -57,9 +57,8 @@ class RocketTests(unittest.TestCase):
     def test_exit_rules(self):
         import live_exit_monitor as lem
         pos = {"mode": "rocket", "peak_ratio": 0, "opened_at": time.time()}
-        self.assertEqual(lem.position_signal(pos, 10, 6.5)["action"], "hold")                 # -35%
-        self.assertEqual(lem.position_signal(pos, 10, 6.5)["action"], "hold")                 # -35%
-        self.assertEqual(lem.position_signal(pos, 10, 6.2)["reason"], "stop_loss")            # -38%: fixed stop 37%
+        self.assertEqual(lem.position_signal(pos, 10, 7.2)["action"], "hold")                 # -28%
+        self.assertEqual(lem.position_signal(pos, 10, 6.9)["reason"], "stop_loss")            # -31%: fixed stop 30%
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 27)["action"], "hold")   # 3x, -10% from top
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=3.0), 10, 25)["action"], "sell")   # -17% from top
         old = dict(pos, opened_at=time.time() - 20 * 3600)
@@ -126,6 +125,15 @@ class RocketTests(unittest.TestCase):
         self.assertEqual((bought, closed), ([], []))     # never averages down, never closes everything
         import live_exit_monitor as lem
         self.assertEqual(lem.position_signal(positions["A"], 10, 4.0)["reason"], "stop_loss")   # A alone is sold
+
+    def test_profit_protection_after_15_percent(self):
+        import live_exit_monitor as lem
+        pos = {"mode": "rocket", "peak_ratio": 1.18, "opened_at": time.time()}
+        self.assertEqual(lem.position_signal(pos, 10, 10.2)["action"], "hold")            # +2% after +18%: keep
+        out = lem.position_signal(pos, 10, 9.4)                                            # -6% after +18%: out
+        self.assertEqual((out["action"], out["reason"]), ("sell", "rocket_protect"))
+        low = {"mode": "rocket", "peak_ratio": 1.10, "opened_at": time.time()}
+        self.assertEqual(lem.position_signal(low, 10, 8.0)["action"], "hold")             # never reached +15%: -20% ok
 
     def test_status(self):
         self.assertIn("SNIPER", rb.status_text())

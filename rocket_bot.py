@@ -44,7 +44,12 @@ MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 5_000)
 MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 5))
 COOLDOWN_S = sg._f("ROCKET_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("ROCKET_SCAN_SECONDS", 45)
-STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.37)       # fixed stop: the coin falls 37% -> that position is sold
+# Fixed stop 30%, chosen from the night of Nov 13-14 (11 trades): the losers that never reached +15% drifted
+# all the way down (-40% to -50%); a 30% stop loses US$ 6 instead of 7.40-10, with about the same total.
+STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.30)       # fixed stop: the coin falls 30% -> that position is sold
+# Profit protection: after reaching +15%, the stop moves up to -5% (DOOMSDAY +18% -> -50%, WOHAIHAO +16% -> -31%)
+PROTECT_ARM = sg._f("ROCKET_PROTECT_ARM", 0.15)
+PROTECT_STOP = sg._f("ROCKET_PROTECT_STOP", -0.05)
 _SL = str(STOP_LOSS) if STOP_LOSS > 0 else "1"      # "1" = only at -100%: never triggers
 TRAIL_ARM = sg._f("ROCKET_TRAIL_ARM", 0.30)
 TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.15)
@@ -413,6 +418,8 @@ def status_text():
              "💵 US$ " + format(ORDER_USD, ".0f") + " por compra · máx. " + str(MAX_OPEN) + " abertas · " +
              ("🛑 stop fixo -" + format(STOP_LOSS * 100, ".0f") + "% (fecha a moeda, não recompra)" if STOP_LOSS > 0
               else "🚫 sem stop loss por moeda") +
+             (" · 🛡️ chegou a +" + format(PROTECT_ARM * 100, ".0f") + "%: stop sobe para " + format(PROTECT_STOP * 100, "+.0f") + "%"
+              if PROTECT_ARM > 0 else "") +
              " · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
              "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · " +
              ("📉 se cair " + format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") +

@@ -88,8 +88,14 @@ def position_signal(position, cost, proceeds):
             if signal["action"] == "sell" and signal["reason"] != "stop_loss":
                 signal["reason"] = "rocket_dca_target"
             return signal
-        # no stop loss and no time stop (owner's choice): sells only with profit
-        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rocket_bot.EXIT)
+        # fixed stop (ROCKET_STOP_LOSS), trailing from +30%; profit protection: once the coin reached
+        # +15% the stop moves up to -5% (it never turns a good move into a big loss)
+        signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **rocket_bot.EXIT)
+        ratio = float(proceeds) / float(cost) if cost else 0.0
+        if (signal["action"] == "hold" and rocket_bot.PROTECT_ARM > 0 and
+                signal["peak_ratio"] >= 1 + rocket_bot.PROTECT_ARM and ratio <= 1 + rocket_bot.PROTECT_STOP):
+            signal.update(action="sell", reason="rocket_protect")
+        return signal
     if position.get("mode") in REMOVED_BOT_EXIT:
         # robot removed: stop -40%, trailing stop once in profit, out after 6 h if it never took off
         signal = trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **REMOVED_BOT_EXIT[position["mode"]])
