@@ -100,6 +100,19 @@ class ControlTests(unittest.TestCase):
 
 
 class SafeSenderTests(unittest.TestCase):
+    def test_failed_notice_is_sent_again_later(self):
+        import live_engine
+        live_engine.UNDELIVERED.clear()
+
+        def boom(chat, text, *a, **k):
+            raise RuntimeError("Telegram API returned HTTP 502")
+        live_engine._safe_sender(boom)(1, "🚀 STOP MÓVEL ATIVADO — AMC +22%")
+        self.assertFalse(live_engine.resend_undelivered(boom))          # Telegram still down: kept
+        got = []
+        self.assertTrue(live_engine.resend_undelivered(lambda c, t: got.append(t)))
+        self.assertIn("STOP MÓVEL ATIVADO — AMC", got[0])
+        self.assertEqual(live_engine.UNDELIVERED, [])
+
     def test_exit_cycle_send_never_raises(self):
         import live_engine
 

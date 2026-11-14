@@ -321,15 +321,34 @@ def sell_message(symbol, signal, settled):
             "🔗 https://solscan.io/tx/" + settled["signature"])
 
 
+UNDELIVERED = []   # (chat, text, time) of notices Telegram refused: sent again when it works (resend_undelivered)
+
+
 def _safe_sender(send):
-    """A send that never raises: a Telegram outage must not stop the stop / trailing-stop sales."""
+    """A send that never raises: a Telegram outage must not stop the stop / trailing-stop sales.
+    A notice that fails is kept and sent again later (resend_undelivered)."""
     def safe(chat, text, *a, **k):
         try:
             return send(chat, text, *a, **k)
         except Exception as exc:
             logging.warning("notice not delivered (%s), selling anyway: %s", type(exc).__name__, str(text)[:60])
+            UNDELIVERED.append((chat, str(text), time.time()))
+            del UNDELIVERED[:-30]
             return None
     return safe
+
+
+def resend_undelivered(send):
+    """Send again the notices Telegram refused (oldest first, marked with how long ago they happened)."""
+    while UNDELIVERED:
+        chat, text, t = UNDELIVERED[0]
+        mins = int((time.time() - t) / 60)
+        try:
+            send(chat, ("⏰ (há " + str(mins) + " min) " if mins >= 1 else "") + text)
+        except Exception:
+            return False
+        UNDELIVERED.pop(0)
+    return True
 
 
 _POS_LOG = [0.0]
