@@ -131,6 +131,7 @@ def keyboard():
   [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
   [{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
+  [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
   [{"text":"💎 Diamond: nova rodada 12 h","callback_data":"dm_on"},{"text":"⏹️ Parar Diamond","callback_data":"dm_off"}],
   [{"text":"💎 Diamond: resultado","callback_data":"dm_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
@@ -317,7 +318,7 @@ def handle(update):
  if action in ("copy_following","/copiadas"):
   import copy_trader as ct
   try:
-   send_parts(chat,ct.wallets_text(),ct.manage_buttons()+keyboard())
+   send_parts(chat,ct.picks_text(),ct.manage_buttons()+keyboard())
   except Exception as exc:send(chat,"Lista indisponível: "+type(exc).__name__,keyboard())
   return
  if action.startswith(("cw_off:","cw_on:")) or action in ("/pausar","/retomar","/ativar"):
@@ -335,7 +336,7 @@ def handle(update):
   state=("⏸️ PAUSADA" if w.get("paused") else "✅ COPIANDO")
   send(chat,("⏸️ Pausei "+addr[:6]+"…"+addr[-4:]+": não copio mais as compras dela. Posições abertas dela continuam e vendem quando ela vender." if pause
    else "▶️ Retomei "+addr[:6]+"…"+addr[-4:]+": volto a copiar as compras dela.")+"\nStatus agora: "+state)
-  send_parts(chat,ct.wallets_text(),ct.manage_buttons()+keyboard());return
+  send_parts(chat,ct.picks_text(),ct.manage_buttons()+keyboard());return
  if action=="/proporcional":
   import copy_trader as ct
   parts=(msg or {}).get("text","").split()
@@ -349,6 +350,9 @@ def handle(update):
   try:send(chat,discovery_text(),keyboard())
   except Exception as exc:send(chat,"Busca indisponível: "+type(exc).__name__,keyboard())
   return
+ if action in ("cw_add","cw_list","/copiar","/carteiras") or action.startswith("cw_rm:") or (
+   not cb and chat in ADD_WALLET and time.time()-ADD_WALLET[chat]<600 and SOL_ADDRESS.fullmatch(action or "")):
+  copy_wallet_action(chat,action,(msg or {}).get("text",""));return
  if action in ("copy_sim","copy_real","copy_off","copy_status","/copy","/seguir","/deixar","/status"):
   import copy_trader as ct
   try:
@@ -599,6 +603,34 @@ def copy_beat_line():
  if not COPY_BEAT["at"]:return "⏳ Copy trade: primeira rodada ainda não terminou"
  ago=int(time.time()-COPY_BEAT["at"])
  return ("🚨 " if ago>120 else "🔁 ")+"Copy trade: última rodada há "+str(ago)+" s (levou "+format(COPY_BEAT["took"],".0f")+" s)"+(" · erro "+COPY_BEAT["error"] if COPY_BEAT.get("error") else "")
+ADD_WALLET={}
+SOL_ADDRESS=re.compile(r"[1-9A-HJ-NP-Za-km-z]{32,44}")
+def copy_wallet_action(chat,action,text):
+ """Owner chooses the wallets to copy: add by address, list, remove."""
+ import copy_trader as ct
+ try:
+  if action=="cw_add":
+   ADD_WALLET[chat]=time.time()
+   send(chat,"➕ ADICIONAR CARTEIRA\nMande aqui o ENDEREÇO da carteira Solana que você quer copiar (só o endereço).\n"
+    "Também funciona: /copiar ENDERECO\n\nO bot copia cada compra e venda dela, no mesmo tamanho proporcional, com anti-golpe e o limite de 70% da conta.",keyboard());return
+  if action=="cw_list" or action=="/carteiras":
+   rows=ct.owner_wallets()
+   kb=[[{"text":"🗑️ Remover "+a[:4]+"…"+a[-4:],"callback_data":"cw_rm:"+a}] for a,_ in rows[:20]]+keyboard()
+   send(chat,ct.picks_text(),kb);return
+  if action.startswith("cw_rm:"):
+   a=action.split(":",1)[1]
+   now=ct.unfollow(a)
+   send(chat,("🗑️ Parei de copiar `"+a+"`." if now else "⏳ `"+a+"` tem uma cópia aberta: não copio mais compras dela, vendo junto quando ela vender e depois ela sai da lista."),keyboard());return
+  parts=text.split()
+  address=parts[1] if action=="/copiar" and len(parts)>1 else (parts[0] if parts else "")
+  if not SOL_ADDRESS.fullmatch(address):
+   send(chat,"Uso: /copiar ENDERECO_DA_CARTEIRA",keyboard());return
+  ADD_WALLET.pop(chat,None)
+  ct.add_owner_wallet(address)
+  send(chat,"✅ Copiando a carteira:\n`"+address+"`\nAs próximas compras e vendas dela serão copiadas"+
+   (" com dinheiro real." if ct.real_enabled() else ". ⚠️ O copy trade está DESLIGADO: toque em 💵 Copiar (REAL) para começar.")+
+   "\nCompras antigas não são copiadas.",keyboard())
+ except Exception as exc:send(chat,"⛔ Carteira: "+str(exc)[:200],keyboard())
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
