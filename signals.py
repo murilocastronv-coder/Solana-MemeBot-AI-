@@ -173,9 +173,25 @@ def _get(url):
     return r.json()
 
 
+_PAIRS_CACHE = {"at": 0.0, "pairs": []}
+PAIRS_CACHE_S = _f("CANDIDATE_CACHE_SECONDS", 30)
+
+
 def candidate_pairs(fetch=None):
-    """Best DexScreener pair of each Solana coin from DexScreener and GeckoTerminal lists."""
-    fetch = fetch or _get
+    """Best DexScreener pair of each Solana coin from DexScreener and GeckoTerminal lists.
+    Without `fetch`, a list read less than PAIRS_CACHE_S ago is reused (Sniper and Diamond share one scan,
+    so the DexScreener limits are not doubled)."""
+    if fetch is None:
+        if time.time() - _PAIRS_CACHE["at"] < PAIRS_CACHE_S and _PAIRS_CACHE["pairs"]:
+            return list(_PAIRS_CACHE["pairs"])
+        out = _candidate_pairs(_get)
+        if out:
+            _PAIRS_CACHE.update(at=time.time(), pairs=out)
+        return list(out)
+    return _candidate_pairs(fetch)
+
+
+def _candidate_pairs(fetch):
     mints = []
     for feed in DEX_FEEDS:
         try:

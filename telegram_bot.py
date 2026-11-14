@@ -270,7 +270,7 @@ def handle(update):
   import diamond_bot
   try:
    if action=="dm_on":
-    live_engine.start();diamond_bot.start_round();pre="💎 DIAMOND LIGADO: nova rodada de "+format(diamond_bot.ROUND_S/3600,".0f")+" h. Decide a cada 15 min e te avisa a cada operação com o motivo.\n\n"
+    live_engine.start();diamond_bot.start_round();pre="💎 DIAMOND LIGADO: nova rodada de "+format(diamond_bot.ROUND_S/3600,".0f")+" h. Analisa a DEX a cada 1 min e te avisa a cada operação com o motivo.\n\n"
    elif action=="dm_off":diamond_bot.stop();pre="⏹️ Diamond parado: não compra mais. A posição aberta continua com stop e stop móvel.\n\n"
    else:pre=""
    send(chat,pre+diamond_bot.status_text(),keyboard())
@@ -557,7 +557,7 @@ def rocket_loop():
    rocket_bot.cycle(send,chat,pairs=signals.candidate_pairs())
   except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
 def diamond_loop():
- """Diamond: every 15 minutes one decision (buy / hold), for the 12 h round."""
+ """Diamond: every minute one decision (buy / hold), for the 12 h round."""
  import diamond_bot
  try:
   if diamond_bot.launch_round2():logging.info("diamond round 2 started")
