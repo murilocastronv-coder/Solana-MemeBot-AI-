@@ -24,8 +24,8 @@ import time
 
 import signals as sg
 
-ORDER_USD = sg._f("ROCKET_ORDER_USD", 20)
-MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 4))
+ORDER_USD = sg._f("ROCKET_ORDER_USD", 10)
+MAX_OPEN = int(sg._f("ROCKET_MAX_OPEN", 3))
 RESERVE_USD = sg._f("ROCKET_RESERVE_USD", 1)
 MIN_LIQ = sg._f("ROCKET_MIN_LIQUIDITY_USD", 15_000)
 # false (owner's choice): also coins launched on other Solana DEXes listed on DexScreener
@@ -114,6 +114,18 @@ def set_enabled(on):
 
 def enabled():
     return bool(_load()["enabled"])
+
+
+def relaunch_small():
+    """Owner's choice (Nov 14): Sniper back on, small (US$ 10 per buy, max 3 open) with its signals, to
+    measure 30+ real trades before any size increase. Runs once."""
+    with _LOCK:
+        d = _load()
+        if d.get("relaunch_small_v1"):
+            return False
+        d.update(relaunch_small_v1=True, enabled=True, signals=True, paused_why="", since=time.time())
+        _save(d)
+    return True
 
 
 def signals_on():

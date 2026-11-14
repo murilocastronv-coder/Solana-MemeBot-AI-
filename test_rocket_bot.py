@@ -108,10 +108,10 @@ class RocketTests(unittest.TestCase):
             self.assertEqual(closed, [])
             rb.take_profits(quote=lambda m, a: 7.4, closer=closed.append)      # all -26%: close all
             self.assertEqual(sorted(closed), sorted(positions))
-        with patch.object(st, "_load", return_value={"positions": dict(list(positions.items())[:3])}), \
-             patch.object(st, "positions_by_mode", return_value=3):
+        with patch.object(st, "_load", return_value={"positions": dict(list(positions.items())[:2])}), \
+             patch.object(st, "positions_by_mode", return_value=2):
             closed.clear()
-            rb.take_profits(quote=lambda m, a: 6, closer=closed.append)        # only 3 open, -40%: no basket stop
+            rb.take_profits(quote=lambda m, a: 7.4, closer=closed.append)      # only 2 open, -26%: no basket stop
             self.assertEqual(closed, [])
 
     def test_no_rebuy_and_fixed_50_percent_stop_closes_only_that_coin(self):

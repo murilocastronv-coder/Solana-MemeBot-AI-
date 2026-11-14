@@ -169,7 +169,13 @@ def controls(s):
     except Exception:
         bx_on = None
     copy_on = isinstance(s, dict) and s.get("copy_real")
-    return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>₿ BTC 20x (Jupiter)</b> — " +
+    return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>🚀 Sniper</b> — " +
+            ("<span class='pill ok'>ligado</span>" if rk_on else "<span class='pill bad'>desligado</span>") +
+            "<div style='margin-top:8px'>" + _button("rk_on", "🚀 Ligar", "go") + _button("rk_off", "⏹️ Parar", "stop") +
+            "</div></div><div><b>📡 Sinais do Sniper</b> — " +
+            ("<span class='pill ok'>ligados</span>" if rks_on else "<span class='pill bad'>desligados</span>") +
+            "<div style='margin-top:8px'>" + _button("rks_on", "📡 Ligar", "go") + _button("rks_off", "🔕 Parar", "stop") +
+            "</div></div><div><b>₿ BTC 20x (Jupiter)</b> — " +
             ("<span class='pill ok'>ligado</span>" if bx_on else "<span class='pill bad'>desligado</span>") +
             "<div style='margin-top:8px'>" + _button("bx_on", "₿ Ligar", "go") + _button("bx_off", "⏹️ Parar", "stop") +
             "</div></div></div><div class='mut' style='margin-top:10px'>O bot roda no servidor 24 h: pode fechar esta aba "
