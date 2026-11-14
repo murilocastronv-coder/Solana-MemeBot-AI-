@@ -557,17 +557,31 @@ def rocket_loop():
    rocket_bot.cycle(send,chat,pairs=signals.candidate_pairs())
   except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
 def diamond_loop():
- """Diamond: every minute one decision (buy / hold), for the 12 h round."""
- import diamond_bot
+ """Diamond: every minute one decision (buy / hold), for the 12 h round. Each decision runs in its own
+ thread: one that hangs (a slow API) cannot stop the next minutes, and its stack is logged to find why."""
+ import diamond_bot,sys,traceback
  try:
   if diamond_bot.launch_round2():logging.info("diamond round 2 started")
  except Exception:logging.exception("diamond launch failed")
  time.sleep(60)
+ worker=[None,0.0];quiet=[0.0]
+ def run(chat):
+  try:diamond_bot.cycle(send,chat)
+  except Exception as exc:logging.exception("diamond cycle failed: %s",type(exc).__name__)
  while True:
   try:
-   chat=active_chat()
-   if chat and diamond_bot.enabled():diamond_bot.cycle(send,chat)
-  except Exception as exc:logging.exception("diamond cycle failed: %s",type(exc).__name__)
+   chat=active_chat();on=diamond_bot.enabled()
+   t=worker[0]
+   if t is not None and t.is_alive():
+    if time.time()-worker[1]>120:
+     frame=sys._current_frames().get(t.ident)
+     logging.warning("diamond cycle stuck %.0f s at: %s",time.time()-worker[1],
+      " | ".join(x.strip().replace("\n"," ") for x in traceback.format_stack(frame)[-4:]) if frame else "?")
+   elif chat and on:
+    worker[0]=threading.Thread(target=run,args=(chat,),daemon=True);worker[1]=time.time();worker[0].start()
+   elif time.time()-quiet[0]>900:
+    quiet[0]=time.time();logging.info("diamond idle: enabled=%s chat=%s",on,bool(chat))
+  except Exception as exc:logging.exception("diamond loop failed: %s",type(exc).__name__)
   time.sleep(diamond_bot.CYCLE_S)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
