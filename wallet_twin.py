@@ -21,6 +21,9 @@ ENABLED = os.getenv("COPY_TWIN_SEARCH", "true").strip().lower() != "false"
 MIN_SIMILARITY = float(os.getenv("COPY_TWIN_MIN_SIMILARITY", "0"))
 MIN_WIN = float(os.getenv("COPY_TWIN_MIN_WIN", "0.45"))
 MIN_TRADES = int(float(os.getenv("COPY_TWIN_MIN_TRADES", "15")))
+# Owner's choice (Nov 14): wallets with BIG memecoin profit in the result window (COPY_RESULT_DAYS, 30 days)
+MIN_PROFIT = float(os.getenv("COPY_RESULT_MIN_USD", "0"))
+RESULT_DAYS = float(os.getenv("COPY_RESULT_DAYS", "9"))
 PROFILE_MAX_AGE_S = float(os.getenv("COPY_TWIN_PROFILE_HOURS", "12")) * 3600
 PUMP = ("pump.fun", "PumpSwap")
 # Sniper search (owner's choice): wallets that snipe memecoins - buy the coin right after it is born
@@ -148,6 +151,9 @@ def judge(cand_style, audit, ref):
         return False, sim, "poucas operações recentes"
     if a.get("pnl_recent", 0) <= 0:
         return False, sim, "sem lucro recente"
+    if a.get("pnl_recent", 0) < MIN_PROFIT:
+        return False, sim, ("lucro de " + format(RESULT_DAYS, ".0f") + " dias abaixo de US$ " + format(MIN_PROFIT, ",.0f") +
+                            " (" + format(a.get("pnl_recent", 0), "+,.0f") + ")")
     # the reference wallet itself may win few trades and make its money on big winners:
     # ask the same hit rate as it (80% of it), never more than TWIN_MIN_WIN
     need = min(MIN_WIN, 0.8 * float(ref.get("win_rate") or MIN_WIN))
