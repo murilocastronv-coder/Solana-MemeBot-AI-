@@ -94,3 +94,11 @@ class TwinTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BigProfitTest(unittest.TestCase):
+    def test_needs_big_profit_in_the_window(self):
+        swing = dict(REF_STYLE, hold_min=60.0)
+        with patch.object(wt, "MIN_PROFIT", 1000.0):
+            self.assertIn("abaixo de US$ 1,000", wt.judge(swing, audit(swing, pnl=300), REF_STYLE)[2])
+            self.assertTrue(wt.judge(swing, audit(swing, pnl=2500), REF_STYLE)[0])
