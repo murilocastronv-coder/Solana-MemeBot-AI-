@@ -1,7 +1,7 @@
 """Diamond: patient conviction trader (real money, mode "diamond", owner's choice Nov 14).
 
 Few, bigger, better trades in ESTABLISHED Solana tokens only, on pullbacks inside an uptrend. Every
-15 minutes it decides buy / hold (and logs WHY for every coin it refused, so each round can be studied).
+minute it decides buy / hold (and logs WHY for every coin it refused, so each round can be studied).
 Telegram message on every trade with the reason.
 
 Round 2 rules (hard and checkable on DexScreener data). Lesson of round 1 (zero trades): vague, all-at-once
@@ -14,7 +14,7 @@ UNIVERSE  U1 liquidity >= US$ 250k  U2 24 h volume >= US$ 1M  U3 pair >= 3 days 
 TREND     T1 24 h change >= +3% or 6 h change >= +3%   T2 6 h volume >= 15% of 24 h volume (volume not dying)
 PULLBACK  E1 1 h change between -12% and -1.5% (relaxed: <= 0% after 4 h idle)   E2 5 min change >= 0 (stopped
           falling)   E3 1 h buys >= 0.8 x 1 h sells
-SIZE      US$ 30, at most 1 open, one buy per 15 min cycle, same coin again only after 4 h.
+SIZE      US$ 30, at most 1 open, one buy per 1 min cycle, same coin again only after 4 h.
 EXIT      X1 stop -10% (thesis broken)  X2 from +12% trailing stop 6% under the top (big win runs)
           X3 end of the 12 h round: sells what is open and sends the report.
 Nothing here guarantees profit.
@@ -31,7 +31,7 @@ import signals as sg
 ORDER_USD = sg._f("DIAMOND_ORDER_USD", 30)
 MAX_OPEN = int(sg._f("DIAMOND_MAX_OPEN", 1))
 RESERVE_USD = 1.0
-CYCLE_S = sg._f("DIAMOND_CYCLE_MINUTES", 15) * 60
+CYCLE_S = sg._f("DIAMOND_CYCLE_MINUTES", 1) * 60     # owner's choice: reads the whole DEX list every minute
 ROUND_S = sg._f("DIAMOND_ROUND_HOURS", 12) * 3600
 COOLDOWN_S = sg._f("DIAMOND_COOLDOWN_HOURS", 4) * 3600
 IDLE_RELAX_S = sg._f("DIAMOND_IDLE_RELAX_HOURS", 4) * 3600
@@ -250,7 +250,7 @@ def _end_round(send, chat, seller=None):
 
 
 def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None, seller=None):
-    """One 15-minute decision: buy the best coin passing every rule, else hold (and log why)."""
+    """One decision (every minute): buy the best coin passing every rule, else hold (and log why)."""
     now = now or time.time()
     d = _load()
     if not d["enabled"]:
