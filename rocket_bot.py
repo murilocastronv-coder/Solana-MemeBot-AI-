@@ -44,7 +44,7 @@ MIN_VOL_1H = sg._f("ROCKET_MIN_VOLUME_1H", 5_000)
 MAX_LOSS_STREAK = int(sg._f("ROCKET_MAX_LOSS_STREAK", 5))
 COOLDOWN_S = sg._f("ROCKET_COOLDOWN_HOURS", 6) * 3600
 SCAN_EVERY_S = sg._f("ROCKET_SCAN_SECONDS", 45)
-STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.50)       # fixed stop: the coin falls 50% -> that position is sold
+STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.37)       # fixed stop: the coin falls 37% -> that position is sold
 _SL = str(STOP_LOSS) if STOP_LOSS > 0 else "1"      # "1" = only at -100%: never triggers
 TRAIL_ARM = sg._f("ROCKET_TRAIL_ARM", 0.30)
 TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.15)
