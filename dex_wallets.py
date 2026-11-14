@@ -232,7 +232,15 @@ def analyze_wallet(wallet, rpc, limit=WALLET_HISTORY, now=None, sigs=None, activ
             stats.update(wallet_activity(wallet, rpc, int(now or time.time()), first_page=sigs))
         except Exception:
             stats["age_days"], stats["active_days_7"] = None, None
+    if stats:
+        stats["age_min_days"] = MIN_AGE_DAYS        # the age was proven up to this many days
     return stats
+
+
+def age_stale(st):
+    """Age measured with a smaller minimum than today's (e.g. 7 days, now 30): measure again."""
+    age = st.get("age_days")
+    return age is not None and age < MIN_AGE_DAYS and float(st.get("age_min_days") or 7) < MIN_AGE_DAYS
 
 
 def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token=TX_PER_TOKEN,
@@ -289,7 +297,8 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         # Approved wallets analysed before the newer filters existed (no age / activity / buy size
         # measured) go first, so they get a complete re-analysis now instead of in 12 h.
         stale = [w for w, st in state["wallets"].items()
-                 if wallet_copy._qualifies(st) and ("age_days" not in st or "cost_lamports_closed" not in st)]
+                 if wallet_copy._qualifies(st) and ("age_days" not in st or "cost_lamports_closed" not in st
+                                                    or age_stale(st))]
         fresh = [w for w in dict.fromkeys(stale[:REANALYZE_STALE] + buyers)
                  if w in stale or now - int(analyzed.get(w, 0)) >= REANALYZE_SECONDS]
         done = with_trades = screened = 0

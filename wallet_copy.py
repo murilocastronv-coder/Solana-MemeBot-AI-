@@ -160,7 +160,7 @@ def best_wallets(state=None, limit=10):
     # best first: profit x win rate x experience (same score copy_trader uses)
     rows.sort(key=lambda x: (max(0, x["realized_lamports"]) / 1e9 * x["win_rate"] * min(x["closed_trades"], 25) ** 0.5,
                              x["realized_lamports"]), reverse=True)
-    return rows[:max(1, min(int(limit), 50))]
+    return rows[:max(1, min(int(limit), 1000))]
 
 
 def _state_path():
