@@ -51,8 +51,14 @@ STOP_LOSS = sg._f("ROCKET_STOP_LOSS", 0.30)       # fixed stop: the coin falls 3
 PROTECT_ARM = sg._f("ROCKET_PROTECT_ARM", 0.15)
 PROTECT_STOP = sg._f("ROCKET_PROTECT_STOP", -0.05)
 _SL = str(STOP_LOSS) if STOP_LOSS > 0 else "1"      # "1" = only at -100%: never triggers
-TRAIL_ARM = sg._f("ROCKET_TRAIL_ARM", 0.30)
-TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.15)
+# Tuned on the 16 sniper trades of Nov 13-14: only 4 coins reached +30%; 4 others reached +16% to +25%
+# and then fell to -5%..-50% (DOOMSDAY, WOHAIHAO, ASTRALIS, AMC). Trailing from +15%, 10% under the top.
+TRAIL_ARM = sg._f("ROCKET_TRAIL_ARM", 0.15)
+TRAIL_DROP = sg._f("ROCKET_TRAIL_DROP", 0.10)
+# No move: a coin that has not reached +15% after 60 min is sold (the winners all moved within ~40 min;
+# Krillion, JENSEN, HWAN, JENSLA, Huang drifted down for hours).
+NO_MOVE_S = sg._f("ROCKET_NO_MOVE_MINUTES", 60) * 60
+NO_MOVE_ARM = sg._f("ROCKET_NO_MOVE_ARM", 0.15)
 MAX_HOLD_S = sg._f("ROCKET_MAX_HOLD_MINUTES", 90) * 60
 # take-profit ladder (the most common memecoin rule): at 2x take back the money put in (sell half),
 # at 5x sell half of what is left; the rest rides the trailing stop for a 10x+.
@@ -420,6 +426,8 @@ def status_text():
               else "🚫 sem stop loss por moeda") +
              (" · 🛡️ chegou a +" + format(PROTECT_ARM * 100, ".0f") + "%: stop sobe para " + format(PROTECT_STOP * 100, "+.0f") + "%"
               if PROTECT_ARM > 0 else "") +
+             (" · ⏱️ não chegou a +" + format(NO_MOVE_ARM * 100, ".0f") + "% em " + format(NO_MOVE_S / 60, ".0f") +
+              " min: vende" if NO_MOVE_S > 0 else "") +
              " · 🚀 a partir de +" + format(TRAIL_ARM * 100, ".0f") +
              "% deixa correr (vende " + format(TRAIL_DROP * 100, ".0f") + "% abaixo do topo) · " +
              ("📉 se cair " + format(DCA_DROP * 100, ".0f") + "% compra mais US$ " + format(DCA_USD, ".0f") +

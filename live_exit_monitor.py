@@ -95,6 +95,10 @@ def position_signal(position, cost, proceeds):
         if (signal["action"] == "hold" and rocket_bot.PROTECT_ARM > 0 and
                 signal["peak_ratio"] >= 1 + rocket_bot.PROTECT_ARM and ratio <= 1 + rocket_bot.PROTECT_STOP):
             signal.update(action="sell", reason="rocket_protect")
+        held = time.time() - float(position.get("opened_at") or time.time())
+        if (signal["action"] == "hold" and rocket_bot.NO_MOVE_S > 0 and held > rocket_bot.NO_MOVE_S and
+                signal["peak_ratio"] < 1 + rocket_bot.NO_MOVE_ARM):
+            signal.update(action="sell", reason="time_stop")      # never took off: free the slot
         return signal
     if position.get("mode") in REMOVED_BOT_EXIT:
         # robot removed: stop -40%, trailing stop once in profit, out after 6 h if it never took off
