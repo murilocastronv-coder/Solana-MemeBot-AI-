@@ -47,12 +47,11 @@ class RocketTests(unittest.TestCase):
         rb.cycle(pairs=[pair()], now=NOW + 45, safety=lambda m, curve=False: "", buyer=buyer)
         self.assertEqual(bought, [1])
 
-    def test_pauses_after_5_losses(self):
-        losses = [{"mode": "rocket", "pnl_usd": -4, "closed_at": time.time() + 5}] * 5
+    def test_does_not_pause_after_losses(self):
+        losses = [{"mode": "rocket", "pnl_usd": -4, "closed_at": time.time() + 5}] * 8
         with patch("live_trade_state.history", return_value=losses):
-            self.assertEqual(rb.cycle(pairs=[pair()], now=NOW, safety=lambda m, curve=False: "",
-                                      buyer=lambda p, s, c: ""), [])
-        self.assertFalse(rb.enabled())
+            rb.cycle(pairs=[pair()], now=NOW, safety=lambda m, curve=False: "", buyer=lambda p, s, c: "")
+        self.assertTrue(rb.enabled())
 
     def test_exit_rules(self):
         import live_exit_monitor as lem
