@@ -80,17 +80,30 @@ def should_send(text,now=None,chat=None):
 def send(chat,text,keyboard=None):
  try:
   import dashboard
-  dashboard.record(text)          # the web panel shows every notice, even when Telegram is down
+  dashboard.record(text.replace("`","") if text else text)   # the web panel shows every notice
  except Exception:pass
  if not should_send(text,chat=chat):
   logging.info("repeated notice held back (%.0f h): %s",NOTIFY_REPEAT_S/3600,(text or "")[:80].replace("\n"," "))
   return {}
+ text,code=code_spans(text)
  args={"chat_id":chat,"text":text,"disable_web_page_preview":True}
- ents=address_entities(text)
+ ents=code+[e for e in address_entities(text) if not any(c["offset"]<=e["offset"]<c["offset"]+c["length"] for c in code)]
  if ents:args["entities"]=ents     # full addresses in monospace: one tap copies them
  if keyboard:args["reply_markup"]={"inline_keyboard":keyboard}
  return request_api("sendMessage",**args)
 ADDRESS_RE=re.compile(r"(?<![/\w.])[1-9A-HJ-NP-Za-km-z]{32,44}(?![\w])")
+CODE_RE=re.compile(r"`([^`\n]{1,120})`")
+def code_spans(text):
+ """`value` -> value shown in monospace (Telegram 'code': one tap copies it). Returns (text, entities)."""
+ out,ents,pos=[],[],0
+ for m in CODE_RE.finditer(text or ""):
+  out.append(text[pos:m.start()])
+  start=len("".join(out).encode("utf-16-le"))//2
+  out.append(m.group(1))
+  ents.append({"type":"code","offset":start,"length":len(m.group(1).encode("utf-16-le"))//2})
+  pos=m.end()
+ out.append((text or "")[pos:])
+ return "".join(out),ents
 def address_entities(text):
  """Telegram 'code' entities for every full Solana address that is not part of a link (UTF-16 offsets)."""
  out=[]
@@ -117,6 +130,7 @@ def keyboard():
   [{"text":"🔎 Carteiras encontradas","callback_data":"copy_wallets"},{"text":"👛 Carteiras copiadas","callback_data":"copy_following"}],
   [{"text":"📦 Posições abertas","callback_data":"copy_positions"},{"text":"🔍 Auditar carteiras","callback_data":"audit"}],
   [{"text":"🚀 Ligar Sniper","callback_data":"rk_on"},{"text":"⏹️ Parar Sniper","callback_data":"rk_off"}],
+  [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
   [{"text":"📊 Sniper: resultado","callback_data":"rk_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -245,6 +259,12 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
+ if action in ("rks_on","rks_off"):
+  import rocket_bot
+  rocket_bot.set_signals(action=="rks_on")
+  send(chat,("📡 SINAIS DO SNIPER LIGADOS: cada moeda que o Sniper escolher chega aqui com o contrato, a entrada, o stop loss "
+   "e os take profits — é só tocar para copiar. Os sinais funcionam mesmo com o Sniper (compra automática) desligado."
+   if action=="rks_on" else "🔕 Sinais do Sniper desligados."),keyboard());return
  if action in ("rk_on","rk_off","rk_status","/sniper"):
   import rocket_bot
   try:
@@ -522,7 +542,7 @@ def rocket_loop():
   try:
    chat=active_chat()
    if chat:rocket_bot.take_profits(send,chat)
-   if not chat or not rocket_bot.enabled():continue
+   if not chat or not (rocket_bot.enabled() or rocket_bot.signals_on()):continue
    rocket_bot.cycle(send,chat,pairs=signals.candidate_pairs())
   except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
 USERS_UPKEEP={"next":0.0}
@@ -706,6 +726,9 @@ def web_action(action):
  elif action=="rk_off":
   import rocket_bot
   rocket_bot.set_enabled(False)
+ elif action in ("rks_on","rks_off"):
+  import rocket_bot
+  rocket_bot.set_signals(action=="rks_on")
  else:raise ValueError("ação desconhecida")
  note="🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]
  try:

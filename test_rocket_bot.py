@@ -150,3 +150,45 @@ class AnyDexTests(unittest.TestCase):
         self.assertEqual(rb.rocket_reason(ray, NOW), "")
         self.assertIn("SOL/USDC", rb.rocket_reason(dict(ray, quoteToken={"address": "OTHER"}), NOW))
         self.assertIn("Solana", rb.rocket_reason(dict(ray, chainId="base"), NOW))
+
+
+class SignalTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_signal_message_has_contract_entry_sl_and_tps_to_copy(self):
+        txt = rb.signal_text(pair(priceUsd="0.0001"))
+        self.assertIn("`" + MINT + "`", txt)
+        self.assertIn("Entrada: `0.0001`", txt)
+        self.assertIn("Stop loss (−30%): `0.00007`", txt)
+        self.assertIn("TP2 (2x): `0.0002`", txt)
+        self.assertIn("TP3 (5x): `0.0005`", txt)
+
+    def test_signals_without_buying(self):
+        rb.set_enabled(False)
+        rb.set_signals(True)
+        sent, bought = [], []
+        rb.cycle(lambda c, t: sent.append(t), 1, pairs=[pair()], now=NOW, safety=lambda m, curve=False: "",
+                 buyer=lambda p, s, c: bought.append(1) or "")
+        self.assertEqual(bought, [])
+        self.assertTrue(any("SINAL SNIPER" in t for t in sent))
+
+    def test_scam_gets_no_signal(self):
+        rb.set_signals(True)
+        sent = []
+        rb.cycle(lambda c, t: sent.append(t), 1, pairs=[pair()], now=NOW, safety=lambda m, curve=False: "freeze ativo")
+        self.assertFalse(any("SINAL SNIPER" in t for t in sent))
+
+
+class CopySpanTests(unittest.TestCase):
+    def test_backticks_become_tap_to_copy(self):
+        import telegram_bot as tb
+        text, ents = tb.code_spans("💵 Entrada: `0.0001`\nSL: `0.00007`")
+        self.assertEqual(text, "💵 Entrada: 0.0001\nSL: 0.00007")
+        self.assertEqual(len(ents), 2)
+        first = ents[0]
+        self.assertEqual(text.encode("utf-16-le")[first["offset"] * 2:(first["offset"] + first["length"]) * 2].decode("utf-16-le"),
+                         "0.0001")
