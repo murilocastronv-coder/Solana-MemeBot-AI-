@@ -478,6 +478,8 @@ def background_loop():
  while True:
   try:
    beat("conferência de posições")
+   try:live_engine.resend_undelivered(send)
+   except Exception:pass
    if active_chat() and time.monotonic()>=next_sync:
     next_sync=time.monotonic()+60
     try:live_engine.sync_positions(send,active_chat())
