@@ -123,7 +123,7 @@ def signal(cs, ind, i, p):
     return 1 if r < p["n"] else (-1 if r > 100 - p["n"] else 0)
 
 
-def simulate(cs, ind, p, start, end):
+def simulate(cs, ind, p, start, end, times=None):
     lev = p["lev"]
     trades, pos = [], None
     side_ok = {"both": (1, -1), "long": (1,), "short": (-1,)}[p["side"]]
@@ -150,6 +150,8 @@ def simulate(cs, ind, p, start, end):
                 move = (exit_px / e - 1) * d
                 pnl = lev * move - 2 * FEE * lev - BORROW_H * lev * max(held, 1)
                 trades.append(max(pnl, -0.9))                        # liquidation caps the loss
+                if times is not None:
+                    times.append(cs[i][0])
                 pos = None
             continue
         d = signal(cs, ind, i, p)
@@ -264,3 +266,103 @@ def run(send=None, chat=None, cs=None):
         logging.warning(RESULT["text"])
     finally:
         RESULT["running"] = False
+
+
+# ------------------------------------------------------------------ weekly challenge: US$ 150 -> US$ 400 in a week
+def week_challenge(cs, ind, p, frac, start_usd=150.0, target_usd=400.0, start=0, end=None):
+    """Every week starts again with start_usd; each trade uses frac of the balance as collateral (compounding).
+    The week is a WIN when the balance reaches target_usd (the robot stops: profit locked), a BUST when it
+    falls under 10% of the start. Returns a list of per-week dicts."""
+    end = end or len(cs)
+    times = []
+    trades = simulate(cs, ind, p, start, end, times)
+    if not cs:
+        return []
+    weeks, t0 = [], cs[max(start, 220)][0]
+    last = cs[end - 1][0]
+    k = 0
+    while t0 + 7 * 86400 <= last:
+        bal, done = start_usd, ""
+        while k < len(times) and times[k] < t0:
+            k += 1
+        j = k
+        while j < len(times) and times[j] < t0 + 7 * 86400:
+            if not done:
+                bal += bal * frac * trades[j]
+                if bal >= target_usd:
+                    done = "win"
+                elif bal <= start_usd * 0.1:
+                    done = "bust"
+            j += 1
+        weeks.append({"end": done or "", "bal": round(bal, 2)})
+        t0 += 7 * 86400
+    return weeks
+
+
+def challenge_search(cs, start_usd=150.0, target_usd=400.0):
+    """Best settings for the weekly target on TRAIN weeks, checked on TEST weeks (never seen)."""
+    ind = indicators(cs)
+    split = int(len(cs) * 2 / 3)
+    rows = []
+    for base in grid():
+        if base["lev"] != 5:
+            continue                                      # leverage is varied below
+        for lev in (5, 10, 20):
+            for frac in (0.5, 1.0):
+                p = dict(base, lev=lev)
+                tr = week_challenge(cs, ind, p, frac, start_usd, target_usd, 0, split)
+                if not tr:
+                    continue
+                win = sum(1 for w in tr if w["end"] == "win") / len(tr)
+                bust = sum(1 for w in tr if w["end"] == "bust") / len(tr)
+                rows.append((win - bust, p, frac, tr))
+    rows.sort(key=lambda r: -r[0])
+    out = []
+    for _, p, frac, tr in rows[:10]:
+        te = week_challenge(cs, ind, p, frac, start_usd, target_usd, split, len(cs))
+        last8 = week_challenge(cs, ind, p, frac, start_usd, target_usd, max(0, len(cs) - 61 * 24), len(cs))
+        out.append({"p": p, "frac": frac, "train": tr, "test": te, "last2m": last8})
+    return out
+
+
+def _wk(weeks):
+    if not weeks:
+        return "sem semanas"
+    win = sum(1 for w in weeks if w["end"] == "win")
+    bust = sum(1 for w in weeks if w["end"] == "bust")
+    avg = sum(w["bal"] for w in weeks) / len(weeks)
+    return (str(win) + "/" + str(len(weeks)) + " semanas chegaram a US$ 400 · " + str(bust) + " quebraram · saldo médio no fim US$ " +
+            format(avg, ".0f"))
+
+
+def challenge_report(rows):
+    lines = ["🎯 DESAFIO US$ 150 → US$ 400 EM 1 SEMANA (BTC, velas de 1 h, 1 ano; cada semana recomeça com US$ 150; "
+             "chegou em 400 = para e guarda o lucro; caiu abaixo de US$ 15 = quebrou)"]
+    if not rows:
+        return lines[0] + "\nNenhuma configuração."
+    for k, r in enumerate(rows[:6], 1):
+        lines.append(str(k) + ") " + describe(r["p"]) + " · usa " + format(r["frac"] * 100, ".0f") + "% do saldo por operação"
+                     "\n   TREINO: " + _wk(r["train"]) + "\n   TESTE: " + _wk(r["test"]) + "\n   ÚLTIMOS 2 MESES: " + _wk(r["last2m"]))
+    return "\n".join(lines)
+
+
+CHALLENGE = {"running": False, "text": ""}
+
+
+def run_challenge(send=None, chat=None, cs=None):
+    if CHALLENGE["running"]:
+        return
+    CHALLENGE["running"] = True
+    try:
+        cs = cs or hourly(365)
+        t0 = time.time()
+        rows = challenge_search(cs)
+        CHALLENGE["text"] = challenge_report(rows)
+        logging.info("btc challenge (%.0fs): %s", time.time() - t0, CHALLENGE["text"].replace("\n", " | "))
+        if send and chat:
+            send(chat, CHALLENGE["text"])
+    except Exception as exc:
+        CHALLENGE["text"] = "⛔ Desafio falhou: " + type(exc).__name__ + ": " + str(exc)[:150]
+        logging.warning(CHALLENGE["text"])
+    finally:
+        CHALLENGE["running"] = False

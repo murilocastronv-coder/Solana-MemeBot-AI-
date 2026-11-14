@@ -32,6 +32,18 @@ class SwingTests(unittest.TestCase):
         self.assertTrue(trades)
         self.assertTrue(all(t >= -0.9 for t in trades))
 
+    def test_weekly_challenge(self):
+        cs = market(3000)
+        ind = s.indicators(cs)
+        p = {"family": "breakout", "side": "both", "lev": 20, "stop": 2.0, "trail": 3.0, "hold": 24, "n": 24, "trend": False}
+        weeks = s.week_challenge(cs, ind, p, 1.0)
+        self.assertTrue(weeks)
+        for w in weeks:
+            self.assertIn(w["end"], ("win", "bust", ""))
+            if w["end"] == "":
+                self.assertTrue(15 < w["bal"] < 400)
+        self.assertIn("DESAFIO", s.challenge_report(s.challenge_search(cs)))
+
     def test_search_reports_train_and_test(self):
         rows, hold = s.search(market(2400, drift=0.0002))
         text = s.report(rows, hold)
