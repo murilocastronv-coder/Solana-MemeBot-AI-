@@ -411,6 +411,8 @@ def page(msg=""):
         out += ["<div class='card'><h2>₿ BTC 20x</h2><pre>", _e(_safe(btc_bot.status_text)), "</pre></div>"]
         try:
             import btc_swing
+            if btc_swing.MONTH["text"]:
+                out += ["<div class='card'><h2>🪙 Desafio 1 mês</h2><pre>", _e(btc_swing.MONTH["text"]), "</pre></div>"]
             if btc_swing.CHALLENGE["text"]:
                 out += ["<div class='card'><h2>🎯 Desafio 150 → 400</h2><pre>", _e(btc_swing.CHALLENGE["text"]), "</pre></div>"]
             if btc_swing.RESULT["text"]:

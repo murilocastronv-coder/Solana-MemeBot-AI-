@@ -44,6 +44,19 @@ class SwingTests(unittest.TestCase):
                 self.assertTrue(15 < w["bal"] < 400)
         self.assertIn("DESAFIO", s.challenge_report(s.challenge_search(cs)))
 
+    def test_month_challenge_goes_conservative_after_the_target(self):
+        cs = market(4000, drift=0.0004)
+        ind = s.indicators(cs)
+        p = {"family": "breakout", "side": "long", "lev": 10, "stop": 2.0, "trail": 3.0, "hold": 72, "n": 48, "trend": False}
+        ws = s.month_challenge(cs, ind, p, 1.0)
+        self.assertTrue(ws)
+        for w in ws:
+            if w["hit"]:
+                self.assertGreaterEqual(w["bal"], 400 * 0.7)   # conservative after the target: small size
+        data = {"SOL": market(3000, seed=7), "ETH": market(3000, seed=8), "BTC": market(3000, seed=9)}
+        s.run_month(data=data)
+        self.assertIn("SOL", s.MONTH["text"])
+
     def test_search_reports_train_and_test(self):
         rows, hold = s.search(market(2400, drift=0.0002))
         text = s.report(rows, hold)
