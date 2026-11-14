@@ -40,9 +40,7 @@ def csrf_ok(token):
     return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
 
 
-ACTIONS = {"copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado",
-           "rk_on": "Sniper ligado", "rk_off": "Sniper desligado",
-           "rks_on": "Sinais do Sniper ligados", "rks_off": "Sinais do Sniper desligados"}
+ACTIONS = {"copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado"}
 
 
 def _e(x):
@@ -156,23 +154,11 @@ def _button(action, label, style=""):
 
 
 def controls(s):
-    try:
-        import rocket_bot
-        rk_on = rocket_bot.enabled()
-        rks_on = rocket_bot.signals_on()
-    except Exception:
-        rk_on = rks_on = None
     copy_on = isinstance(s, dict) and s.get("copy_real")
     return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>👥 Copy trade (real)</b> — " +
             ("<span class='pill ok'>ligado</span>" if copy_on else "<span class='pill bad'>desligado</span>") +
             "<div style='margin-top:8px'>" + _button("copy_real", "💵 Ligar", "go") + _button("copy_off", "⏹️ Parar", "stop") +
-            "</div></div><div><b>🚀 Sniper</b> — " +
-            ("<span class='pill ok'>ligado</span>" if rk_on else "<span class='pill bad'>desligado</span>") +
-            "<div style='margin-top:8px'>" + _button("rk_on", "🚀 Ligar", "go") + _button("rk_off", "⏹️ Parar", "stop") +
-            "</div></div><div><b>📡 Sinais do Sniper</b> — " +
-            ("<span class='pill ok'>ligados</span>" if rks_on else "<span class='pill bad'>desligados</span>") +
-            "<div style='margin-top:8px'>" + _button("rks_on", "📡 Ligar", "go") + _button("rks_off", "🔕 Parar", "stop") +
-"</div></div></div><div class='mut' style='margin-top:10px'>O bot roda no servidor 24 h: pode fechar esta aba "
+            "</div></div></div><div class='mut' style='margin-top:10px'>O bot roda no servidor 24 h: pode fechar esta aba "
             "ou o celular que ele continua operando até você tocar em Parar. Parar não vende as posições abertas: "
             "elas continuam com stop, stop móvel e alvos até fechar.</div></div>")
 
@@ -407,13 +393,7 @@ def page(msg=""):
 
     # ---- Robôs
     out.append("<section class='tab' id='t-bots'>")
-    if rocket_bot:
-        out += ["<div class='card'><h2>🚀 Sniper</h2><pre>", _e(_safe(rocket_bot.status_text)), "</pre></div>"]
-    try:
-        import diamond_bot
-        out += ["<div class='card'><h2>💎 Diamond</h2><pre>", _e(_safe(diamond_bot.status_text)), "</pre></div>"]
-    except Exception:
-        pass
+    out += ["<div class='card'><h2>👥 Copy trade</h2><pre>", _e(_safe(ct.status_text)), "</pre></div>"]
     out.append("</section>")
 
     # ---- Avisos
