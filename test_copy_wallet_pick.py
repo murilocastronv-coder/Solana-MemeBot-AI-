@@ -95,3 +95,11 @@ class DropReferenceTest(unittest.TestCase):
             self.assertFalse(ct.ensure_reference())
             self.assertNotIn(ADDR, ct._load()["wallets"])
             self.assertFalse(ct.drop_reference_once())
+
+
+class MinimumBuyTest(unittest.TestCase):
+    def test_small_share_is_raised_to_the_minimum(self):
+        import copy_trader as ct
+        with patch.object(ct, "PROPORTIONAL_MIN_USD", 20.0):
+            self.assertEqual(ct.proportional_usd(0.01, 150, 100, limits=(0.05, 0.06)), 20.0)   # 5% = 7.5 -> 20
+            self.assertIsNone(ct.proportional_usd(0.01, 150, 15, limits=(0.05, 0.06)))       # only 13 free: skip
