@@ -239,3 +239,20 @@ class DevPeriodsTest(unittest.TestCase):
                 self.assertIn(k, txt)
             with mock.patch.object(db, "DAILY_LOSS_USD", 10), mock.patch.object(db, "metrics", return_value={"pnl_day": -12}):
                 self.assertFalse(db.sim_buy(pair(), DEV, "t", NOW))
+
+
+class DevBacktestOutlierTest(unittest.TestCase):
+    def test_free_creator_tokens_do_not_make_millions(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            hist = [{"opened": NOW - 200000 + i * 3000, "closed": NOW - 200000 + i * 3000 + 600, "result_pct": 0.3,
+                     "pnl_usd": 5, "mint": "M" + str(i) + "pump"} for i in range(40)]
+            hist.append({"opened": NOW - 1000, "closed": NOW - 500, "result_pct": 117000.0, "pnl_usd": 900,
+                         "mint": "FREEpump", "cost_usd": 0.01})
+            d["devs"] = {DEV: {"hist": hist, "hist_v2": True}}
+            db._save(d)
+            txt = db.run_backtest(rpc=None, now=NOW)
+            self.assertNotIn("1,7", txt)
+            self.assertIn("1 fora", txt)
+            self.assertFalse(db.bt_ok({"result_pct": 0.5, "cost_usd": 0.01}))
+            self.assertTrue(db.bt_ok({"result_pct": 0.5, "cost_usd": 20}))
