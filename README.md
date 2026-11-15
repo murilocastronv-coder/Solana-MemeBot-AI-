@@ -190,6 +190,152 @@ conferência (perto de 50% = sorte). Não envia ordens; o resultado fica em `btc
   continuam. `OWNER_MENU=full` volta o menu completo.
 
 
+## ₿ Robô compra no fundo (dinheiro real, BTC à vista, único robô que opera)
+Compra BTC de verdade (WBTC na Solana, via Jupiter, com o SOL da carteira do bot), **sem alavancagem**:
+1ª compra quando o BTC cai 15% do topo (maior preço desde a última venda; no começo, o maior dos últimos
+30 dias), compra de novo a cada −15% abaixo da anterior (máx. 3), vende tudo de volta para SOL com +7%
+acima do preço médio. Valor por compra no menu ($20/50/100/200, ✏️ Outro valor ou `/valor 75`). Começa
+desligado; **💰 Vender tudo agora** vende na hora (com confirmação). O robô RSI2 4h foi removido (uma
+posição que ele ainda tivesse continua com as saídas até fechar).
+- **📥 Depositar SOL** · **💰 Ver saldo** · **💸 Saque manual** · **🔑 Exportar carteira**.
+- **📦 Posições abertas** · **🔍 Auditar carteiras**.
+- Comandos: `/seguir ENDEREÇO`, `/deixar ENDEREÇO`, `/carteiras`, `/copiadas`, `/status`.
+
+## Configuração no Render
+Variáveis obrigatórias (segredos):
+- `TELEGRAM_BOT_TOKEN` e, se quiser travar o dono, `TELEGRAM_CHAT_ID`;
+- `BOT_WALLET_ENCRYPTION_PASSPHRASE` (senha que criptografa a carteira do bot no disco);
+- `SOLANA_RPC_URL`: RPC dedicado (ex.: Helius). **Sem ele a busca automática não roda.**
+
+Já vêm no `render.yaml`: disco em `/var/data`, `COPY_ORDER_USD=32`, `MAX_ORDER_USD=32`, `COPY_MAX_POSITIONS=12`, `COPY_AUTO_MAX_WALLETS=20`, `NOTIFY_REPEAT_HOURS=2`,
+`COPY_MIN_HOLD_MINUTES=5`, `COPY_AUTO_DISCOVERY_ENABLED=true`, `DAILY_LOSS_LIMIT_ENABLED=false`.
+
+Use uma **carteira dedicada** só para o bot, com pouco dinheiro (ver `DEDICATED_WALLET.md` e
+`WALLET_SETUP.md`). Nunca envie frase de recuperação no Telegram.
+
+## Testes
+```bash
+pip install -r requirements.txt
+python -m unittest discover -p "test_*.py"
+```
+
+## Limites de ordens e regra dos 5 minutos
+- **No máximo 12 posições abertas ao mesmo tempo**, de copy trade
+  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 12 abertas, nada novo abre.
+- **Toda carteira seguida**, inclusive as de `/seguir`, só tem compras copiadas se
+  segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
+  abre ordem. A compra mínima de US$ 40 vale para todas.
+- **Auditoria** (botão **🔍 Auditar carteiras** ou `/auditar`; também ao iniciar, a cada 6 h e ao
+  usar `/seguir`): lê o histórico de cada carteira seguida e mede quanto tempo ela segura cada moeda.
+  Só copia se a mediana for ≥ 5 min **e** pelo menos 60% das posições durarem ≥ 5 min
+  (`COPY_MIN_LONG_HOLD_SHARE`). Carteira que fecha rápido é **removida** (com cópia aberta, sai quando ela fechar) e a busca automática coloca outra no lugar.
+- **Conferência da carteira antes de comprar** (dinheiro real): o bot lê na blockchain as moedas que
+  a carteira dele tem de verdade (SPL Token e Token-2022, sem SOL/USDC/USDT e sem sobras de menos de
+  US$ 1 ou que não dá para vender, `HOLDINGS_DUST_USD`). Se já houver 12 moedas, ou se já tiver a
+  moeda, não compra. O 📊 Status mostra "Moedas na carteira agora: N/12".
+- **Convicção:** só copia quando a carteira coloca na moeda pelo menos o que ela costuma colocar
+  (mediana das últimas compras observadas, ou a média do histórico no começo;
+  `COPY_CONVICTION_MULT=1.0`, use `1.5` para exigir 50% acima do normal ou `0` para desligar).
+  Compras bem abaixo do normal dela, que costumam ser apostas pequenas ou testes, não são copiadas.
+
+
+## Seleção das carteiras
+- **Resultado dos últimos 9 dias:** a auditoria (ao iniciar, a cada 6 h, ao seguir uma carteira e
+  logo que a busca adiciona uma) lê até 300 transações e calcula o resultado da carteira nos
+  últimos 9 dias. Só copia com lucro, **pelo menos 40 operações** e acerto ≥ 50% nesse período, e
+  fica só com as **20 de maior lucro** (`COPY_RESULT_DAYS`, `COPY_RESULT_MIN_TRADES`,
+  `COPY_RESULT_MIN_WIN`, `COPY_TOP_WALLETS`). Quem não passa ou fica fora das 20 é removida.
+- **Lista estável:** a busca audita a carteira **antes** de seguir (1 por rodada,
+  `COPY_PREAUDIT_PER_CYCLE`), então só entram carteiras já aprovadas. Reprovadas e removidas não
+  voltam por 3 dias (`COPY_REJECT_DAYS`). Com a lista cheia, uma aprovada só é trocada por outra
+  com lucro nos 9 dias pelo menos 20% maior (`COPY_REPLACE_PNL_MARGIN`) e sem posição aberta.
+- **Período de teste:** toda carteira que entra é copiada por pelo menos 3 dias (`COPY_TEST_DAYS`)
+  antes de qualquer remoção ou troca automática (auditoria, top 10, saldo, carteira melhor). Durante
+  o teste ela continua sendo copiada mesmo que a auditoria mude e **não é pausada**; só `/deixar` tira antes,
+  e ela só é pausada se as cópias perderem muito (US$ 100 ou mais no total, `COPY_TEST_MAX_LOSS_USD`).
+  Carteira em teste pausada sem esse prejuízo volta a ser copiada sozinha. Carteiras antigas começam o teste quando o bot reinicia.
+- **Depois do teste:** a carteira fica só se as **cópias feitas pelo bot** derem lucro (soma das
+  cópias > 0) — "✅ aprovada no teste", e continua enquanto o resultado das cópias for positivo.
+  Prejuízo, resultado zero ou nenhuma cópia nos 3 dias: sai, fica 3 dias sem voltar e a busca coloca
+  uma nova (que também passa pelo teste).
+
+
+## Mensagens sem repetição
+- Avisos automáticos iguais (status, erros, "observando", pendências…) são enviados **no máximo uma
+  vez a cada 2 horas** (`NOTIFY_REPEAT_HOURS`; números diferentes no texto contam como a mesma
+  mensagem). **Compras e vendas são sempre avisadas na hora.** Respostas aos botões e comandos
+  também saem sempre.
+- **Carteiras novas automáticas:** enquanto a lista tiver vaga (limite de 20,
+  `COPY_AUTO_MAX_WALLETS`), a busca audita até 3 candidatas por rodada
+  (`COPY_PREAUDIT_FILL_PER_CYCLE`) e coloca sozinha as aprovadas. Com a lista cheia, volta a 1 por rodada.
+
+## Carteira única por conta do Telegram
+- **Cada conta do Telegram recebe a sua própria carteira Solana**, nova e única, assim que manda /start
+  (ou toca em qualquer botão de carteira). Fica criptografada no disco (`user_wallets/<chat_id>.json`,
+  chave derivada de `BOT_WALLET_ENCRYPTION_PASSPHRASE`). Nunca é reaproveitada nem compartilhada.
+- O **dono** do bot (`TELEGRAM_CHAT_ID`) continua com a carteira principal, que é a que o copy trade usa.
+  As outras contas só veem os botões da própria carteira: 👛 Minha carteira, 📥 Depositar, 💰 Saldo,
+  💸 Saque e 🔑 Exportar. Elas não ligam nem desligam o copy trade.
+- **Exportação de chave privada: DESATIVADA** para todas as contas (botão, comando e página removidos).
+  As chaves ficam criptografadas no servidor e só são usadas pelo bot para assinar as operações.
+## Copy trade para todos os usuários (taxa de 4%)
+- Toda conta do Telegram tem o **próprio copy trade**, com a **própria carteira**: 👥 Copiar (SIMULAÇÃO),
+  💵 Copiar (REAL), ⏹️ Parar cópia, 📊 Meu status, 📦 Minhas posições e ⚙️ Valor por cópia
+  (US$ 5, 10, 20, 32 ou 50; padrão `USER_ORDER_USD=10`; máx. `USER_MAX_POSITIONS=8` posições).
+- Copia as mesmas carteiras que o bot encontrou e auditou, com os mesmos filtros: quando elas compram,
+  todos os usuários ligados compram; quando vendem, eles vendem.
+- **Taxa: 4% (`USER_FEE_PERCENT`) de cada compra e de cada venda**, enviada em SOL para a carteira
+  principal do dono (a do `TELEGRAM_CHAT_ID`; ou `FEE_WALLET`). **Automática e atômica:** a
+  transferência da taxa vai dentro da MESMA transação da compra/venda (Jupiter `/swap/v1` + transferência
+  de SOL, assinada pela carteira do usuário e simulada antes de enviar): ou a operação passa com a taxa,
+  ou nada acontece. Só se a rota não couber numa transação o bot usa o caminho antigo (troca e depois a
+  taxa, refeita a cada minuto se falhar). Slippage dos usuários: `USER_SLIPPAGE_BPS=300` (3%).
+  Para ligar o REAL, o usuário precisa tocar em "✅ Aceito a taxa de 4%".
+- O 📊 Status do dono mostra quantos usuários estão copiando e o total de taxas recebidas.
+
+## 📡 Sinais da pump.fun (Solana) — só avisa, não compra
+- **Só moedas da pump.fun** (na curva de lançamento ou já na PumpSwap), lidas em 3 páginas dos pools da
+  pump.fun e da PumpSwap na GeckoTerminal + DexScreener. Idade mínima 1 h; moedas com menos de 8 h usam
+  velas de 1 min, as mais velhas de 5 min. `SIGNAL_PUMP_ONLY=false` volta a aceitar outras memecoins.
+- Botões: **📡 Ligar sinais**, **⏹️ Parar sinais**, **📊 Resultado dos sinais**.
+- Moedas da DexScreener e da GeckoTerminal (em alta, pump.fun, PumpSwap) com **liquidez US$ 10 mil–150 mil**,
+  ≥ 3 h de vida, **a maioria comprando** (≥ 80 compras na última hora e ≥ 55% compras, volume 24 h ≥ US$ 30 mil)
+  e em **tendência de alta** (subindo em 6 h e 24 h).
+- **Entrada na correção** (velas de 5 min da GeckoTerminal): EMA20 acima da EMA50, queda de 8%–40% do topo das
+  últimas 2 h, RSI(14) foi a ≤ 38 e está virando, e a última vela fechou verde acima da máxima da anterior.
+- Anti-golpe: criador sem poder de criar/congelar, 10 maiores donos, honeypot, armadilhas Token-2022, RugCheck.
+- O sinal traz **entrada**, **stop loss justo** (abaixo do fundo menos 1,5× o ATR, 10%–30%; só vale se o preço
+  **ficar** abaixo dele por ~2 min — pavio rápido não fecha; abaixo 10% a mais fecha na hora), **TP1** (1,5× o
+  risco: vender 1/2 e levar o stop para a entrada), **TP2** (3× o risco: vender 1/4 e subir o stop para o TP1) e
+  **TP3 = potencial** (vender o último 1/4).
+- **Potencial 1x (+100%) / 2x (+200%) / 3x+ (+300%)**: estimado pelo valor de mercado (menor = mais espaço),
+  volume vs. valor de mercado, Twitter e força do sinal (menos se já subiu muito no dia). O 📊 mostra quantos
+  sinais de cada potencial realmente bateram o alvo e a maior alta. Cada sinal é acompanhado: avisa TP1, TP2, stop ou fim
+  em 24 h, e o 📊 mostra o **resultado real** (acerto, média por sinal, resultado seguindo todos).
+- **Força do sinal (🟡 70% · 🟢 80% · 🔥 90%):** nota somando maioria comprando, quantidade de compradores,
+  tendência, fundo do RSI, volume na virada, tamanho da correção e Twitter. Só manda sinal com força ≥ 70%
+  (`SIGNAL_MIN_STRENGTH`). É uma nota de qualidade, não uma promessa: o 📊 mostra o acerto real de cada nível.
+- **🐦 Twitter (X):** conta as menções do endereço da moeda e do $TICKER na última hora / 24 h e se estão
+  crescendo (API oficial do X, plano pago). Ligue colocando `X_BEARER_TOKEN` nos segredos do Render; sem ele
+  os sinais funcionam sem Twitter.
+- Ajustes: variáveis `SIGNAL_*` (ex.: `SIGNAL_MIN_LIQUIDITY_USD`, `SIGNAL_MAX_LIQUIDITY_USD`, `SIGNAL_RSI_DIP`).
+- O 🎯 Sniper e o 🤝 Consenso foram removidos; posições reais que eles deixaram abertas continuam com stop
+  −40% e stop móvel a partir de +25%.
+
+## 🔬 Pesquisa BTC alavancado (`/pesquisa_btc`, só pesquisa)
+Testa ~2.200 variações de 13 estratégias clássicas e documentadas (Turtle/Donchian, cruzamento de
+médias e golden cross, MACD, Supertrend, RSI e RSI2 de Connors, Bollinger volta à média e squeeze,
+Keltner, Parabolic SAR, Ichimoku, Heikin-Ashi, ADX/DI e rompimento de volatilidade de Larry Williams)
+em 1 ano de velas reais, nos gráficos de 15 min, 1 h e 4 h, com taxas e alavancagem. Escolhe nos
+primeiros 8 meses (≥ 60/40/20 operações em 15m/1h/4h, fator de lucro ≥ 1,15, lucro nas duas metades, queda < 40%) e
+confere nos últimos 4, que a escolha não viu. Mostra também quantas das aprovadas deram lucro na
+conferência (perto de 50% = sorte). Não envia ordens; o resultado fica em `btc_research.json`.
+- **Modo BTC (padrão, `OWNER_MENU=btc`)**: o menu do dono mostra só **🔬 Testar estratégias BTC** e
+  **📊 Último resultado BTC**. Ao iniciar, todas as compras automáticas (copy, Sniper, sinais) são
+  desligadas e a busca/auditoria de carteiras não roda; as vendas automáticas das posições abertas
+  continuam. `OWNER_MENU=full` volta o menu completo.
+
+
 ## ₿ Robô BTC RSI2 4h (dinheiro real, Jupiter Perps)
 A estratégia que mais lucrou na conferência da pesquisa: **RSI2 de Connors 10/90 a favor da EMA200
 no gráfico de 4 h**, stop de 1 ATR, sem alvo, sai no sinal contrário ou em 4 dias. Valor por operação
