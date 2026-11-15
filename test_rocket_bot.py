@@ -255,3 +255,11 @@ class CustomAmountTest(unittest.TestCase):
             tb.handle({"callback_query": {"id": "1", "data": "sbx:" + MINT, "message": {"chat": {"id": 7, "type": "private"}}}})
             tb.handle({"message": {"text": "12,5", "chat": {"id": 7, "type": "private"}}})
         self.assertEqual(bought, [(MINT, 12.5)])
+
+
+class LiquidityLineTest(unittest.TestCase):
+    def test_signal_and_buy_show_liquidity(self):
+        import live_engine
+        p = pair(liquidity={"usd": 48_500}, marketCap=310_000)
+        self.assertIn("💧 Liquidez: US$ 48.5 mil", rb.signal_text(p))
+        self.assertIn("💧 Liquidez: US$ 48.5 mil · market cap US$ 310.0 mil", live_engine.liquidity_line(MINT, p))

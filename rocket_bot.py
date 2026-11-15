@@ -190,6 +190,11 @@ def manual_buy(mint, usd, send, chat):
     return "" if settled else "compra não confirmada"
 
 
+def _usd(x):
+    x = float(x or 0)
+    return format(x / 1e6, ",.2f") + " mi" if x >= 1e6 else format(x / 1e3, ",.1f") + " mil"
+
+
 def signal_text(p):
     """Signal with the same rules the Sniper uses; values between backticks are tap-to-copy in Telegram."""
     mint = p["baseToken"]["address"]
@@ -201,6 +206,8 @@ def signal_text(p):
     mcap = float(p.get("marketCap") or p.get("fdv") or 0)
     lines = ["📡 SINAL SNIPER — " + symbol + " (" + str(p.get("dexId") or "?") + ")",
              "📄 Contrato (toque para copiar):", "`" + mint + "`",
+             "💧 Liquidez: US$ " + _usd(liq) + " · market cap US$ " + _usd(mcap) +
+             (" · liquidez = " + format(liq / mcap * 100, ".0f") + "% do market cap" if mcap else ""),
              "💵 Entrada: `" + _px(price) + "`",
              "🛑 Stop loss (−" + format(STOP_LOSS * 100, ".0f") + "%): `" + _px(price * (1 - STOP_LOSS)) + "`",
              "🎯 TP1 (+" + format(TRAIL_ARM * 100, ".0f") + "%): `" + _px(price * (1 + TRAIL_ARM)) + "` → daí stop móvel " +
@@ -211,8 +218,7 @@ def signal_text(p):
         lines.append("⏱️ Se não chegar a +" + format(NO_MOVE_ARM * 100, ".0f") + "% em " + format(NO_MOVE_S / 60, ".0f") +
                      " min: sair")
     lines.append("📊 " + format(float(ch.get("m5") or 0), "+.0f") + "% em 5 min · " + str(int(m5.get("buys") or 0)) +
-                 " compras x " + str(int(m5.get("sells") or 0)) + " vendas · liquidez US$ " + format(liq / 1000, ",.0f") +
-                 " mil · market cap US$ " + format(mcap / 1000, ",.0f") + " mil")
+                 " compras x " + str(int(m5.get("sells") or 0)) + " vendas")
     lines.append("🔗 https://dexscreener.com/solana/" + mint)
     lines.append("⚠️ Sinal, não garantia: memecoin pode cair rápido (rug).")
     return "\n".join(lines)
