@@ -91,6 +91,17 @@ class BtcModeTests(unittest.TestCase):
                                           "message": {"chat": {"id": 1, "type": "private"}}}})
         self.assertIs(ra.call_args[0][0], tb.btc_research_job)
 
+    def test_restart_notice_has_no_copy_trade_text(self):
+        import telegram_bot as tb
+        out = []
+        with patch.object(tb, "OWNER_MENU", "btc"), patch.object(tb, "active_chat", return_value="1"), \
+                patch.object(tb, "send", side_effect=lambda chat, text, kb=None: out.append(text)), \
+                patch("live_trade_state.status", return_value={"positions": 1, "pending": 0}):
+            tb.startup_notice()
+        self.assertEqual(len(out), 1)
+        self.assertIn("MODO BTC", out[0])
+        self.assertNotIn("COPY", out[0])
+
     def test_stop_all_buying(self):
         import telegram_bot as tb
         with patch("copy_trader.set_mode") as cm, patch("rocket_bot.set_enabled") as re_, \

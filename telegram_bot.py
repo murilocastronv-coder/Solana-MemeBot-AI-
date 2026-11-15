@@ -549,6 +549,12 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
+ if OWNER_MENU=="btc":
+  st=trade_state.status()
+  send(chat,"🔄 Bot reiniciado — ₿ MODO BTC: só a pesquisa de estratégias (nenhuma ordem é enviada)."+
+   ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
+    if st["positions"] else ""),keyboard())
+  return
  send(chat,"🔄 Bot reiniciado (deploy).\n"+status_text(),keyboard())
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
