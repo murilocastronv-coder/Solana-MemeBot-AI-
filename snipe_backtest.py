@@ -118,7 +118,7 @@ def history_call(rpc, address, gte=None, lte=None, order="asc", limit=100):
     if bt:
         flt["blockTime"] = bt
     res = rpc("getTransactionsForAddress", [address, {"transactionDetails": "full", "sortOrder": order, "limit": limit,
-                                                      "encoding": "json", "maxSupportedTransactionVersion": 0,
+                                                      "encoding": "json", "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1")),
                                                       "filters": flt}])
     if isinstance(res, dict):
         return res.get("data") or []
