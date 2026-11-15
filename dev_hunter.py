@@ -86,7 +86,9 @@ def hunt(rpc, days, max_cand, now=None, history=None, should_stop=None, on_progr
         try:
             txs = history(rpc, sbt.PUMP, gte=t, lte=t + POINT_WINDOW_S, order="asc", limit=100)
         except Exception as exc:
-            logging.info("devhunter point: %s", type(exc).__name__)
+            logging.warning("devhunter point: %s: %s", type(exc).__name__, str(exc)[:200])
+            if isinstance(exc, ValueError) and i == 0:
+                raise                                  # the API refused the request: stop and show why
             continue
         new = []
         for tx in txs:
@@ -138,7 +140,7 @@ def start(rpc, days=30, max_cand=300, min_win=None, min_trades=None, send=None, 
             logging.exception("devhunter failed")
             _set_job(status="erro", stage=type(exc).__name__ + ": " + str(exc)[:120])
             if send and chat:
-                send(chat, "⛔ DEV Hunter falhou: " + type(exc).__name__)
+                send(chat, "⛔ DEV Hunter falhou: " + type(exc).__name__ + ": " + str(exc)[:160])
         finally:
             _RUNNING.release()
 

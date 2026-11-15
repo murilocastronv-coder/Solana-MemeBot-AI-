@@ -234,7 +234,7 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
         try:
             txs = history_call(rpc, PUMP, gte=p, lte=p + 600, order="asc", limit=100)
         except Exception as exc:
-            logging.info("snipe bt point %s: %s", p, type(exc).__name__)
+            logging.warning("snipe bt point %s: %s: %s", p, type(exc).__name__, str(exc)[:200])
             continue
         mints = []
         for tx in txs:
@@ -248,7 +248,7 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
             try:
                 c["coins"][m] = download_coin(rpc, m, created, sol_usd)
             except Exception as exc:
-                logging.info("snipe bt coin %s: %s", m[:8], type(exc).__name__)
+                logging.warning("snipe bt coin %s: %s: %s", m[:8], type(exc).__name__, str(exc)[:200])
         _put("snipe_bt_cache", c)
         if on_progress:
             on_progress(total - len(todo_pts) + i + 1, total, len(c["coins"]))
