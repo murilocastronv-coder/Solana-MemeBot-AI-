@@ -96,8 +96,8 @@ class DevCycleTest(unittest.TestCase):
     def test_full_cycle_copies_an_approved_dev_buy(self):
         txs = {"create": {"transaction": {"message": {"accountKeys": [DEV]}}, "meta": {}},
                "buy": {"meta": {"preTokenBalances": [], "postTokenBalances": [
-                   {"owner": DEV, "mint": "TOK", "uiTokenAmount": {"amount": "500"}}],
-                   "preBalances": [100], "postBalances": [50]}, "transaction": {"message": {"accountKeys": [DEV]}}}}
+                   {"owner": DEV, "mint": "TOK", "uiTokenAmount": {"amount": "200"}}],
+                   "preBalances": [2_000_000_000], "postBalances": [1_000_000_000]}, "transaction": {"message": {"accountKeys": [DEV]}}}}
         calls = {"n": 0}
 
         supply = {"amount": "10000"}
@@ -153,7 +153,7 @@ class DevTransferScamTest(unittest.TestCase):
     def test_hidden_transfer_sells_and_blocks(self):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
             d = db._load()
-            d["devs"] = {DEV: {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3, "rated": NOW}}
+            d["devs"] = {DEV: {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3, "rated": NOW, "last_sig": "old"}}
             d["tokens"] = {"TOK": {"dev": DEV, "seen": NOW, "symbol": "TOK", "last_sig": "old"}}
             db._save(d)
             db.sim_buy(pair(), DEV, "t", NOW)
@@ -201,3 +201,41 @@ class QuickDismissTest(unittest.TestCase):
             self.assertEqual(db.audit_devs(lambda m, p: [{"signature": "x"}] * 5, 200, NOW, analyze), 1)
             analyze.assert_not_called()
             self.assertIn("pouco histórico", db._load()["devs"][DEV]["why"])
+
+
+class DevRunupTest(unittest.TestCase):
+    def test_price_already_up_since_dev_buy_is_skipped(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            info = {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3}
+            # dev paid 1 SOL (US$ 200) for 400 tokens = US$ 0.50; now US$ 1.00 (+100%)
+            mv = {"mint": "TOK", "kind": "buy", "frac": 1.0, "held": 400, "sol": -1_000_000_000, "tokens": 400}
+            db.handle_move(mv, DEV, info, {"blockTime": NOW - 5}, {"TOK": pair()}, lambda m, p: {"value": {"amount": "100000"}},
+                           200, NOW, safety=lambda m: "")
+            self.assertNotIn("TOK", db._load()["positions"])
+
+    def test_curve_coin_needs_no_pool_liquidity(self):
+        p = dict(pair(), dexId="pumpfun", liquidity={"usd": 0}, marketCap=30000)
+        info = {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3}
+        self.assertNotIn("liquidez", db.buy_reason(p, info) or "")
+
+    def test_emergency_stop_pauses_and_sells(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            db.set_enabled(True)
+            db.sim_buy(pair(), DEV, "t", NOW)
+            self.assertEqual(db.emergency_stop(now=NOW + 1), 1)
+            self.assertFalse(db.enabled())
+            self.assertEqual(db._load()["positions"], {})
+
+
+class DevPeriodsTest(unittest.TestCase):
+    def test_period_table_and_daily_limit(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            d["devs"] = {DEV: {"hist": [{"opened": NOW - i * 3 * 86400, "closed": NOW - i * 3 * 86400 + 600, "result_pct": 0.4,
+                                         "pnl_usd": 5, "mint": "M" + str(i) + "pump"} for i in range(60)]}}
+            db._save(d)
+            txt = db.periods_text(now=NOW)
+            for k in ("7 dias", "30 dias", "90 dias", "180 dias", "NÃO CALCULADO", "US$ 500"):
+                self.assertIn(k, txt)
+            with mock.patch.object(db, "DAILY_LOSS_USD", 10), mock.patch.object(db, "metrics", return_value={"pnl_day": -12}):
+                self.assertFalse(db.sim_buy(pair(), DEV, "t", NOW))
