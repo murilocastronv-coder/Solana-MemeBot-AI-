@@ -88,5 +88,18 @@ class SendTests(unittest.TestCase):
 
 
 
+
+
+
+class PartialCloseTests(unittest.TestCase):
+    def test_partial_decrease_layout(self):
+        ix = jp.decrease_ix(OWNER.pubkey(), "long", 60_000_000_000, 5, size_raw=300_000_000, collateral_raw=100_000_000)
+        data = bytes(ix.data)[8:]
+        self.assertEqual(struct.unpack_from("<QQQ", data, 0), (100_000_000, 300_000_000, 60_000_000_000))
+        self.assertEqual((data[24], data[25]), (0, 0))                 # min out None, entirePosition None
+        full = bytes(jp.decrease_ix(OWNER.pubkey(), "long", 1, 5).data)[8:]
+        self.assertEqual((full[24], full[25], full[26]), (0, 1, 1))     # entirePosition Some(true)
+
+
 if __name__ == "__main__":
     unittest.main()

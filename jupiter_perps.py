@@ -109,11 +109,12 @@ def increase_ix(owner, side, collateral_usdc_raw, size_usd_raw, price_limit_raw,
     return Instruction(PROGRAM_ID, data, accounts)
 
 
-def decrease_ix(owner, side, price_limit_raw, counter):
+def decrease_ix(owner, side, price_limit_raw, counter, size_raw=0, collateral_raw=0):
+    """Close the entire position, or (size_raw > 0) only that part of it."""
     position = position_pda(owner, side)
     request = request_pda(position, counter, False)
-    data = (_disc("createDecreasePositionMarketRequest") + _u64(0) + _u64(0) + _u64(price_limit_raw) +
-            _opt_u64(None) + _opt_bool(True) + _u64(counter))
+    data = (_disc("createDecreasePositionMarketRequest") + _u64(collateral_raw) + _u64(size_raw) + _u64(price_limit_raw) +
+            _opt_u64(None) + _opt_bool(None if size_raw else True) + _u64(counter))
     accounts = [_meta(owner, True, True), _meta(ata(owner, USDC_MINT), True), _meta(PERPETUALS), _meta(POOL),
                 _meta(position), _meta(request, True), _meta(ata(request, USDC_MINT), True),
                 _meta(BTC_CUSTODY), _meta(collateral_custody(side)), _meta(USDC_MINT)] + _tail()
@@ -167,14 +168,14 @@ def _send(instructions):
     return rpc("sendTransaction", [encoded, {"encoding": "base64", "skipPreflight": True, "maxRetries": 3}])
 
 
-def _wait(owner, side, opened, min_size=0.0):
+def _wait(owner, side, opened, min_size=0.0, max_size=None):
     deadline = time.monotonic() + CONFIRM_TIMEOUT
     while time.monotonic() < deadline:
         pos = read_position(owner, side)
         size = (pos or {}).get("size_usd", 0)
         if opened and size > min_size + 0.01:
             return pos
-        if not opened and size == 0:
+        if not opened and (size == 0 if max_size is None else size < max_size):
             return pos or {"size_usd": 0}
         time.sleep(3)
     raise PerpsError("A Jupiter não executou o pedido em " + str(CONFIRM_TIMEOUT) + " s (o pedido expira e o "
@@ -212,6 +213,22 @@ def close_position(side, btc_price):
     limit = btc_price * (1 - SLIPPAGE if side == "long" else 1 + SLIPPAGE)
     sig = _send([decrease_ix(owner, side, int(limit * 1e6), counter)])
     pos = _wait(owner, side, opened=False)
+    pos["signature"] = sig
+    return pos
+
+
+def reduce_position(side, size_usd, collateral_usd, btc_price):
+    """Close only part of the position (one of two entries merged on-chain on the same side)."""
+    owner = Pubkey.from_string(get_address())
+    current = read_position(owner, side)
+    if not current or current["size_usd"] == 0:
+        return {"size_usd": 0, "already_closed": True}
+    if size_usd >= current["size_usd"] * 0.98:
+        return close_position(side, btc_price)
+    counter = random.getrandbits(63)
+    limit = btc_price * (1 - SLIPPAGE if side == "long" else 1 + SLIPPAGE)
+    sig = _send([decrease_ix(owner, side, int(limit * 1e6), counter, int(size_usd * 1e6), int(collateral_usd * 1e6))])
+    pos = _wait(owner, side, opened=False, max_size=current["size_usd"] - size_usd * 0.5)
     pos["signature"] = sig
     return pos
 

@@ -1,15 +1,15 @@
 """BTC robot with the strategy that earned the most in the out-of-sample months of the research:
 RSI2 (Larry Connors) 10/90 in the direction of the EMA200, on 4-hour candles.
 
-Real money on Jupiter Perpetuals, owner's choice (Nov 15): US$ 100 of collateral per trade, leverage
-chosen by the owner between 2x and 5x (never more), one position at a time. Starts OFF.
+Real money on Jupiter Perpetuals, owner's choice (Nov 15): an amount per trade chosen by the owner (US$ 10–1000, default 100), leverage
+chosen by the owner between 2x and 5x (never more), at most 2 positions at once. Starts OFF.
 
 Rules (same as the research backtest):
 - after each 4-hour candle closes: RSI(2) < 10 and close above the EMA200 -> LONG;
   RSI(2) > 90 and close below the EMA200 -> SHORT (entered right after the close, like the next open);
 - stop: 1 ATR(14) from the entry (at most 70% of the way to liquidation); checked every minute;
 - no target; exit on the opposite signal or after 24 candles (4 days);
-- safety: pauses itself when the closed trades lose US$ 50 in total (half the capital).
+- safety: pauses itself when the trades closed since switching on lose half the amount per trade.
 Picked as the best result AFTER seeing the out-of-sample months, so the future tends to be worse.
 """
 import json
@@ -32,9 +32,11 @@ LEVERAGES = (2, 3, 4, 5)
 MAX_LEVERAGE = 5
 DEFAULT_LEVERAGE = 3
 FEE_RATE = 0.0006
-MAX_TOTAL_LOSS = float(os.getenv("BTC_MAX_TOTAL_LOSS_USD", "50"))
+MIN_CAPITAL, MAX_CAPITAL = 10.0, 1000.0
+MAX_LOSS_SHARE = 0.5           # pauses when the trades since switching on lose 50% of the amount
 ENTRY_WINDOW_S = 60 * 60          # enter only within 1 h of the candle close (not late after a restart)
 CHECK_EVERY_S = 60
+MAX_OPEN = 2                      # owner, Nov 15: at most 2 positions at once
 DESC = "RSI2 Connors 10/90 a favor da EMA200 · gráfico 4h · stop 1 ATR · sem alvo · máx. 4 dias"
 
 _LOCK = threading.RLock()
@@ -49,7 +51,7 @@ def _path():
 
 
 def _load():
-    d = {"enabled": False, "leverage": DEFAULT_LEVERAGE, "open": None, "history": [], "last_signal_t": 0,
+    d = {"enabled": False, "leverage": DEFAULT_LEVERAGE, "positions": [], "history": [], "last_signal_t": 0,
          "paused_why": ""}
     p = _path()
     if p.exists():
@@ -57,6 +59,9 @@ def _load():
             d.update(json.loads(p.read_text(encoding="utf-8")))
         except (OSError, ValueError):
             pass
+    if d.get("open"):                       # old format: one position
+        d["positions"] = (d.get("positions") or []) + [dict(d["open"], id=d["open"].get("id") or "old")]
+    d.pop("open", None)
     return d
 
 
@@ -75,6 +80,7 @@ def set_enabled(on):
         d["enabled"] = bool(on)
         if on:
             d["paused_why"] = ""
+            d["on_since"] = time.time()
         _save(d)
 
 
@@ -87,6 +93,31 @@ def set_leverage(lev):
         d["leverage"] = lev
         _save(d)
     return lev
+
+
+def set_capital(usd):
+    usd = round(float(str(usd).replace(",", ".").lstrip("$")), 2)
+    if not MIN_CAPITAL <= usd <= MAX_CAPITAL:
+        raise ValueError("valor permitido: US$ " + format(MIN_CAPITAL, ".0f") + " a US$ " + format(MAX_CAPITAL, ".0f"))
+    with _LOCK:
+        d = _load()
+        d["capital"] = usd
+        _save(d)
+    return usd
+
+
+def capital(d=None):
+    d = d or _load()
+    return float(d.get("capital") or CAPITAL_USD)
+
+
+def max_loss(d=None):
+    return capital(d) * MAX_LOSS_SHARE
+
+
+def loss_since_on(d):
+    since = float(d.get("on_since") or 0)
+    return -sum(h["pnl_usd"] for h in d["history"] if float(h.get("closed") or 0) >= since)
 
 
 def leverage():
@@ -163,22 +194,27 @@ REASON = {"stop": "🛑 STOP (1 ATR)", "signal": "🔄 SINAL CONTRÁRIO", "time"
 
 
 # ------------------------------------------------------------------ real orders
-def _open_real(side, price, lev):
+def _open_real(side, price, lev, usd):
     import copy_trader as ct
     import jupiter_perps as jp
-    jp.ensure_usdc(CAPITAL_USD, ct._sol_usd())
-    pos = jp.open_position(side, CAPITAL_USD, lev, price)
-    return {"entry": float(pos.get("price") or price), "size_usd": float(pos.get("size_usd") or CAPITAL_USD * lev),
-            "collateral_usd": float(pos.get("collateral_usd") or CAPITAL_USD), "signature": pos.get("signature")}
+    from solders.pubkey import Pubkey
+    from bot_wallet_service import get_address
+    before = (jp.read_position(Pubkey.from_string(get_address()), side) or {}).get("size_usd", 0.0)
+    jp.ensure_usdc(usd, ct._sol_usd())
+    pos = jp.open_position(side, usd, lev, price, min_size=before)
+    # a second entry on the same side merges on-chain: keep this entry's own price and size
+    entry = float(pos.get("price") or price) if not before else price
+    return {"entry": entry, "size_usd": usd * lev, "collateral_usd": usd, "signature": pos.get("signature")}
 
 
-def _close_real(side, price):
+def _close_real(side, price, size_usd=None, collateral_usd=None, last=True):
     import jupiter_perps as jp
-    out = jp.close_position(side, price)
-    try:
-        jp.usdc_to_sol()
-    except Exception as exc:
-        logging.warning("btc live: USDC -> SOL after close failed: %s", type(exc).__name__)
+    out = jp.close_position(side, price) if last else jp.reduce_position(side, size_usd, collateral_usd, price)
+    if last:
+        try:
+            jp.usdc_to_sol()
+        except Exception as exc:
+            logging.warning("btc live: USDC -> SOL after close failed: %s", type(exc).__name__)
     return out
 
 
@@ -187,79 +223,100 @@ def _tx(out):
     return "\n🔗 https://solscan.io/tx/" + str(sig) if sig else ""
 
 
+def _close_one(d, pos, why, price, sig_t, now, send, chat, closer):
+    """Close one entry: the whole on-chain position if it is the last one, otherwise only its part."""
+    others = [p for p in d["positions"] if p is not pos and p["side"] == pos["side"]]
+    try:
+        if closer:
+            out = closer(pos["side"], price)
+        else:
+            out = _close_real(pos["side"], price, pos["size_usd"], pos["collateral_usd"], last=not others)
+    except Exception as exc:
+        if send and chat:
+            send(chat, "⛔ BTC: não consegui fechar (" + str(exc)[:150] + "). Tento de novo em 1 min.")
+        return False
+    pnl = pnl_usd(pos, price)
+    was_on = d["enabled"]
+    with _LOCK:
+        dd = _load()
+        dd["positions"] = [p for p in dd["positions"] if p.get("id") != pos.get("id")]
+        dd["last_signal_t"] = max(dd.get("last_signal_t") or 0, sig_t)
+        dd["history"] = (dd["history"] + [{"at": pos["at"], "closed": now, "side": pos["side"], "entry": pos["entry"],
+                                           "exit": price, "lev": pos["lev"], "pnl_usd": round(pnl, 2),
+                                           "reason": why}])[-300:]
+        lost = loss_since_on(dd)
+        if dd["enabled"] and lost >= max_loss(dd):
+            dd.update(enabled=False, paused_why="perdeu US$ " + format(lost, ".2f") + " desde que foi ligado")
+        _save(dd)
+    d["positions"] = [p for p in d["positions"] if p.get("id") != pos.get("id")]
+    if send and chat:
+        send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — FECHOU BTC " + pos["side"].upper() + " " +
+             str(pos["lev"]) + "x\n" + REASON[why] + "\n💵 Entrada US$ " + format(pos["entry"], ",.0f") +
+             " → saída US$ " + format(price, ",.0f") + "\n📊 Resultado: " + format(pnl, "+.2f") + " USD (" +
+             format(pnl / pos["collateral_usd"] * 100, "+.1f") + "% da garantia)" + _tx(out))
+        if was_on and not _load()["enabled"]:
+            send(chat, "⏸️ ROBÔ BTC PAUSADO SOZINHO: perdeu metade do valor por operação (US$ " +
+                 format(max_loss(), "g") + ") desde que foi ligado. Ligue de novo no botão se quiser continuar.")
+    return True
+
+
 def cycle(send=None, chat=None, cs=None, now=None, opener=None, closer=None):
-    """One check: manage the open position (stop every minute) or enter after a 4 h candle closes."""
+    """One check: manage the open entries (stop every minute) or enter after a 4 h candle closes.
+    Up to MAX_OPEN entries at once (a new same-side signal while one is open adds a second one)."""
     now = now or time.time()
     d = _load()
-    if not d["enabled"] and not d["open"]:
+    if not d["enabled"] and not d["positions"]:
         return ""
     cs = cs if cs is not None else klines_4h()
     price = cs[-1]["c"]
     closed = [c for c in cs if c["t"] + TF <= now]
     LAST.update(at=now, price=price)
     sig, atr_v, sig_t = last_signal(closed)
-    pos = d["open"]
-    if pos:
+    result = ""
+    for pos in list(d["positions"]):
         why = exit_reason(pos, price, sig, sig_t, now)
-        if not why:
-            LAST["why"] = "posição aberta " + format(pnl_usd(pos, price), "+.2f") + " USD"
-            return ""
-        try:
-            out = (closer or _close_real)(pos["side"], price)
-        except Exception as exc:
-            if send and chat:
-                send(chat, "⛔ BTC: não consegui fechar (" + str(exc)[:150] + "). Tento de novo em 1 min.")
-            return "close_failed"
-        pnl = pnl_usd(pos, price)
-        with _LOCK:
-            dd = _load()
-            dd["open"] = None
-            dd["last_signal_t"] = max(dd.get("last_signal_t") or 0, sig_t)
-            dd["history"] = (dd["history"] + [{"at": pos["at"], "closed": now, "side": pos["side"], "entry": pos["entry"],
-                                               "exit": price, "lev": pos["lev"], "pnl_usd": round(pnl, 2),
-                                               "reason": why}])[-300:]
-            total = sum(h["pnl_usd"] for h in dd["history"])
-            if total <= -MAX_TOTAL_LOSS:
-                dd.update(enabled=False, paused_why="perda total de US$ " + format(-total, ".2f"))
-            _save(dd)
-        if send and chat:
-            send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — FECHOU BTC " + pos["side"].upper() + " " +
-                 str(pos["lev"]) + "x\n" + REASON[why] + "\n💵 Entrada US$ " + format(pos["entry"], ",.0f") +
-                 " → saída US$ " + format(price, ",.0f") + "\n📊 Resultado: " + format(pnl, "+.2f") + " USD (" +
-                 format(pnl / pos["collateral_usd"] * 100, "+.1f") + "% da garantia)" + _tx(out))
-            if not _load()["enabled"] and d["enabled"]:
-                send(chat, "⏸️ ROBÔ BTC PAUSADO SOZINHO: perda total chegou a US$ " + format(MAX_TOTAL_LOSS, ".0f") +
-                     ". Ligue de novo no botão se quiser continuar.")
-        return "closed"
-    if not d["enabled"]:
-        return ""
+        if why:
+            result = "closed" if _close_one(d, pos, why, price, sig_t, now, send, chat, closer) else "close_failed"
+    if result == "close_failed":
+        return result
+    d = _load()
+    if d["positions"]:
+        LAST["why"] = (str(len(d["positions"])) + " aberta(s) " +
+                       format(sum(pnl_usd(p, price) for p in d["positions"]), "+.2f") + " USD")
+    if not d["enabled"] or len(d["positions"]) >= MAX_OPEN:
+        return result
     if not sig:
-        LAST["why"] = "esperando sinal (RSI2 < 10 acima da EMA200 ou > 90 abaixo)"
-        return ""
-    if sig_t <= (d.get("last_signal_t") or 0) or now - (sig_t + TF) > ENTRY_WINDOW_S:
-        LAST["why"] = "esperando o próximo sinal"
-        return ""
+        if not d["positions"]:
+            LAST["why"] = "esperando sinal (RSI2 < 10 acima da EMA200 ou > 90 abaixo)"
+        return result
+    if (sig_t <= (d.get("last_signal_t") or 0) or now - (sig_t + TF) > ENTRY_WINDOW_S or
+            any(p["side"] != sig for p in d["positions"])):
+        return result
     lev = min(int(d.get("leverage") or DEFAULT_LEVERAGE), MAX_LEVERAGE)
+    usd = capital(d)
     with _LOCK:
         dd = _load()
         dd["last_signal_t"] = sig_t                # one attempt per signal
         _save(dd)
     try:
-        real = (opener or _open_real)(sig, price, lev)
+        real = (opener or _open_real)(sig, price, lev, usd)
     except Exception as exc:
         if send and chat:
             send(chat, "⛔ BTC " + sig.upper() + " " + str(lev) + "x não abriu: " + str(exc)[:200])
         return "open_failed"
-    pos = dict(real, side=sig, lev=lev, at=now, signal_t=sig_t, stop=stop_price(sig, real["entry"], atr_v, lev))
+    pos = dict(real, id=str(sig_t) + "-" + str(int(now)), side=sig, lev=lev, at=now, signal_t=sig_t,
+               stop=stop_price(sig, real["entry"], atr_v, lev))
     with _LOCK:
         dd = _load()
-        dd["open"] = pos
+        dd["positions"] = dd["positions"] + [pos]
+        n = len(dd["positions"])
         _save(dd)
     if send and chat:
         liq = pos["entry"] * (1 - 0.9 / lev if sig == "long" else 1 + 0.9 / lev)
-        send(chat, ("🟢" if sig == "long" else "🔴") + " ₿ ABRIU BTC " + sig.upper() + " " + str(lev) + "x na Jupiter\n"
-             "💵 Entrada: `" + format(pos["entry"], ".2f") + "` · garantia US$ " + format(pos["collateral_usd"], ".0f") +
-             " · posição US$ " + format(pos["size_usd"], ".0f") + "\n🛑 Stop: `" + format(pos["stop"], ".2f") +
+        send(chat, ("🟢" if sig == "long" else "🔴") + " ₿ ABRIU BTC " + sig.upper() + " " + str(lev) + "x na Jupiter (" +
+             str(n) + "/" + str(MAX_OPEN) + ")\n"
+             "💵 Entrada: `" + format(pos["entry"], ".2f") + "` · garantia US$ " + format(pos["collateral_usd"], "g") +
+             " · posição US$ " + format(pos["size_usd"], "g") + "\n🛑 Stop: `" + format(pos["stop"], ".2f") +
              "` (≈ " + format(pnl_usd(pos, pos["stop"]), "+.2f") + " USD)\n🔄 Sai no sinal contrário ou em 4 dias\n"
              "💀 Liquidação ≈ " + format(liq, ",.0f") + _tx(real))
     return "opened"
@@ -271,12 +328,14 @@ def status_text():
     lines = ["₿ ROBÔ BTC (dinheiro real, Jupiter) — " + ("🟢 LIGADO" if d["enabled"] else "🔴 DESLIGADO") +
              (" (" + d["paused_why"] + ")" if not d["enabled"] and d.get("paused_why") else ""),
              "📈 " + DESC,
-             "💵 Garantia US$ " + format(CAPITAL_USD, ".0f") + " × " + str(lev) + "x = posição US$ " +
-             format(CAPITAL_USD * lev, ".0f") + " · pausa sozinho se perder US$ " + format(MAX_TOTAL_LOSS, ".0f") + " no total"]
-    if d["open"]:
-        p = d["open"]
-        lines.append("📦 Aberta: " + p["side"].upper() + " " + str(p["lev"]) + "x · entrada US$ " + format(p["entry"], ",.0f") +
-                     " · stop US$ " + format(p["stop"], ",.0f") +
+             "💵 Valor por operação US$ " + format(capital(d), "g") + " × " + str(lev) + "x = posição US$ " +
+             format(capital(d) * lev, "g") + " · pausa sozinho se perder US$ " + format(max_loss(d), "g") +
+             " desde que foi ligado",
+             "📦 Até " + str(MAX_OPEN) + " posições ao mesmo tempo (no máximo US$ " + format(capital(d) * MAX_OPEN, "g") +
+             " de garantia em jogo)"]
+    for p in d["positions"]:
+        lines.append("📦 Aberta: " + p["side"].upper() + " " + str(p["lev"]) + "x US$ " + format(p["collateral_usd"], "g") +
+                     " · entrada US$ " + format(p["entry"], ",.0f") + " · stop US$ " + format(p["stop"], ",.0f") +
                      (" · agora " + format(pnl_usd(p, LAST["price"]), "+.2f") + " USD" if LAST.get("price") else ""))
     h = d["history"]
     if h:

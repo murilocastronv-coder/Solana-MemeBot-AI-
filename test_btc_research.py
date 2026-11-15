@@ -98,7 +98,7 @@ class BtcModeTests(unittest.TestCase):
         import telegram_bot as tb
         with patch.object(tb, "OWNER_MENU", "btc"):
             data = [b["callback_data"] for row in tb.keyboard() for b in row]
-        self.assertEqual(data, ["btc_research", "btc_last", "bl_status", "bl_on", "bl_off", "bl_lev2", "bl_lev3", "bl_lev4", "bl_lev5"])
+        self.assertEqual(data, ["btc_research", "btc_last", "bl_status", "bl_on", "bl_off", "bl_lev2", "bl_lev3", "bl_lev4", "bl_lev5", "bl_usd20", "bl_usd50", "bl_usd100", "bl_usd200", "bl_usdask"])
 
     def test_btc_button_starts_research(self):
         import telegram_bot as tb
