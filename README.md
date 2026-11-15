@@ -177,9 +177,11 @@ python -m unittest discover -p "test_*.py"
   −40% e stop móvel a partir de +25%.
 
 ## 🔬 Pesquisa BTC alavancado (`/pesquisa_btc`, só pesquisa)
-Testa ~430 estratégias de 5 tipos (rompimento, cruzamento de médias, RSI, volta à média de
-Bollinger e squeeze) em 1 ano de velas reais de 15 min, com taxas e alavancagem. Escolhe nos
-primeiros 8 meses (≥ 60 operações, fator de lucro ≥ 1,15, lucro nas duas metades, queda < 40%) e
+Testa ~2.200 variações de 13 estratégias clássicas e documentadas (Turtle/Donchian, cruzamento de
+médias e golden cross, MACD, Supertrend, RSI e RSI2 de Connors, Bollinger volta à média e squeeze,
+Keltner, Parabolic SAR, Ichimoku, Heikin-Ashi, ADX/DI e rompimento de volatilidade de Larry Williams)
+em 1 ano de velas reais, nos gráficos de 15 min, 1 h e 4 h, com taxas e alavancagem. Escolhe nos
+primeiros 8 meses (≥ 60/40/20 operações em 15m/1h/4h, fator de lucro ≥ 1,15, lucro nas duas metades, queda < 40%) e
 confere nos últimos 4, que a escolha não viu. Mostra também quantas das aprovadas deram lucro na
 conferência (perto de 50% = sorte). Não envia ordens; o resultado fica em `btc_research.json`.
 - **Modo BTC (padrão, `OWNER_MENU=btc`)**: o menu do dono mostra só **🔬 Testar estratégias BTC** e
