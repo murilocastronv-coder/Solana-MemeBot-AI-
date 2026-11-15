@@ -2258,7 +2258,8 @@ def status_text():
                format(float(os.getenv("COPY_TRAIL_ARM", "0.25")) * 100, ".0f") + "% (vende " +
                format(float(os.getenv("COPY_TRAIL_DROP", "0.10")) * 100, ".0f") + "% abaixo do topo)"
                if os.getenv("COPY_TRAIL_ENABLED", "true").strip().lower() != "false" else
-               "vende quando a carteira vender · 🛡️ subiu +" + format(float(os.getenv("COPY_BE_ARM", "0.25")) * 100, ".0f") +
+               "vende quando a carteira vender · 🛑 stop −" + format(float(os.getenv("COPY_HARD_STOP", "0.50")) * 100, ".0f") +
+               "% · 🛡️ subiu +" + format(float(os.getenv("COPY_BE_ARM", "0.25")) * 100, ".0f") +
                "%: stop na entrada · 💰 em +100% tira 25%, e mais 25% a cada +50%") if EXIT_MODE == "wallet" else
               "vende quando a carteira vender, stop −" + format(STOP_LOSS * 100, ".0f") + "%, alvo +" +
               format(TAKE_PROFIT * 100, ".0f") + "%"),

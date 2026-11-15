@@ -140,7 +140,8 @@ class FollowWalletExitTests(unittest.TestCase):
         import live_exit_monitor as m
         pos = {"mode": "copy", "copy_tp": 0.3, "copy_sl": 0.1, "opened_at": time.time()}
         self.assertEqual(m.position_signal(pos, 10, 15.0)["action"], "hold")    # +50%: follows the wallet
-        self.assertEqual(m.position_signal(pos, 10, 2.0)["action"], "hold")     # -80% (never went up): still holds
+        self.assertEqual(m.position_signal(pos, 10, 6.0)["action"], "hold")     # -40%: still follows the wallet
+        self.assertEqual(m.position_signal(pos, 10, 4.9)["reason"], "stop_loss")  # -51%: stop loss -50%
         robot = dict(pos, mode="clone")
         self.assertEqual(m.position_signal(robot, 10, 13.1)["action"], "sell")  # strategy robot keeps TP/SL
 
