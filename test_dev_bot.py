@@ -15,7 +15,7 @@ def pos(mint, pnl, res, closed, opened=None, cost=10.0, hold=40):
 
 
 def pair(mint="TOK", price="1.0", liq=50_000, vol5=8_000, up5=5):
-    return {"baseToken": {"address": mint, "symbol": mint}, "priceUsd": price, "liquidity": {"usd": liq},
+    return {"baseToken": {"address": mint, "symbol": mint}, "dexId": "pumpswap", "priceUsd": price, "liquidity": {"usd": liq},
             "volume": {"m5": vol5}, "priceChange": {"m5": up5}, "pairCreatedAt": (NOW - 3600) * 1000}
 
 
@@ -139,3 +139,29 @@ class DevBacktestEmptyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
             txt = db.run_backtest(rpc=None, now=NOW)
             self.assertIn("sem histórico", txt)
+
+
+class DevTransferScamTest(unittest.TestCase):
+    def test_hidden_transfer_sells_and_blocks(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            d["devs"] = {DEV: {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3, "rated": NOW}}
+            d["tokens"] = {"TOK": {"dev": DEV, "seen": NOW, "symbol": "TOK", "last_sig": "old"}}
+            db._save(d)
+            db.sim_buy(pair(), DEV, "t", NOW)
+            moved = {"meta": {"preTokenBalances": [{"owner": DEV, "mint": "TOK", "uiTokenAmount": {"amount": "1000"}}],
+                              "postTokenBalances": [{"owner": DEV, "mint": "TOK", "uiTokenAmount": {"amount": "100"}}],
+                              "preBalances": [100], "postBalances": [99]}, "transaction": {"message": {"accountKeys": [DEV]}}}
+            rpc = lambda m, p: [{"signature": "mv"}]
+            db.cycle(rpc=rpc, pairs=[pair()], now=NOW + 60, get_tx=lambda r, s: moved, sol_usd=200,
+                     prices_fn=lambda ms, bm: {"TOK": 1.0})
+            self.assertNotIn("TOK", db._load()["positions"])
+            self.assertEqual(db._load()["devs"][DEV]["tier"], "BLOQUEADO")
+
+
+
+class PumpOnlyTest(unittest.TestCase):
+    def test_non_pump_coin_is_not_copied(self):
+        info = {"tier": "ELITE", "score": 90, "win": 0.9}
+        self.assertIn("pump.fun", db.buy_reason(dict(pair(), dexId="raydium"), info))
+        self.assertEqual(db.buy_reason(pair(), info), "")
