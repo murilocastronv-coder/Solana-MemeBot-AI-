@@ -924,14 +924,28 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
     capital = float(capital or BT_CAPITAL)
     days = float(days or BT_DAYS)
     if rpc is not None:
+        download_histories(rpc, sol_usd, analyze, now)
+    return _old_report(capital, days, now)
+
+
+def download_histories(rpc, sol_usd, analyze=None, now=None, max_s=None, should_stop=None, on_progress=None):
+    """Download the trade history of devs not downloaded yet (checkpoint: every dev is saved as soon as it is
+    done, so a restart or a cancel continues from where it stopped). Returns (done, still_in_line)."""
+    now = now or time.time()
+    max_s = BT_MAX_S if max_s is None else max_s
+    if True:
         d = _load()
         # devs never downloaded, or downloaded before the coin / platform was stored (pump.fun filter)
         todo = [k for k, v in d["devs"].items() if "hist" not in v or (v["hist"] and "mint" not in v["hist"][0])
                 or (not v["hist"] and not v.get("hist_v2"))][:BT_DEVS]
         started = time.time()
+        done = 0
         for dev in todo:
-            if time.time() - started > BT_MAX_S:
-                break                                   # the next click continues from here
+            if time.time() - started > max_s or (should_stop and should_stop()):
+                break                                   # the next run continues from here
+            if on_progress:
+                on_progress(done, len(todo))
+            done += 1
             stats = None
             try:
                 sigs = rpc("getSignaturesForAddress", [dev, {"limit": QUICK_SIGS}]) or []
@@ -955,8 +969,17 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
                 dd = _load()
                 if stats.get("hist"):
                     stats["hist"] = _merge_hist((dd["devs"].get(dev) or {}).get("hist"), stats["hist"])
-                dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now, hist_v2=True)
+                cur = dd["devs"].setdefault(dev, {"tokens_seen": []})
+                if cur.get("tier") in TIER_OK and stats.get("tier") in TIER_OK and "launches" in cur:
+                    stats = dict(stats, tier=cur["tier"])      # keep the same-wallet check the audit already did
+                elif stats.get("tier") in TIER_OK and "launches" not in cur:
+                    stats = dict(stats, tier="NA FILA", why="falta conferir a carteira (mesma carteira)")
+                cur.update(stats, rated=0 if stats.get("tier") == "NA FILA" else now, hist_v2=True)
                 _save(dd)
+        return done, max(0, len(todo) - done)
+
+
+def _old_report(capital, days, now):
     d = _load()
     since = now - days * 86400
     hist = {k: [h for h in v["hist"] if (h.get("opened") or 0) >= since and (not PUMP_ONLY or pump_trade(h)) and bt_ok(h)]

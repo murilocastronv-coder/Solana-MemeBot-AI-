@@ -54,8 +54,8 @@ class MenuTests(unittest.TestCase):
     @patch("telegram_bot.OWNER_MENU", "full")     # full menu (OWNER_MENU=full)
     def test_menu_has_only_copy_trade_and_bot_wallet(self):
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
-        self.assertEqual(data, {"copy_real", "copy_off", "copy_status", "cw_add", "cw_list", "cw_eval", "dv_status", "dv_on", "dv_off", "dv_bt", "dv_close", "dv_stop", "dv_apply", "dv_orig", "dv_real", "dv_sim", "unstick", "wallet_deposit", "wallet_balance",
-                                "wallet_withdraw"})
+        self.assertEqual(data, {"dv_status", "dv_on", "dv_off", "dv_stop", "dv_apply", "dv_orig", "dv_bt150", "dv_bt180",
+                                "dv_bt365", "dv_btx", "dv_close", "dv_real", "dv_sim"})   # owner (Nov 15): DEV only
 
     def test_removed_buttons_answer_removed(self):
         tb.CTX.interactive = True

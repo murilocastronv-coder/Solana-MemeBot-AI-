@@ -150,19 +150,16 @@ def btc_keyboard():
 def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
- return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
-  [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
-  [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
-  [{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
-  [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
+ # owner (Nov 15): only the DEV robot buttons (wallet: type /saldo, /depositar, /sacar)
+ return [[{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
   [{"text":"✅ Usar estratégia vencedora","callback_data":"dv_apply"},{"text":"↩️ Regra original (80%)","callback_data":"dv_orig"}],
-  [{"text":"🧪 Backtest (1 ano + 7/30/90/180 dias)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
-  [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}],
-  [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
-  [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
-  [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
+  [{"text":"▶ BACKTEST 5 MESES","callback_data":"dv_bt150"}],
+  [{"text":"🧪 6 meses","callback_data":"dv_bt180"},{"text":"🧪 12 meses","callback_data":"dv_bt365"},
+   {"text":"⏹️ Cancelar","callback_data":"dv_btx"}],
+  [{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
+  [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -317,7 +314,9 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
- if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim","dv_stop","dv_apply","dv_orig") or action.startswith("dv_usd"):
+ if action in ("dv_bt150","dv_bt180","dv_bt365"):action,_btdays="dv_bt",int(action[5:])
+ else:_btdays=150
+ if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim","dv_stop","dv_apply","dv_orig","dv_btx") or action.startswith("dv_usd"):
   import dev_bot
   try:
    pre=""
@@ -338,16 +337,15 @@ def handle(update):
     pre="💵 ROBÔ DEV COM DINHEIRO REAL: cada compra copiada usa US$ "+format(dev_bot.buy_usd(),"g")+" da carteira do bot.\n\n"
    elif action=="dv_sim":dev_bot.set_real(False);pre="🧪 Robô DEV de volta para a simulação.\n\n"
    elif action.startswith("dv_usd"):pre="💵 Compra por operação: US$ "+format(dev_bot.set_buy_usd(action[6:]),"g")+"\n\n"
+   elif action=="dv_btx":
+    __import__("dev_backtest").cancel();pre="⏹️ Cancelando o backtest (o histórico já baixado fica salvo).\n\n"
    elif action=="dv_bt":
-    send(chat,"🧪 Baixando o histórico de até "+str(dev_bot.BT_DEVS)+" DEVs (máx. "+format(dev_bot.BT_MAX_S/60,".0f")+
-     " min por toque; meta "+format(dev_bot.BT_TARGET,",d")+" DEVs) e testando o último ano ("+format(dev_bot.BT_DAYS,".0f")+
-     " dias) com US$ "+format(dev_bot.BT_CAPITAL,"g")+"… o resultado chega aqui.")
-    def bt():
-     try:
-      txt=dev_bot.run_backtest(rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=__import__("copy_trader")._sol_usd())
-      for part in split_message(txt):send(chat,part,keyboard())
-     except Exception as exc:send(chat,"⛔ Backtest DEV falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
-    run_async(bt);return
+    import dev_backtest
+    why=dev_backtest.start(days=_btdays,label=format(_btdays/30,".0f")+" meses",
+     rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=__import__("copy_trader")._sol_usd(),send=send,chat=chat)
+    send(chat,("🧪 Backtest de "+format(_btdays/30,".0f")+" meses começou no servidor: baixa o histórico dos DEVs (até "+
+     format(dev_backtest.JOB_MAX_S/60,".0f")+" min, continua de onde parou) e simula as estratégias. O resultado chega aqui; "
+     "o progresso aparece no painel web (aba 🧪 Backtest).") if not why else "⛔ "+why,keyboard());return
    send(chat,pre+dev_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Robô DEV: "+str(exc)[:200],keyboard())
   return
@@ -1172,6 +1170,8 @@ def loop():
   copy_only_once()         # only the copy trade (owner): BTC robot and signals off
   dev_mode_once()          # real copy trade off (owner, Nov 15)
   dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
+  try:__import__("dev_backtest").mark_interrupted()
+  except Exception:logging.exception("backtest job state")
   threading.Thread(target=dev_loop,daemon=True).start()
   threading.Thread(target=dev_audit_loop,daemon=True).start()
   threading.Thread(target=dev_follow_loop,daemon=True).start()
@@ -1213,10 +1213,31 @@ def panel():
  msg=dashboard.ACTIONS.get(request.args.get("ok",""),"")
  return Response(dashboard.page(msg),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
   "X-Content-Type-Options":"nosniff","Referrer-Policy":"same-origin"})
-def web_action(action):
+def web_action(action,form=None):
  """On/off switches of the web panel (same effect as the Telegram buttons)."""
  import copy_trader as ct
  chat=active_chat()
+ if action.startswith("dv_"):
+  import dev_bot,dev_backtest
+  if action in ("dv_bt150","dv_bt180","dv_bt365","dv_btc"):
+   days,start_ts,end_ts,label=(int(action[5:]) if action!="dv_btc" else None),None,None,None
+   if action=="dv_btc":
+    import calendar
+    f=form or {}
+    start_ts=calendar.timegm(time.strptime(f.get("inicio",""),"%Y-%m-%d"))
+    end_ts=calendar.timegm(time.strptime(f.get("fim",""),"%Y-%m-%d"))+86400
+    label=f.get("inicio")+" a "+f.get("fim")
+   else:label=format(days/30,".0f")+" meses"
+   why=dev_backtest.start(days=days,start_ts=start_ts,end_ts=end_ts,label=label,
+    rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=ct._sol_usd(),send=send,chat=chat)
+   if why:raise ValueError(why)
+  elif action=="dv_btx":dev_backtest.cancel()
+  elif action=="dv_on":dev_bot.set_enabled(True)
+  elif action=="dv_off":dev_bot.set_enabled(False)
+  elif action=="dv_stop":dev_bot.emergency_stop(send,chat)
+  else:raise ValueError("ação desconhecida")
+  __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action])
+  return
  def start_engine(what):
   try:live_engine.start()
   except Exception:
@@ -1233,6 +1254,16 @@ def web_action(action):
   if chat:send(chat,note)
   else:__import__("dashboard").record(note)
  except Exception:__import__("dashboard").record(note)
+@app.get("/painel/backtest.csv")
+def panel_backtest_csv():
+ import dashboard
+ if len(dashboard.password())<12 or not dashboard.authorized(request.authorization):
+  return Response("Senha do painel",status=401,headers={"WWW-Authenticate":'Basic realm="Painel do bot"'})
+ rid=request.args.get("id","")
+ run=next((r for r in __import__("dev_backtest").runs() if str(r.get("id"))==rid),None)
+ if not run:return Response("Backtest não encontrado",status=404)
+ return Response(run.get("csv",""),mimetype="text/csv",headers={"Content-Disposition":"attachment; filename=backtest-dev-"+rid+".csv",
+  "Cache-Control":"no-store"})
 @app.get("/painel-sw.js")
 def panel_sw():
  """Empty service worker: lets the panel show notifications on phones (no data, no caching)."""
@@ -1249,7 +1280,7 @@ def panel_action():
  if not dashboard.csrf_ok(request.form.get("csrf")):return Response("Formulário expirado: recarregue o painel",status=403)
  action=request.form.get("acao","")
  if action not in dashboard.ACTIONS:return Response("Ação inválida",status=400)
- try:web_action(action)
+ try:web_action(action,request.form)
  except Exception as exc:
   return Response("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><p style='font-family:sans-serif'>⛔ Não consegui: "+
    __import__("html").escape(str(exc)[:200])+"</p><p><a href='/painel'>Voltar ao painel</a></p>",status=500,mimetype="text/html")
