@@ -35,7 +35,7 @@ class DevBotTest(unittest.TestCase):
         s = db.rate_dev(good, NOW)
         self.assertEqual(s["tier"], "ELITE")
         one_coin = [pos("ONE", 20, 0.5, NOW - i * 3600) for i in range(30)]
-        self.assertIn("tokens", db.rate_dev(one_coin, NOW)["why"])
+        self.assertIn("concentrado", db.rate_dev(one_coin, NOW)["why"])   # prompt criteria: no coin minimum, but no one-coin luck
         rug = good + [pos("R", -9, -0.95, NOW - 5)]
         self.assertIn("rug", db.rate_dev(rug, NOW)["why"])
 
@@ -308,3 +308,16 @@ class DevApprovedNoticeTest(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         db._notify_tier(DEV, "ELITE", {"tier": "MONITORADO", "why": "troca de carteira"}, lambda c, m: sent.append(m), 1)
         self.assertIn("perdeu a aprovação", sent[-1])
+
+
+class DevPromptCriteriaTest(unittest.TestCase):
+    def test_low_score_dev_now_back_in_line(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            st = dict(db.rate_dev([pos("M" + str(i), 20, 0.5, NOW - i * 20000) for i in range(25)], NOW))
+            st.update(tier="MONITORADO", why="DEV SCORE 70 < 80", score=70)
+            d["devs"] = {DEV: st}
+            db._save(d)
+            self.assertEqual(db.retier_once(), 1)
+            self.assertEqual(db._load()["devs"][DEV]["tier"], "NA FILA")
+            self.assertEqual(db.retier_once(), 0)

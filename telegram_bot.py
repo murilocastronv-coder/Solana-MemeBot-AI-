@@ -1170,6 +1170,8 @@ def loop():
   copy_only_once()         # only the copy trade (owner): BTC robot and signals off
   dev_mode_once()          # real copy trade off (owner, Nov 15)
   dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
+  try:__import__("dev_bot").retier_once()
+  except Exception:logging.exception("dev retier")
   try:__import__("dev_backtest").mark_interrupted()
   except Exception:logging.exception("backtest job state")
   threading.Thread(target=dev_loop,daemon=True).start()
