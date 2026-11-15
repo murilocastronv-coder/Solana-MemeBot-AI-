@@ -142,6 +142,9 @@ EXIT_TEXT = {
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
     "rocket": "🚀 Sniper: 🛑 stop fixo -30% | 🚀 a partir de +15% stop móvel (10% abaixo do topo) | ⏱️ não chegou a +15% em 60 min: vende | 💰 2x vende metade, 5x mais metade",
+    "snipe": "🎯 Sniper 24 h: 🛑 stop -" + format(float(os.getenv("SNIPE_STOP", "0.20")) * 100, ".0f") + "% | 🚀 a partir de +" +
+             format(float(os.getenv("SNIPE_ARM", "0.30")) * 100, ".0f") + "% stop móvel (" + format(float(os.getenv("SNIPE_DROP", "0.12")) * 100, ".0f") +
+             "% abaixo do topo) | ⏱️ sai em " + os.getenv("SNIPE_MAX_HOLD_MIN", "30") + " min se não decolar",
     "dev": "🧑‍💻 Robô DEV: faz o mesmo que o DEV — vende só quando ele vende, a mesma parte (sem stop e sem alvo)",
     "manual": "📡 Compra pelo sinal: 🛑 stop loss −50% | 🛡️ subiu +50%: stop na entrada | 💰 em +100% tira 25%, e mais 25% a cada +50%",
     "diamond": "💎 Diamond: 🛑 stop -10% | 🚀 a partir de +12% stop móvel (6% abaixo do topo) | ⏱️ fim da rodada: vende",
@@ -168,7 +171,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) ", "dev": "🧑‍💻 DEV "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) ", "dev": "🧑‍💻 DEV ", "snipe": "🎯 SNIPER 24h "}.get(mode, "")
     liq = liquidity_line(mint, p)
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + (liq + "\n" if liq else "") + mint)

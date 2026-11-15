@@ -147,6 +147,14 @@ def position_signal(position, cost, proceeds):
     if position.get("mode") == "consensus":
         # robot removed; its open positions keep their rules: stop -40%, from +25% trailing 10% below the top
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **CONSENSUS_EXIT)
+    if position.get("mode") == "snipe":
+        # Sniper 24 h: same rule the backtest uses (snipe_bot.exit_signal)
+        import snipe_bot
+        ratio = float(proceeds) / float(cost) if cost else 0.0
+        peak = max(ratio, float(position.get("peak_ratio") or 0))
+        held = time.time() - float(position.get("opened_at") or time.time())
+        action, reason = snipe_bot.exit_signal(ratio, peak, held)
+        return {"action": action, "reason": reason or "snipe_hold", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") == "dev":
         # DEV robot: its own exits (dev sells, -8%, +15% / trailing) run in dev_bot; this is only a safety
         # stop in case its loop stops (-20%)

@@ -151,7 +151,10 @@ def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 15): only the DEV robot buttons (wallet: type /saldo, /depositar, /sacar)
- return [[{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
+ return [[{"text":"🎯 Sniper 24h: status","callback_data":"sn_status"}],
+  [{"text":"▶️ Ligar sniper","callback_data":"sn_on"},{"text":"⏸️ Pausar sniper","callback_data":"sn_off"}],
+  [{"text":"🧪 Backtest sniper 8 meses","callback_data":"sn_bt"},{"text":"⏹️ Cancelar","callback_data":"sn_btx"}],
+  [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
   [{"text":"✅ Usar estratégia vencedora","callback_data":"dv_apply"},{"text":"↩️ Regra original (80%)","callback_data":"dv_orig"}],
@@ -314,6 +317,22 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
+ if action in ("sn_status","sn_on","sn_off","sn_bt","sn_btx","/sniper"):
+  import snipe_bot,snipe_backtest
+  try:
+   pre=""
+   if action=="sn_on":live_engine.start();snipe_bot.set_enabled(True);pre="▶️ Sniper 24 h ligado (dinheiro real).\n\n"
+   elif action=="sn_off":snipe_bot.set_enabled(False);pre="⏸️ Sniper pausado: não compra; as posições abertas continuam com stop e stop móvel.\n\n"
+   elif action=="sn_btx":snipe_backtest.cancel();pre="⏹️ Cancelando o backtest do sniper (o que já baixou fica salvo).\n\n"
+   elif action=="sn_bt":
+    why=snipe_backtest.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
+    send(chat,("🧪 Backtest do sniper (8 meses) começou no servidor: lê lançamentos reais da pump.fun pela Helius, aos poucos "
+     "(limite de créditos por hora). Pode levar várias horas; o resultado chega aqui e o progresso aparece no status.") if not why else "⛔ "+why,keyboard());return
+   j=snipe_backtest.job()
+   bt=("\n\n🧪 Backtest: "+str(j.get("status"))+" · "+str(j.get("progress",0))+"% · "+str(j.get("stage",""))) if j else ""
+   send(chat,pre+snipe_bot.status_text()+bt,keyboard())
+  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
+  return
  if action in ("dv_bt150","dv_bt180","dv_bt365"):action,_btdays="dv_bt",int(action[5:])
  else:_btdays=150
  if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim","dv_stop","dv_apply","dv_orig","dv_btx") or action.startswith("dv_usd"):
@@ -1108,6 +1127,15 @@ def dev_follow_loop():
 def dev_bot_enabled():
  try:return __import__("dev_bot").enabled()
  except Exception:return False
+def snipe_loop():
+ """Sniper 24 h (owner, Nov 15): real money, own entry rule; exits by the live exit monitor (mode snipe)."""
+ import snipe_bot
+ time.sleep(60)
+ while True:
+  try:
+   if os.getenv("SOLANA_RPC_URL") and snipe_bot.enabled():snipe_bot.cycle(send,active_chat())
+  except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
+  time.sleep(snipe_bot.CYCLE_S)
 def dev_real_once():
  """Owner (Nov 15, later): the DEV robot trades real money. Once."""
  try:
@@ -1170,6 +1198,8 @@ def loop():
   copy_only_once()         # only the copy trade (owner): BTC robot and signals off
   dev_mode_once()          # real copy trade off (owner, Nov 15)
   dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
+  try:__import__("snipe_backtest").mark_interrupted()
+  except Exception:logging.exception("snipe backtest state")
   try:__import__("dev_bot").retier_once()
   except Exception:logging.exception("dev retier")
   try:__import__("dev_backtest").mark_interrupted()
@@ -1177,6 +1207,7 @@ def loop():
   threading.Thread(target=dev_loop,daemon=True).start()
   threading.Thread(target=dev_audit_loop,daemon=True).start()
   threading.Thread(target=dev_follow_loop,daemon=True).start()
+  threading.Thread(target=snipe_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=rocket_loop,daemon=True).start()
