@@ -152,7 +152,8 @@ def position_signal(position, cost, proceeds):
         # stop in case its loop stops (-20%)
         ratio = float(proceeds) / float(cost) if cost else 0.0
         peak = max(ratio, float(position.get("peak_ratio") or 0))
-        if ratio <= 0.80:
+        safety = float(os.getenv("DEV_SAFETY_STOP", "0"))      # owner: mirror the dev, no stop (0 = off)
+        if safety > 0 and ratio <= 1 - safety:
             return {"action": "sell", "reason": "stop_loss", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
         return {"action": "hold", "reason": "dev_bot", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") == "manual" or (position.get("mode") == "copy" and position.get("copy_orphan")):

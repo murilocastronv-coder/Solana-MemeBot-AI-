@@ -47,6 +47,9 @@ class DevBotTest(unittest.TestCase):
         kind, frac, _ = db.dev_move(tx, "T", DEV)
         self.assertEqual((kind, frac), ("sell", 0.5))
 
+    @mock.patch.object(db, "STOP_LOSS", 0.08)
+    @mock.patch.object(db, "TP1", 0.15)
+    @mock.patch.object(db, "MIRROR_DEV", False)
     def test_sim_buy_exits_and_metrics(self):
         info = {"tier": "ELITE", "score": 90, "win": 0.9}
         self.assertEqual(db.buy_reason(pair(), info), "")
@@ -167,3 +170,18 @@ class PumpOnlyTest(unittest.TestCase):
         info = {"tier": "ELITE", "score": 90, "win": 0.9}
         self.assertIn("pump.fun", db.buy_reason(dict(pair(), dexId="raydium"), info))
         self.assertEqual(db.buy_reason(pair(), info), "")
+
+
+
+class MirrorDevTest(unittest.TestCase):
+    def test_only_the_dev_sells_and_the_same_share(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            db.sim_buy(pair(), DEV, "t", NOW)
+            db.exits({"TOK": 0.5}, NOW + 60)                     # -50%: no stop, keeps holding (like the dev)
+            db.exits({"TOK": 3.0}, NOW + 120)                    # +200%: no take profit
+            self.assertIn("TOK", db._load()["positions"])
+            q = db._load()["positions"]["TOK"]["qty"]
+            db.exits({"TOK": 3.0}, NOW + 180, dev_sells={"TOK": 0.3})   # dev sold 30% -> sells 30%
+            self.assertAlmostEqual(db._load()["positions"]["TOK"]["qty"], q * 0.7)
+            db.exits({"TOK": 3.0}, NOW + 240, dev_sells={"TOK": 1.0})   # dev sold everything -> everything
+            self.assertNotIn("TOK", db._load()["positions"])

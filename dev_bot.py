@@ -27,11 +27,14 @@ MIN_LIQ = E("DEV_MIN_LIQUIDITY_USD", 20_000)
 MIN_VOL_5M = E("DEV_MIN_VOLUME_5M", 5_000)
 MAX_OPEN = int(E("DEV_MAX_OPEN", 3))
 MAX_RUNUP_5M = E("DEV_MAX_RUNUP_5M", 30)          # % in 5 min: too late to enter
-STOP_LOSS = E("DEV_STOP_LOSS", 0.08)
-TP1 = E("DEV_TP1", 0.15)
+# owner (Nov 15, later): mirror the dev - no stop loss, no take profit, no time limit; it sells only when
+# the dev sells (the same share). 0 = off. The anti-scam exit (dev hides its coins) stays.
+MIRROR_DEV = os.getenv("DEV_MIRROR", "true").strip().lower() != "false"
+STOP_LOSS = E("DEV_STOP_LOSS", 0)
+TP1 = E("DEV_TP1", 0)
 TP1_PART = E("DEV_TP1_PART", 0.50)
 TRAIL = E("DEV_TRAIL", 0.08)
-MAX_HOLD_S = E("DEV_MAX_HOLD_HOURS", 24) * 3600
+MAX_HOLD_S = E("DEV_MAX_HOLD_HOURS", 0) * 3600
 COST = E("DEV_COST_PER_SIDE", 0.02)               # swap fee + slippage per side (estimated)
 NET_FEE_USD = E("DEV_NETWORK_FEE_USD", 0.01)
 CYCLE_S = E("DEV_CYCLE_SECONDS", 60)
@@ -369,18 +372,22 @@ def exits(prices, now=None, send=None, chat=None, dev_sells=None):
             pos["peak"] = max(pos["peak"], r)
             why, frac = None, 0.0
             sold = dev_sells.get(mint)
-            if sold is not None and sold >= 0.75:
+            if sold is not None and MIRROR_DEV:
+                # owner (Nov 15): do exactly what the dev does - the same share it sold
+                why, frac = ("DEV vendeu tudo: vendeu tudo" if sold >= 0.95 else
+                             "DEV vendeu " + format(sold * 100, ".0f") + "%: vendeu a mesma parte"), (1.0 if sold >= 0.95 else sold)
+            elif sold is not None and sold >= 0.75:
                 why, frac = "DEV vendeu " + format(sold * 100, ".0f") + "%: encerrou", 1.0
             elif sold is not None and sold >= 0.25:
                 why, frac = "DEV vendeu " + format(sold * 100, ".0f") + "%: vendeu a mesma parte", (0.5 if sold >= 0.5 else 0.25)
-            elif r <= 1 - STOP_LOSS:
+            elif STOP_LOSS > 0 and r <= 1 - STOP_LOSS:
                 why, frac = "stop loss −" + format(STOP_LOSS * 100, ".0f") + "%", 1.0
-            elif not pos["tp1"] and r >= 1 + TP1:
+            elif TP1 > 0 and not pos["tp1"] and r >= 1 + TP1:
                 why, frac = "take profit +" + format(TP1 * 100, ".0f") + "% (vendeu " + format(TP1_PART * 100, ".0f") + "%)", TP1_PART
                 pos["tp1"] = True
             elif pos["tp1"] and r <= pos["peak"] * (1 - TRAIL):
                 why, frac = "stop móvel " + format(TRAIL * 100, ".0f") + "% abaixo do topo", 1.0
-            elif now - pos["at"] > MAX_HOLD_S:
+            elif MAX_HOLD_S > 0 and now - pos["at"] > MAX_HOLD_S:
                 why, frac = "tempo máximo", 1.0
             if not why:
                 continue
@@ -740,8 +747,8 @@ def status_text():
              str(sum(1 for v in devs.values() if v.get("rated"))) + " · aprovados: " + str(len(ok)),
              "⚙️ US$ " + format(buy_usd(), "g") + " por compra · score ≥ " + format(MIN_SCORE, ".0f") + " · liquidez ≥ US$ " +
              format(MIN_LIQ / 1000, ".0f") + " mil · volume 5 min ≥ US$ " + format(MIN_VOL_5M / 1000, ".0f") +
-             " mil · stop −" + format(STOP_LOSS * 100, ".0f") + "% · TP +" + format(TP1 * 100, ".0f") + "% (50%) · móvel " +
-             format(TRAIL * 100, ".0f") + "%"]
+             " mil · " + ("vende só quando o DEV vende (a mesma parte), sem stop e sem alvo" if MIRROR_DEV and STOP_LOSS <= 0
+                          else "stop −" + format(STOP_LOSS * 100, ".0f") + "% · TP +" + format(TP1 * 100, ".0f") + "%")]
     for k, v in sorted(ok, key=lambda kv: -kv[1].get("score", 0))[:5]:
         lines.append("🏅 " + v["tier"] + " `" + k + "` acerto " + format(v["win"] * 100, ".0f") + "% · " + str(v["trades"]) +
                      " ops · PF " + format(v["pf"], ".1f") + " · US$ " + format(v["pnl"], "+,.0f"))
