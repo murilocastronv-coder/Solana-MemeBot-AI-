@@ -132,3 +132,10 @@ class DevBacktestButtonTest(unittest.TestCase):
             self.assertIn("US$ 60", txt)
             self.assertIn("Histórico disponível", txt)
             self.assertTrue(db._load()["devs"][DEV]["hist"])
+
+
+class DevBacktestEmptyTest(unittest.TestCase):
+    def test_no_devs_yet_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            txt = db.run_backtest(rpc=None, now=NOW)
+            self.assertIn("sem histórico", txt)
