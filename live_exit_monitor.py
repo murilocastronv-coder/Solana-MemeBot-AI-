@@ -14,6 +14,7 @@ _quote_fail_since = {}  # mint -> monotonic time quotes started failing
 _quote_err_logged = {}  # mint -> last time the reason was logged
 LAST_VALUE = {}  # mint -> (time, executable USD value) of the last quote (web panel)
 ARMED = []  # (mint, position, signal) whose trailing stop just started: live_engine tells the owner
+BE_ARMED = []  # (mint, position, signal) copy positions whose stop just moved to the entry (+COPY_BE_ARM)
 CONSENSUS_EXIT = {"stop_loss": "0.40", "arm": "1.25", "drop": "0.10"}   # removed consensus robot's positions
 # Removed robots (signals, Dip Bot, Sniper): positions still open keep a safe exit until they are sold
 REMOVED_BOT_EXIT = {"dip": {"stop_loss": "0.40", "arm": "1.12", "drop": "0.06"},
@@ -210,6 +211,10 @@ def _evaluate():
             signal = position_signal(position, cost, proceeds)
             if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
                 live_trade_state.update_peak(mint, signal["peak_ratio"])
+            if (position.get("mode") == "copy" and not position.get("copy_orphan") and COPY_BE_ARM > 0
+                    and float(signal.get("peak_ratio") or 0) >= 1 + COPY_BE_ARM and not position.get("be_armed")):
+                live_trade_state.set_position_fields(mint, be_armed=True)
+                BE_ARMED.append((mint, position, signal))
             if signal.get("reason") == "trailing" and not position.get("trail_armed"):
                 live_trade_state.set_position_fields(mint, trail_armed=True)
                 ARMED.append((mint, position, signal))
