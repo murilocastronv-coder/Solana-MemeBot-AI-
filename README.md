@@ -182,4 +182,8 @@ Bollinger e squeeze) em 1 ano de velas reais de 15 min, com taxas e alavancagem.
 primeiros 8 meses (≥ 60 operações, fator de lucro ≥ 1,15, lucro nas duas metades, queda < 40%) e
 confere nos últimos 4, que a escolha não viu. Mostra também quantas das aprovadas deram lucro na
 conferência (perto de 50% = sorte). Não envia ordens; o resultado fica em `btc_research.json`.
+- **Modo BTC (padrão, `OWNER_MENU=btc`)**: o menu do dono mostra só **🔬 Testar estratégias BTC** e
+  **📊 Último resultado BTC**. Ao iniciar, todas as compras automáticas (copy, Sniper, sinais) são
+  desligadas e a busca/auditoria de carteiras não roda; as vendas automáticas das posições abertas
+  continuam. `OWNER_MENU=full` volta o menu completo.
 

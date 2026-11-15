@@ -74,5 +74,31 @@ class TelegramTests(unittest.TestCase):
         self.assertIs(ra.call_args[0][0], tb.btc_research_job)
 
 
+class BtcModeTests(unittest.TestCase):
+    def test_owner_menu_is_only_btc(self):
+        import telegram_bot as tb
+        with patch.object(tb, "OWNER_MENU", "btc"):
+            data = [b["callback_data"] for row in tb.keyboard() for b in row]
+        self.assertEqual(data, ["btc_research", "btc_last"])
+
+    def test_btc_button_starts_research(self):
+        import telegram_bot as tb
+        out = []
+        with patch.dict(os.environ, {"TELEGRAM_CHAT_ID": "1"}), patch.object(tb, "CHAT", "1"), \
+                patch.object(tb, "send", side_effect=lambda chat, text, kb=None: out.append(text)), \
+                patch.object(tb, "request_api", return_value={}), patch.object(tb, "run_async") as ra:
+            tb.handle({"callback_query": {"id": "1", "data": "btc_research",
+                                          "message": {"chat": {"id": 1, "type": "private"}}}})
+        self.assertIs(ra.call_args[0][0], tb.btc_research_job)
+
+    def test_stop_all_buying(self):
+        import telegram_bot as tb
+        with patch("copy_trader.set_mode") as cm, patch("rocket_bot.set_enabled") as re_, \
+                patch("rocket_bot.set_signals") as rs, patch("signals.set_enabled") as se, patch("signals.set_auto") as sa:
+            tb.stop_all_buying()
+        cm.assert_called_with(False); re_.assert_called_with(False); rs.assert_called_with(False)
+        se.assert_called_with(False); sa.assert_called_with(False)
+
+
 if __name__ == "__main__":
     unittest.main()
