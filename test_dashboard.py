@@ -135,5 +135,5 @@ class SignalsOnlyTest(unittest.TestCase):
             tb.remove_robots_once()                       # runs once: the owner's "off" is kept
             self.assertFalse(rocket_bot.signals_on())
         data = [b["callback_data"] for row in tb.keyboard() for b in row]
-        self.assertIn("rks_on", data)
+        self.assertNotIn("rks_on", data)                # owner (Nov 15): menu with the copy trade only
         self.assertNotIn("rk_on", data)

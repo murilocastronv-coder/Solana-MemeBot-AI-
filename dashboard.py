@@ -164,9 +164,6 @@ def controls(s):
     return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>👥 Copy trade (real)</b> — " +
             ("<span class='pill ok'>ligado</span>" if copy_on else "<span class='pill bad'>desligado</span>") +
             "<div style='margin-top:8px'>" + _button("copy_real", "💵 Ligar", "go") + _button("copy_off", "⏹️ Parar", "stop") +
-            "</div></div><div><b>📡 Sinais do Sniper</b> (só sinais) — " +
-            ("<span class='pill ok'>ligados</span>" if rks_on else "<span class='pill bad'>desligados</span>") +
-            "<div style='margin-top:8px'>" + _button("rks_on", "📡 Ligar", "go") + _button("rks_off", "🔕 Parar", "stop") +
             "</div></div></div><div class='mut' style='margin-top:10px'>O bot roda no servidor 24 h: pode fechar esta aba "
             "ou o celular que ele continua operando até você tocar em Parar. Parar não vende as posições abertas: "
             "elas continuam com stop, stop móvel e alvos até fechar.</div></div>")

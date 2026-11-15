@@ -135,7 +135,7 @@ def remove_robots_once():
   if not d.get("signals_back_v1"):
    d.update(signals_back_v1=True,signals=True);rocket_bot._save(d)
  except Exception:logging.exception("remove robots failed")
-OWNER_MENU=os.getenv("OWNER_MENU","btc").strip().lower()   # "btc" (owner, Nov 15): only the BTC research; "full": old menu
+OWNER_MENU=os.getenv("OWNER_MENU","full").strip().lower()   # owner (Nov 15, later): only the copy trade again; "btc": BTC menu
 def btc_keyboard():
  return [[{"text":"🔬 Testar estratégias BTC","callback_data":"btc_research"}],
   [{"text":"📊 Último resultado BTC","callback_data":"btc_last"}],
@@ -153,8 +153,6 @@ def keyboard():
  return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
-  [{"text":"📡 Ligar sinais","callback_data":"rks_on"},{"text":"🔕 Parar sinais","callback_data":"rks_off"}],
-  [{"text":"🎯 Sinais: acerto","callback_data":"rk_status"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -982,6 +980,37 @@ def btc_dip_loop():
    btc_dip_live.LAST["why"]="erro: "+msg
    if msg!=BTC_DIP_ERR.get("last") or time.time()-BTC_DIP_ERR.get("at",0)>600:
     BTC_DIP_ERR.update(last=msg,at=time.time());logging.warning("btc dip cycle failed: %s",msg)
+def copy_only_once():
+ """Owner (Nov 15): only the copy trade. BTC robot and Sniper signals off, copy trade back on (real money)
+ once. A BTC position the robot still holds keeps its automatic +7% sale until it closes."""
+ try:
+  import btc_dip_live
+  btc_dip_live.set_enabled(False)
+ except Exception:logging.exception("btc robot off failed")
+ try:
+  import rocket_bot
+  rocket_bot.set_enabled(False);rocket_bot.set_signals(False)
+ except Exception:logging.exception("signals off failed")
+ try:
+  import copy_trader
+  d=copy_trader._load()
+  if not d.get("copy_only_v1"):
+   d["copy_only_v1"]=True;copy_trader._save(d)
+   copy_trader.set_mode(True,True)
+   try:live_engine.start()
+   except Exception:logging.exception("copy only: real engine not started")
+   logging.info("copy only: copy trade back on (real money)")
+ except Exception:logging.exception("copy only failed")
+def btc_leftover_loop():
+ """BTC robot removed: only manage a position it may still hold (automatic sale), then stop."""
+ import btc_dip_live
+ while True:
+  try:
+   if not btc_dip_live._load()["buys"]:return
+   chat=active_chat()
+   if chat:btc_dip_live.cycle(send,chat)
+  except Exception as exc:logging.warning("btc leftover cycle failed: %s",type(exc).__name__)
+  time.sleep(btc_dip_live.CHECK_EVERY_S)
 def stop_all_buying():
  """Switch off every automatic buy (copy trade, Sniper, signal auto-buys). Sells keep running."""
  for step in (lambda:__import__("copy_trader").set_mode(False),
@@ -1009,6 +1038,10 @@ def loop():
   stop_all_buying()        # BTC mode: no automatic buys; open positions keep their automatic sells
   threading.Thread(target=btc_live_loop,daemon=True).start()
   threading.Thread(target=btc_dip_loop,daemon=True).start()
+ else:
+  copy_only_once()         # only the copy trade (owner): BTC robot and signals off
+  threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
+  threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=rocket_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  if OWNER_MENU!="btc":     # wallet search/audit only matter for the copy trade (saves RPC credits)
