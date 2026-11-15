@@ -198,3 +198,6 @@ alavancagem escolhida no menu entre **2x e 5x** (nunca mais), **até 2 posiçõe
 fechadas desde que foi ligado perdem metade do valor por operação. A carteira do bot precisa de SOL (troca
 por USDC para a garantia e volta para SOL depois). Foi escolhida depois de ver os 4 meses de
 conferência, então o futuro tende a ser pior. Não é promessa de lucro.
+- **📥 Depositar / 💸 Retirar / 💰 Saldo** (menu BTC, só o dono): Depositar mostra o endereço da carteira
+  do bot; Retirar pede o endereço de destino, o valor em SOL (ou `tudo`, deixando 0,003 SOL para taxas)
+  e só envia depois do botão **✅ Confirmar saque** (`/cancelar` cancela).

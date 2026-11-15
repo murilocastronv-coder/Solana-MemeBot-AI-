@@ -143,7 +143,9 @@ def btc_keyboard():
   [{"text":"🟢 Ligar robô (real)","callback_data":"bl_on"},{"text":"🔴 Desligar robô","callback_data":"bl_off"}],
   [{"text":str(n)+"x","callback_data":"bl_lev"+str(n)} for n in (2,3,4,5)],
   [{"text":"$"+str(n),"callback_data":"bl_usd"+str(n)} for n in (20,50,100,200)],
-  [{"text":"✏️ Outro valor","callback_data":"bl_usdask"}]]
+  [{"text":"✏️ Outro valor","callback_data":"bl_usdask"}],
+  [{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💸 Retirar","callback_data":"wd_start"},
+   {"text":"💰 Saldo","callback_data":"wallet_balance"}]]
 def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
@@ -276,6 +278,10 @@ def handle(update):
   send(chat,"Seu chat ID privado: "+str(chat)+"\nIdentificação privada. O proprietário vinculado é mantido no disco persistente.");return
  if not authorized(chat) and action.startswith("u_"):
   user_copy_action(chat,action);return
+ if authorized(chat) and (action in ("/sacar","/retirar","wallet_withdraw") or action.startswith("wd_") or
+   (not cb and chat in WITHDRAW and time.time()-WITHDRAW[chat]["at"]<600 and
+    (not (msg or {}).get("text","").startswith("/") or (msg or {}).get("text","").strip()=="/cancelar"))):
+  owner_withdraw(chat,action,(msg or {}).get("text","").strip());return
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
@@ -434,7 +440,7 @@ def handle(update):
   except Exception:send(chat,"Ainda não há resultado. Toque em 🔬 Testar estratégias BTC.",keyboard())
   return
  if action=="bl_usdask":
-  BTC_USD_ASK[chat]=time.time()
+  BTC_USD_ASK[chat]=time.time();WITHDRAW.pop(chat,None)
   send(chat,"✏️ Quantos US$ por operação no robô BTC? Mande só o número (ex.: 30 ou 75). Entre US$ 10 e US$ 1000.");return
  if action in ("bl_status","bl_on","bl_off") or action.startswith(("bl_lev","bl_usd")):   # real-money BTC robot (owner, Nov 15)
   import btc_live
@@ -547,11 +553,54 @@ def wallet_action(chat,action):
    data=response.json()
    if "error" in data:raise ValueError("RPC error")
    balance=int(data["result"]["value"])/1_000_000_000
-   send(chat,"💰 SALDO — SUA CARTEIRA DO BOT\n"+address+"\nSaldo: "+fmt(balance)+" SOL\nRede: Solana mainnet",kb)
+   usd=""
+   if owner:
+    try:usd=" (≈ US$ "+format(balance*float(__import__("copy_trader")._sol_usd()),",.2f")+")"
+    except Exception:usd=""
+   send(chat,"💰 SALDO — SUA CARTEIRA DO BOT\n"+address+"\nSaldo: "+fmt(balance)+" SOL"+usd+"\nRede: Solana mainnet"+
+    ("\n(Garantia de posições abertas do robô BTC fica na Jupiter, fora desse saldo.)" if owner else ""),kb)
   except (requests.RequestException,ValueError,KeyError,TypeError):
    send(chat,"👛 Sua carteira: "+address+"\nNão foi possível consultar o saldo agora.",kb)
   return
  send(chat,"👛 SUA CARTEIRA DO BOT\n"+address,kb)
+WITHDRAW={}
+def owner_withdraw(chat,action,text):
+ """Owner's withdrawal of SOL from the bot wallet: address -> amount -> confirm button -> send."""
+ import wallet_withdraw as ww
+ kb=keyboard()
+ if action in ("/sacar","/retirar","wallet_withdraw","wd_start"):
+  BTC_USD_ASK.pop(chat,None)
+  WITHDRAW[chat]={"step":"addr","at":time.time()}
+  send(chat,"💸 RETIRAR SOL da carteira do bot\nMande o ENDEREÇO Solana de destino (sua carteira, ex.: Phantom).\n"
+   "Para cancelar mande /cancelar.");return
+ st=WITHDRAW.get(chat)
+ if action=="wd_no" or text in ("/cancelar","cancelar") or not st:
+  WITHDRAW.pop(chat,None);send(chat,"❌ Saque cancelado.",kb);return
+ try:
+  if action=="wd_ok" and st["step"]=="confirm":
+   WITHDRAW.pop(chat,None)
+   send(chat,"⏳ Enviando "+format(st["lamports"]/1e9,".4f")+" SOL…")
+   def run():
+    try:
+     sig=ww.send_sol(st["addr"],st["lamports"])
+     send(chat,"✅ SAQUE ENVIADO: "+format(st["lamports"]/1e9,".4f")+" SOL\n➡️ "+st["addr"]+"\n🔗 https://solscan.io/tx/"+str(sig),kb)
+    except Exception as exc:send(chat,"⛔ Saque falhou: "+str(exc)[:200],kb)
+   run_async(run);return
+  if st["step"]=="addr" and not action.startswith("wd_"):
+   addr=ww.valid_address(text)
+   if not addr:send(chat,"⛔ Endereço inválido (ou é a própria carteira do bot). Mande de novo ou /cancelar.");return
+   bal=ww.balance_lamports()
+   st.update(step="amount",addr=addr,at=time.time())
+   send(chat,"💰 Saldo da carteira do bot: "+format(bal/1e9,".4f")+" SOL\nQuanto retirar? Mande o valor em SOL (ex.: 0.5) ou *tudo*."
+    "\n(Posições abertas do robô BTC ficam na Jupiter e não entram nesse saldo.)");return
+  if st["step"]=="amount" and not action.startswith("wd_"):
+   lam=ww.amount_lamports(text,ww.balance_lamports())
+   st.update(step="confirm",lamports=lam,at=time.time())
+   send(chat,"Confirma o saque?\n💸 "+format(lam/1e9,".4f")+" SOL\n➡️ "+st["addr"]+"\nConfira o endereço: transferência na blockchain não tem volta.",
+    [[{"text":"✅ Confirmar saque","callback_data":"wd_ok"},{"text":"❌ Cancelar","callback_data":"wd_no"}]]);return
+  send(chat,"Use os botões ou /cancelar.")
+ except ww.WithdrawError as exc:send(chat,"⛔ "+str(exc)+". Mande de novo ou /cancelar.")
+ except Exception as exc:send(chat,"⛔ Saque: "+type(exc).__name__+": "+str(exc)[:150],kb)
 def start_real_or_wait(chat,what):
  """Start the live engine. If an order is still being checked on-chain, wait for it in the background
  and start then (instead of failing with 'Unreconciled transaction'). True = started now."""
