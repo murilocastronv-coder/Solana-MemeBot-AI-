@@ -473,8 +473,7 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
             import wallet_profile
             _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX)
             stats = rate_dev(closed, now)
-            stats["hist"] = [{"opened": c.get("opened"), "closed": c.get("closed"), "result_pct": round(float(c.get("result_pct") or 0), 4),
-                              "pnl_usd": round(float(c.get("pnl_usd") or 0), 2)} for c in closed][-300:]
+            stats["hist"] = _hist(closed)[-300:]
         except Exception as exc:
             stats = {"tier": "ERRO", "why": type(exc).__name__}
         with _LOCK:
@@ -645,6 +644,17 @@ def backtest(dev_histories, start=500.0, usd=5.0, delay_cost=0.03, train_share=0
     return out
 
 
+def _hist(closed):
+    return [{"opened": c.get("opened"), "closed": c.get("closed"), "result_pct": round(float(c.get("result_pct") or 0), 4),
+             "pnl_usd": round(float(c.get("pnl_usd") or 0), 2), "mint": c.get("mint"), "platform": c.get("platform")}
+            for c in closed]
+
+
+def pump_trade(h):
+    """A dev trade on a pump.fun coin (launch curve / PumpSwap / pump.fun mint)."""
+    return str(h.get("mint") or "").endswith("pump") or str(h.get("platform") or "").lower() in ("pump.fun", "pumpswap")
+
+
 def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, now=None):
     """Owner's button: download the history of up to BT_DEVS devs not analysed yet, then backtest the last
     `days` (2 months) with `capital` (US$ 60). Reports how much history was really available."""
@@ -653,24 +663,25 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
     days = float(days or BT_DAYS)
     if rpc is not None:
         d = _load()
-        todo = [k for k, v in d["devs"].items() if not v.get("hist")][:BT_DEVS]
+        # devs never downloaded, or downloaded before the coin / platform was stored (pump.fun filter)
+        todo = [k for k, v in d["devs"].items() if "hist" not in v or (v["hist"] and "mint" not in v["hist"][0])
+                or (not v["hist"] and not v.get("hist_v2"))][:BT_DEVS]
         for dev in todo:
             try:
                 import wallet_profile
                 _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=max(DEV_AUDIT_TX, 1000))
                 stats = rate_dev(closed, now)
-                stats["hist"] = [{"opened": c.get("opened"), "closed": c.get("closed"),
-                                  "result_pct": round(float(c.get("result_pct") or 0), 4),
-                                  "pnl_usd": round(float(c.get("pnl_usd") or 0), 2)} for c in closed][-1000:]
+                stats["hist"] = _hist(closed)[-1000:]
             except Exception as exc:
                 stats = {"tier": "ERRO", "why": type(exc).__name__}
             with _LOCK:
                 dd = _load()
-                dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now)
+                dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now, hist_v2=True)
                 _save(dd)
     d = _load()
     since = now - days * 86400
-    hist = {k: [h for h in v["hist"] if (h.get("opened") or 0) >= since] for k, v in d["devs"].items() if v.get("hist")}
+    hist = {k: [h for h in v["hist"] if (h.get("opened") or 0) >= since and (not PUMP_ONLY or pump_trade(h))]
+            for k, v in d["devs"].items() if v.get("hist")}
     hist = {k: v for k, v in hist.items() if v}
     first = min((h["opened"] for v in hist.values() for h in v), default=None)
     usd = max(1.0, min(buy_usd(), capital / 10))
@@ -690,7 +701,8 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
 def backtest_text(res, devs_n, capital=500.0, usd=5.0):
     if not res:
         return "🧪 Backtest DEV: ainda sem histórico de DEVs analisados. Deixe o robô rodar algumas horas."
-    lines = ["🧪 BACKTEST DEV (aproximação com as operações REAIS de " + str(devs_n) + " DEVs analisados)",
+    lines = ["🧪 BACKTEST DEV (aproximação com as operações REAIS de " + str(devs_n) + " DEVs analisados" +
+             (", só moedas da pump.fun)" if PUMP_ONLY else ")"),
              "Capital inicial US$ " + format(capital, "g") + " · US$ " + format(usd, "g") +
              " por operação · atraso + custos estimados (3% + 2×" +
              format(COST * 100, ".0f") + "%) · escolha dos DEVs só com dados anteriores a cada entrada.",
