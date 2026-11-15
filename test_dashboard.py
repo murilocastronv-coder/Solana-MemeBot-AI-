@@ -122,6 +122,7 @@ if __name__ == "__main__":
 
 
 class SignalsOnlyTest(unittest.TestCase):
+    @patch("telegram_bot.OWNER_MENU", "full")     # full menu (OWNER_MENU=full)
     def test_signals_back_but_sniper_never_buys(self):
         import rocket_bot
         import telegram_bot as tb

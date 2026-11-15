@@ -345,12 +345,16 @@ def search(candles=None, progress=None):
               "last": cs[-1]["t"], "top": [], "winner": None}
     # how much of the "edge" is luck: share of qualified variants that also make money out of sample
     oos_hits = 0
+    best_oos = None
     for e, x, r, ok, sig in qualified:
         o = backtest(data, sig, x, TEST_LEVERAGE, split, len(cs))
         oos_hits += o["final"] > START
+        if best_oos is None or o["final"] > best_oos["oos"]["final"]:
+            best_oos = {"desc": describe(e, x), "dev": r, "oos": o}
         if len(report["top"]) < 5:
             report["top"].append({"desc": describe(e, x), "dev": r, "oos": o})
     report["oos_hit_rate"] = oos_hits / len(qualified) if qualified else 0.0
+    report["best_oos"] = best_oos
     if qualified:
         e, x, r, _, sig = qualified[0]
         o = report["top"][0]["oos"]
@@ -378,6 +382,10 @@ def report_text(rep):
         L += ["", "Top 5 nos 8 meses → resultado nos 4 meses de conferência:"]
         for t in rep["top"]:
             L.append("• " + t["desc"] + "\n  escolha: " + line(t["dev"]) + "\n  conferência: " + line(t["oos"]))
+        b = rep.get("best_oos")
+        if b:
+            L += ["", "💰 Maior lucro nos 4 meses entre as aprovadas: " + b["desc"] + "\n  " + line(b["oos"]) +
+                  "\n  (só informação: escolher pelo resultado já visto engana — no futuro tende a ir pior)"]
         w = rep["winner"]
         L += ["", "🏆 Escolhida (só pelos 8 meses): " + w["desc"], "Conferência por alavancagem:"]
         for lev, r in w["by_leverage"].items():

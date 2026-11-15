@@ -51,6 +51,7 @@ class FillWalletsTests(unittest.TestCase):
 
 
 class MenuTests(unittest.TestCase):
+    @patch("telegram_bot.OWNER_MENU", "full")     # full menu (OWNER_MENU=full)
     def test_menu_has_only_copy_trade_and_bot_wallet(self):
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
         self.assertEqual(data, {"copy_real", "copy_off", "copy_status", "cw_add", "cw_list", "rks_on", "rks_off", "rk_status", "unstick", "wallet_deposit", "wallet_balance",

@@ -142,6 +142,7 @@ class MinBalanceTests(unittest.TestCase):
 
 
 class TelegramMenuTests(unittest.TestCase):
+    @patch("telegram_bot.OWNER_MENU", "full")     # full menu (OWNER_MENU=full)
     def test_menu_has_only_copy_trade_and_wallet(self):
         import telegram_bot as tb
         data = [b["callback_data"] for row in tb.keyboard() for b in row]

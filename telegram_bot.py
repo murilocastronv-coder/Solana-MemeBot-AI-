@@ -135,8 +135,13 @@ def remove_robots_once():
   if not d.get("signals_back_v1"):
    d.update(signals_back_v1=True,signals=True);rocket_bot._save(d)
  except Exception:logging.exception("remove robots failed")
+OWNER_MENU=os.getenv("OWNER_MENU","btc").strip().lower()   # "btc" (owner, Nov 15): only the BTC research; "full": old menu
+def btc_keyboard():
+ return [[{"text":"🔬 Testar estratégias BTC","callback_data":"btc_research"}],
+  [{"text":"📊 Último resultado BTC","callback_data":"btc_last"}]]
 def keyboard():
- """Owner's menu (Nov 14): only the copy trade and the wallet (Sniper and Diamond removed)."""
+ """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
+ if OWNER_MENU=="btc":return btc_keyboard()
  return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
@@ -410,10 +415,20 @@ def handle(update):
    send(chat,pre+status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
   return
- if action in ("/pesquisa_btc","/pesquisabtc"):   # research only: tests strategies, places no orders
+ if action=="btc_last":
+  try:
+   import json as _json
+   rep=_json.loads(trade_state._path().with_name("btc_research.json").read_text(encoding="utf-8"))
+   for part in split_message(rep.get("text") or "Sem relatório salvo ainda."):send(chat,part,keyboard())
+  except Exception:send(chat,"Ainda não há resultado. Toque em 🔬 Testar estratégias BTC.",keyboard())
+  return
+ if action in ("/pesquisa_btc","/pesquisabtc","btc_research"):   # research only: tests strategies, places no orders
   send(chat,"🔬 Pesquisa BTC: baixando 1 ano de velas de 15 min e testando ~430 estratégias de 5 tipos "
    "(escolhe em 8 meses, confere em 4). Leva uns 3–8 minutos. Nenhuma ordem é enviada.")
   run_async(btc_research_job,chat);return
+ if OWNER_MENU=="btc" and action in ("/start","/menu","help"):
+  send(chat,"₿ MODO BTC: aqui só a pesquisa de estratégias de BTC alavancado (nenhuma ordem é enviada).\n"
+   "Copy trade, Sniper e sinais estão desligados; as posições que já estavam abertas continuam sendo vendidas sozinhas.",keyboard());return
  legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","/btc_reset",
   "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real",
   "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
@@ -795,9 +810,10 @@ def btc_research_job(chat):
  try:
   import btc_research
   rep=btc_research.search()
-  try:btc_research.save(rep,str(trade_state._path().with_name("btc_research.json")))
+  text=btc_research.report_text(rep)
+  try:btc_research.save(dict(rep,text=text),str(trade_state._path().with_name("btc_research.json")))
   except Exception:logging.warning("btc research save failed")
-  for part in split_message(btc_research.report_text(rep)):send(chat,part)
+  for part in split_message(text):send(chat,part,keyboard())
  except Exception as exc:
   logging.exception("btc research failed")
   send(chat,"⛔ Pesquisa BTC falhou: "+type(exc).__name__+": "+str(exc)[:150])
@@ -807,6 +823,15 @@ def run_async(fn,*args):
   CTX.interactive=interactive
   fn(*args)
  threading.Thread(target=run,daemon=True).start()
+def stop_all_buying():
+ """Switch off every automatic buy (copy trade, Sniper, signal auto-buys). Sells keep running."""
+ for step in (lambda:__import__("copy_trader").set_mode(False),
+              lambda:__import__("rocket_bot").set_enabled(False),
+              lambda:__import__("rocket_bot").set_signals(False),
+              lambda:__import__("signals").set_enabled(False),
+              lambda:__import__("signals").set_auto(False)):
+  try:step()
+  except Exception:logging.exception("stop buying step failed")
 def loop():
  offset=None
  def notice():
@@ -821,10 +846,13 @@ def loop():
   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
  except Exception:logging.exception("copy buy worker failed to start")
  remove_robots_once()      # Diamond removed; the Sniper only sends signals (owner, Nov 14)
+ if OWNER_MENU=="btc":
+  stop_all_buying()        # BTC mode: no automatic buys; open positions keep their automatic sells
  threading.Thread(target=rocket_loop,daemon=True).start()
- threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
- threading.Thread(target=wallet_discovery_loop,daemon=True).start()
+ if OWNER_MENU!="btc":     # wallet search/audit only matter for the copy trade (saves RPC credits)
+  threading.Thread(target=audit_loop,daemon=True).start()
+  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:
    if TOKEN:
