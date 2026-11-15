@@ -45,6 +45,11 @@ TIERS = (("ELITE", 0.90, 30, 2.5), ("PREMIUM", 0.85, 25, 2.0), ("APROVADO", 0.80
 MIN_TOKENS = int(E("DEV_MIN_TOKENS", 10))
 MAX_TOP_COIN_SHARE = E("DEV_MAX_TOP_COIN_SHARE", 0.60)     # profit from one coin only = excluded
 RUG_LOSS = 0.80
+# owner (Nov 15): the dev can hold at most 35% of the coin's supply (more = it can crash the price)
+MAX_DEV_SHARE = E("DEV_MAX_HOLD_SHARE", 0.35)
+BT_CAPITAL = E("DEV_BT_CAPITAL", 60)
+BT_DAYS = E("DEV_BT_DAYS", 60)
+BT_DEVS = int(E("DEV_BT_DEVS", 40))
 
 _LOCK = threading.RLock()
 LAST = {"at": 0, "why": "", "tokens": 0, "devs": 0}
@@ -105,6 +110,17 @@ def set_buy_usd(usd):
         d["buy_usd"] = usd
         _save(d)
     return usd
+
+
+def real():
+    return bool(_load().get("real"))
+
+
+def set_real(on):
+    with _LOCK:
+        d = _load()
+        d["real"] = bool(on)
+        _save(d)
 
 
 def buy_usd():
@@ -202,8 +218,18 @@ def creator_of(mint, rpc, get_tx):
     return k.get("pubkey") if isinstance(k, dict) else str(k)
 
 
-def dev_move(tx, mint, dev):
-    """('buy'|'sell'|'transfer'|None, fraction of the dev's position sold, raw tokens before)."""
+def dev_share(rpc, mint, held_raw):
+    """Share of the token supply the dev holds after its buy (None if the supply can't be read)."""
+    try:
+        v = (rpc("getTokenSupply", [mint]) or {}).get("value") or {}
+        supply = int(v.get("amount") or 0)
+    except Exception:
+        return None
+    return held_raw / supply if supply > 0 else None
+
+
+def dev_move(tx, mint, dev, after=False):
+    """('buy'|'sell'|'transfer'|None, fraction of the dev's position sold, raw tokens before - or after)."""
     meta = (tx or {}).get("meta") or {}
     if meta.get("err"):
         return None, 0.0, 0
@@ -214,12 +240,13 @@ def dev_move(tx, mint, dev):
     import wallet_copy
     _, sol = wallet_copy._tx_deltas(tx)
     sol_d = int(sol.get(dev, 0))
+    ref = post if after else pre
     if post > pre:
-        return ("buy" if sol_d < 0 else "transfer"), 0.0, pre
+        return ("buy" if sol_d < 0 else "transfer"), 0.0, ref
     if post < pre:
         frac = (pre - post) / pre if pre else 1.0
-        return ("sell" if sol_d > 0 else "transfer"), frac, pre
-    return None, 0.0, pre
+        return ("sell" if sol_d > 0 else "transfer"), frac, ref
+    return None, 0.0, ref
 
 
 # ---------------------------------------------------------------- simulation
@@ -243,23 +270,41 @@ def sim_buy(p, dev, reason, now=None, send=None, chat=None):
     mint = p["baseToken"]["address"]
     price = float(p.get("priceUsd") or 0)
     usd = buy_usd()
+    is_real = real()
     with _LOCK:
         d = _load()
-        if price <= 0 or mint in d["positions"] or len(d["positions"]) >= MAX_OPEN or d["cash"] < usd + NET_FEE_USD:
+        if price <= 0 or mint in d["positions"] or len(d["positions"]) >= MAX_OPEN:
+            return False
+        if not is_real and d["cash"] < usd + NET_FEE_USD:
             return False
         if any(h.get("mint") == mint for h in d["history"]):
             return False                          # one entry per token
+    if is_real:
+        try:
+            import live_engine
+            settled = live_engine._execute_buy({"baseToken": p.get("baseToken"), "liquidity": p.get("liquidity"),
+                                                "marketCap": p.get("marketCap")}, mint,
+                                               (p.get("baseToken") or {}).get("symbol") or mint[:6], send, chat,
+                                               live_engine.get_address(), None, "dev", usd=usd)
+        except Exception as exc:
+            note("compra REAL falhou " + mint[:6] + ": " + type(exc).__name__)
+            return False
+        if not settled or settled.get("status") != "settled_buy":
+            note("compra REAL não confirmada " + mint[:6])
+            return False
+    with _LOCK:
+        d = _load()
         d["cash"] -= usd + NET_FEE_USD
         d["fees"] = float(d.get("fees") or 0) + usd * COST + NET_FEE_USD
         d["positions"][mint] = {"symbol": (p.get("baseToken") or {}).get("symbol") or mint[:6], "dev": dev,
                                 "entry": price, "last": price, "peak": 1.0, "qty": usd * (1 - COST) / price,
                                 "cost": usd + NET_FEE_USD, "at": now, "tp1": False, "reason": reason,
-                                "realized": 0.0}
+                                "realized": 0.0, "real": is_real}
         _track(d)
         _save(d)
-    note("COMPROU (simulação) " + d["positions"][mint]["symbol"] + " US$ " + format(usd, "g") + " a " +
+    note("COMPROU (" + ("REAL" if is_real else "simulação") + ") " + d["positions"][mint]["symbol"] + " US$ " + format(usd, "g") + " a " +
          format(price, ".8g") + " — " + reason)
-    if send and chat:
+    if send and chat and not is_real:
         send(chat, "🧑‍💻 DEV BOT (SIMULAÇÃO) COMPROU " + d["positions"][mint]["symbol"] + " — US$ " + format(usd, "g") +
              "\n📝 " + reason + "\n📄 `" + mint + "`")
     return True
@@ -287,7 +332,7 @@ def exits(prices, now=None, send=None, chat=None, dev_sells=None):
     """SL / TP1 (50%) / trailing / max hold / dev sells {mint: fraction}."""
     now = now or time.time()
     dev_sells = dev_sells or {}
-    out = []
+    out, real_orders = [], []
     with _LOCK:
         d = _load()
         for mint, pos in list(d["positions"].items()):
@@ -314,10 +359,21 @@ def exits(prices, now=None, send=None, chat=None, dev_sells=None):
                 why, frac = "tempo máximo", 1.0
             if not why:
                 continue
+            if pos.get("real"):
+                real_orders.append((mint, frac, why))
             h = _sell(d, mint, frac, price, why, now)
             out.append((pos["symbol"], why, h))
         _track(d, prices)
         _save(d)
+    for mint, frac, why in real_orders:
+        try:
+            import live_engine
+            if frac >= 0.999:
+                live_engine.sell_now(mint, "dev_exit", send, chat)
+            else:
+                live_engine.sell_part(mint, frac, "dev_exit", send, chat, note="robô DEV: " + why)
+        except Exception as exc:
+            note("venda REAL falhou " + mint[:6] + ": " + type(exc).__name__ + " (" + why + ")")
     for sym, why, h in out:
         note("VENDEU (simulação) " + sym + " — " + why + ("" if not h else " · P/L " + format(h["pnl"], "+.2f")))
         if send and chat:
@@ -427,12 +483,18 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
             if s.get("err"):
                 continue
             try:
-                kind, frac, _ = dev_move(get_tx(rpc, s["signature"]), mint, dev)
+                kind, frac, held = dev_move(get_tx(rpc, s["signature"]), mint, dev, after=True)
             except Exception:
                 continue
             if kind == "buy":
                 p = by_mint.get(mint)
                 why = "sem dados da DexScreener" if p is None else buy_reason(p, info)
+                if not why:
+                    share = dev_share(rpc, mint, held)
+                    if share is None:
+                        why = "não consegui medir quanto o DEV tem da moeda"
+                    elif share > MAX_DEV_SHARE:
+                        why = "DEV tem " + format(share * 100, ".0f") + "% da moeda (máx. " + format(MAX_DEV_SHARE * 100, ".0f") + "%)"
                 if not why:
                     r = (safety or sg.safety_reason)(mint)
                     why = ("anti-golpe: " + r) if r else ""
@@ -541,10 +603,39 @@ def backtest(dev_histories, start=500.0, usd=5.0, delay_cost=0.03, train_share=0
     return out
 
 
-def run_backtest():
+def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, now=None):
+    """Owner's button: download the history of up to BT_DEVS devs not analysed yet, then backtest the last
+    `days` (2 months) with `capital` (US$ 60). Reports how much history was really available."""
+    now = now or time.time()
+    capital = float(capital or BT_CAPITAL)
+    days = float(days or BT_DAYS)
+    if rpc is not None:
+        d = _load()
+        todo = [k for k, v in d["devs"].items() if not v.get("hist")][:BT_DEVS]
+        for dev in todo:
+            try:
+                import wallet_profile
+                _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=max(DEV_AUDIT_TX, 1000))
+                stats = rate_dev(closed, now)
+                stats["hist"] = [{"opened": c.get("opened"), "closed": c.get("closed"),
+                                  "result_pct": round(float(c.get("result_pct") or 0), 4),
+                                  "pnl_usd": round(float(c.get("pnl_usd") or 0), 2)} for c in closed][-1000:]
+            except Exception as exc:
+                stats = {"tier": "ERRO", "why": type(exc).__name__}
+            with _LOCK:
+                dd = _load()
+                dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now)
+                _save(dd)
     d = _load()
-    hist = {k: v["hist"] for k, v in d["devs"].items() if v.get("hist")}
-    text = backtest_text(backtest(hist), len(hist))
+    since = now - days * 86400
+    hist = {k: [h for h in v["hist"] if (h.get("opened") or 0) >= since] for k, v in d["devs"].items() if v.get("hist")}
+    hist = {k: v for k, v in hist.items() if v}
+    first = min((h["opened"] for v in hist.values() for h in v), default=None)
+    usd = max(1.0, min(buy_usd(), capital / 10))
+    text = backtest_text(backtest(hist, start=capital, usd=usd), len(hist), capital, usd)
+    if first:
+        text += ("\n📅 Histórico disponível: " + format((now - first) / 86400, ".0f") + " dias (pedido: " +
+                 format(days, ".0f") + "). " + str(sum(len(v) for v in hist.values())) + " operações reais dos DEVs.")
     with _LOCK:
         dd = _load()
         dd["backtest"] = text
@@ -553,11 +644,12 @@ def run_backtest():
     return text
 
 
-def backtest_text(res, devs_n):
+def backtest_text(res, devs_n, capital=500.0, usd=5.0):
     if not res:
         return "🧪 Backtest DEV: ainda sem histórico de DEVs analisados. Deixe o robô rodar algumas horas."
     lines = ["🧪 BACKTEST DEV (aproximação com as operações REAIS de " + str(devs_n) + " DEVs analisados)",
-             "Capital inicial US$ 500 · US$ 5 por operação · atraso + custos estimados (3% + 2×" +
+             "Capital inicial US$ " + format(capital, "g") + " · US$ " + format(usd, "g") +
+             " por operação · atraso + custos estimados (3% + 2×" +
              format(COST * 100, ".0f") + "%) · escolha dos DEVs só com dados anteriores a cada entrada.",
              "Resultado FORA DA AMOSTRA (últimos 30% do período):"]
     best = None
@@ -567,7 +659,7 @@ def backtest_text(res, devs_n):
                      str(t["trades"]) + " ops · acerto " + format(t["win"] * 100, ".0f") + "% · PF " +
                      ("—" if t["pf"] is None else format(t["pf"], ".2f")) + " · DD " + format(t["max_dd"] * 100, ".0f") +
                      "% · pior " + format(t["worst"], "+.2f") + " · taxas US$ " + format(t["fees"], ".2f"))
-        score = t["pnl"] - 500 * t["max_dd"] if t["trades"] >= 10 else None
+        score = t["pnl"] - capital * t["max_dd"] if t["trades"] >= 10 else None
         if score is not None and (best is None or score > best[0]):
             best = (score, name)
     lines.append("🏆 Melhor ajustado ao risco: " + (best[1] if best else "nenhuma estratégia com 10+ operações no teste"))
@@ -580,7 +672,9 @@ def status_text():
     m = metrics(d)
     devs = d["devs"]
     ok = [(k, v) for k, v in devs.items() if approved(v)]
-    lines = ["🧑‍💻 ROBÔ DEV — " + ("🟢 RODANDO" if d.get("enabled") else "⏸️ PAUSADO") + " (SIMULAÇÃO, sem dinheiro real)",
+    lines = ["🧑‍💻 ROBÔ DEV — " + ("🟢 RODANDO" if d.get("enabled") else "⏸️ PAUSADO") +
+             (" (💵 DINHEIRO REAL)" if d.get("real") else " (SIMULAÇÃO, sem dinheiro real)"),
+             "🛡️ Só copia se o DEV tiver no máximo " + format(MAX_DEV_SHARE * 100, ".0f") + "% da moeda",
              "💼 Saldo simulado US$ " + format(m["equity"], ",.2f") + " (início US$ " + format(m["start"], ",.0f") + ") · hoje " +
              format(m["pnl_day"], "+.2f") + " · total " + format(m["pnl_total"], "+.2f"),
              "📦 Abertas " + str(m["open"]) + "/" + str(MAX_OPEN) + " · " + str(m["trades"]) + " operações · acerto " +

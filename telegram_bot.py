@@ -156,7 +156,8 @@ def keyboard():
   [{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
   [{"text":"🧑‍💻 Robô DEV (simulação)","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
-  [{"text":"🧪 Backtest DEVs","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
+  [{"text":"🧪 Backtest 2 meses (US$ 60)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
+  [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -314,17 +315,27 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
- if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev") or action.startswith("dv_usd"):
+ if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim") or action.startswith("dv_usd"):
   import dev_bot
   try:
    pre=""
    if action=="dv_on":dev_bot.set_enabled(True);pre="▶️ Robô DEV rodando (simulação).\n\n"
    elif action=="dv_off":dev_bot.set_enabled(False);pre="⏸️ Robô DEV pausado: não compra; as posições simuladas continuam com stop.\n\n"
    elif action=="dv_close":dev_bot.close_all();pre="🧹 Posições simuladas do robô DEV encerradas.\n\n"
+   elif action=="dv_real":
+    live_engine.start();dev_bot.set_real(True)
+    pre="💵 ROBÔ DEV COM DINHEIRO REAL: cada compra copiada usa US$ "+format(dev_bot.buy_usd(),"g")+" da carteira do bot.\n\n"
+   elif action=="dv_sim":dev_bot.set_real(False);pre="🧪 Robô DEV de volta para a simulação.\n\n"
    elif action.startswith("dv_usd"):pre="💵 Compra por operação: US$ "+format(dev_bot.set_buy_usd(action[6:]),"g")+"\n\n"
    elif action=="dv_bt":
-    send(chat,"🧪 Rodando o backtest com o histórico dos DEVs já analisados…")
-    run_async(lambda:[send(chat,part,keyboard()) for part in split_message(dev_bot.run_backtest())]);return
+    send(chat,"🧪 Baixando o histórico de até "+str(dev_bot.BT_DEVS)+" DEVs e testando os últimos "+format(dev_bot.BT_DAYS,".0f")+
+     " dias com US$ "+format(dev_bot.BT_CAPITAL,"g")+"… leva alguns minutos (o resultado chega aqui).")
+    def bt():
+     try:
+      txt=dev_bot.run_backtest(rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=__import__("copy_trader")._sol_usd())
+      for part in split_message(txt):send(chat,part,keyboard())
+     except Exception as exc:send(chat,"⛔ Backtest DEV falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
+    run_async(bt);return
    send(chat,pre+dev_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Robô DEV: "+str(exc)[:200],keyboard())
   return
@@ -1062,6 +1073,17 @@ def dev_loop():
    if not os.getenv("SOLANA_RPC_URL"):continue
    dev_bot.cycle(send,chat,rpc=dex_rpc(),sol_usd=__import__("copy_trader")._sol_usd())
   except Exception as exc:logging.exception("devbot cycle failed: %s",type(exc).__name__)
+def dev_real_once():
+ """Owner (Nov 15, later): the DEV robot trades real money. Once."""
+ try:
+  import dev_bot
+  d=dev_bot._load()
+  if not d.get("real_v1"):
+   d.update(real_v1=True,real=True);dev_bot._save(d)
+   try:live_engine.start()
+   except Exception:logging.exception("dev real: engine not started")
+   logging.info("dev robot: real money on")
+ except Exception:logging.exception("dev real failed")
 def dev_mode_once():
  """Owner (Nov 15): the DEV robot runs in simulation; the real-money copy trade is switched off once
  (open copies keep their automatic sells)."""
@@ -1111,7 +1133,8 @@ def loop():
   threading.Thread(target=btc_dip_loop,daemon=True).start()
  else:
   copy_only_once()         # only the copy trade (owner): BTC robot and signals off
-  dev_mode_once()          # DEV robot in simulation; real copy trade off (owner, Nov 15)
+  dev_mode_once()          # real copy trade off (owner, Nov 15)
+  dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
   threading.Thread(target=dev_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
