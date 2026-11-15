@@ -241,6 +241,7 @@ def proportional_usd(fraction, wallet_value_usd, free_usd=None, limits=None):
     usd = share * float(wallet_value_usd)
     if PROPORTIONAL_MAX_USD > 0:
         usd = min(usd, PROPORTIONAL_MAX_USD)
+    usd = max(usd, PROPORTIONAL_MIN_USD)        # owner (Nov 15): every copy buys at least the minimum (US$ 20)
     if free_usd is not None:
         usd = min(usd, float(free_usd) - PROPORTIONAL_RESERVE_USD)
     return round(usd, 2) if usd >= PROPORTIONAL_MIN_USD else None
