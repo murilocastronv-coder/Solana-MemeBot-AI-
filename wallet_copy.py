@@ -154,6 +154,7 @@ def best_wallets(state=None, limit=10):
                                      if "cost_lamports_closed" in stats else None),
             "age_days": stats.get("age_days"),
             "active_days_7": stats.get("active_days_7"),
+            "active_days_30": stats.get("active_days_30"),
             "average_hold_seconds": int(stats["total_hold_seconds"] / trades),
             "long_holds": int(stats.get("long_holds", 0)),
             "hold_samples": list(stats.get("hold_samples", []))})

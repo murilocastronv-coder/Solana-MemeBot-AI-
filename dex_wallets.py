@@ -163,6 +163,7 @@ def wallet_activity(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pa
     rows = list(first_page or [])
     oldest = None
     days = set()
+    days30 = set()
     age = None
     for page in range(pages + 1):
         for r in rows:
@@ -173,6 +174,8 @@ def wallet_activity(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pa
             oldest = t if oldest is None else min(oldest, t)
             if not r.get("err") and now - t < 7 * 86400:
                 days.add(int((now - t) // 86400))
+            if not r.get("err") and now - t < 30 * 86400:
+                days30.add(int((now - t) // 86400))
         if oldest is not None and now - oldest >= max(min_days, 7) * 86400:
             age = (now - oldest) / 86400
             break
@@ -186,7 +189,9 @@ def wallet_activity(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pa
             age = (now - oldest) / 86400 if oldest else 0.0   # reached the first transaction
             break
         rows = nxt
-    return {"age_days": age, "active_days_7": len(days)}
+    # days with activity in the last 30 days (owner: trades at least 25 days a month); None = not covered
+    covered = oldest is not None and (now - oldest >= 30 * 86400 or age is not None)
+    return {"age_days": age, "active_days_7": len(days), "active_days_30": len(days30) if covered else None}
 
 
 def wallet_age_days(wallet, rpc, now, first_page=None, min_days=MIN_AGE_DAYS, pages=AGE_PAGES):
@@ -298,7 +303,7 @@ def scan(rpc_url=None, get=_get_json, rpc=None, max_tokens=MAX_TOKENS, per_token
         # measured) go first, so they get a complete re-analysis now instead of in 12 h.
         stale = [w for w, st in state["wallets"].items()
                  if wallet_copy._qualifies(st) and ("age_days" not in st or "cost_lamports_closed" not in st
-                                                    or age_stale(st))]
+                                                    or age_stale(st) or "active_days_30" not in st)]
         fresh = [w for w in dict.fromkeys(stale[:REANALYZE_STALE] + buyers)
                  if w in stale or now - int(analyzed.get(w, 0)) >= REANALYZE_SECONDS]
         done = with_trades = screened = 0

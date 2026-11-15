@@ -60,3 +60,23 @@ class ReferenceAndCounterTest(unittest.TestCase):
                     ct.preaudit_and_follow({"wallet": "x"}, None, 200.0)
             self.assertIn("analisadas até agora: 2", ct.search_line())
             self.assertIn("aprovadas 1", ct.search_line())
+
+
+class ResetFoundTest(unittest.TestCase):
+    def test_found_wallets_leave_owner_and_reference_stay(self):
+        import pathlib
+        import copy_trader as ct
+        p = pathlib.Path(tempfile.mkdtemp()) / "c.json"
+        with patch.object(ct, "_path", return_value=p):
+            ct.add_owner_wallet(OTHER)
+            ct.follow(ADDR)
+            d = ct._load()
+            d["wallets"][ADDR]["auto_discovered"] = True
+            d["rejected"] = {"X": 10**12}
+            ct._save(d)
+            self.assertEqual(ct.reset_found_wallets_once(), [ADDR])
+            d = ct._load()
+            self.assertNotIn(ADDR, d["wallets"])
+            self.assertIn(OTHER, d["wallets"])
+            self.assertEqual(d["rejected"], {})
+            self.assertEqual(ct.reset_found_wallets_once(), [])
