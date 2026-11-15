@@ -112,7 +112,8 @@ class EvaluateWalletTest(unittest.TestCase):
         style = {"hold_min": 45.0, "win_rate": 0.6, "trades_day": 10, "size_usd": 50, "pump_share": 0.9,
                  "curve_share": 0.1, "entry_age_min": 30}
         good = {"pnl_recent": 2500, "win_recent": 0.6, "trades_recent": 80, "weeks_with_trades": 4,
-                "weeks_positive": 4, "style": style}
+                "weeks_positive": 4, "style": style, "roi_recent": 0.35, "invested_recent": 7000, "rug_share": 0.05,
+                "rugs_recent": 4, "hold_median_min": 40, "hold_max_min": 900, "avg_win_pct": 0.6, "avg_loss_pct": -0.3}
         with patch.object(wt, "MIN_PROFIT", 1000.0), patch.object(ct, "MIN_ACTIVE_DAYS_30", 25), \
                 patch.object(ct, "MIN_WALLET_DAYS", 30):
             ok, text = ct.evaluate_wallet(OTHER, None, 200, measure_fn=lambda *a: ([], good),
@@ -120,6 +121,9 @@ class EvaluateWalletTest(unittest.TestCase):
                                           balance_fn=lambda a: 5000)
             self.assertTrue(ok)
             self.assertIn("VALE A PENA COPIAR", text)
+            self.assertIn("Retorno sobre o que investiu: +35%", text)
+            self.assertIn("golpe", text)
+            self.assertIn("metade das moedas até 40 min", text)
             bad = dict(good, pnl_recent=200, weeks_positive=2)
             ok, text = ct.evaluate_wallet(OTHER, None, 200, measure_fn=lambda *a: ([], bad),
                                           activity_fn=lambda a: {"age_days": 90, "active_days_30": 10},
@@ -127,3 +131,16 @@ class EvaluateWalletTest(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("NÃO VALE", text)
             self.assertIn("❌ Dias operando", text)
+
+
+
+class MoneyStatsTest(unittest.TestCase):
+    def test_roi_rugs_and_hold(self):
+        import copy_trader as ct
+        recent = [{"cost_closed": 100, "pnl_usd": 50, "result_pct": 0.5, "hold_min": 30},
+                  {"cost_closed": 100, "pnl_usd": -90, "result_pct": -0.9, "hold_min": 300},
+                  {"cost_closed": 100, "pnl_usd": 20, "result_pct": 0.2, "hold_min": 15}]
+        m = ct.money(recent, [])
+        self.assertAlmostEqual(m["roi_recent"], -20 / 300, places=3)
+        self.assertEqual(m["rugs_recent"], 1)
+        self.assertEqual(m["hold_median_min"], 30)

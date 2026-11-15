@@ -26,6 +26,8 @@ MIN_PROFIT = float(os.getenv("COPY_RESULT_MIN_USD", "0"))
 # consistent: profit in most weeks of the window (owner: "resultado consistente")
 MIN_WEEKS = int(float(os.getenv("COPY_MIN_WEEKS", "3")))
 MIN_WEEK_SHARE = float(os.getenv("COPY_MIN_WEEK_SHARE", "0.75"))
+# avoids scams: at most this share of its trades ended 80%+ down (rug / dead coin)
+MAX_RUG_SHARE = float(os.getenv("COPY_MAX_RUG_SHARE", "0.15"))
 RESULT_DAYS = float(os.getenv("COPY_RESULT_DAYS", "9"))
 PROFILE_MAX_AGE_S = float(os.getenv("COPY_TWIN_PROFILE_HOURS", "12")) * 3600
 PUMP = ("pump.fun", "PumpSwap")
@@ -160,6 +162,9 @@ def judge(cand_style, audit, ref):
             return False, sim, "pouco histórico (" + str(wk) + " semanas com operações)"
         if wp < MIN_WEEK_SHARE * wk:
             return False, sim, "lucro inconsistente (" + str(wp) + " de " + str(wk) + " semanas no lucro)"
+    if "rug_share" in a and float(a.get("rug_share") or 0) > MAX_RUG_SHARE:
+        return False, sim, ("entra em muita moeda golpe (" + format(float(a["rug_share"]) * 100, ".0f") +
+                            "% viraram rug)")
     if a.get("pnl_recent", 0) < MIN_PROFIT:
         return False, sim, ("lucro de " + format(RESULT_DAYS, ".0f") + " dias abaixo de US$ " + format(MIN_PROFIT, ",.0f") +
                             " (" + format(a.get("pnl_recent", 0), "+,.0f") + ")")
