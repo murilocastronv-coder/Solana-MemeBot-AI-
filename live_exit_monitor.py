@@ -64,8 +64,11 @@ def copy_wallet_guard(position, ratio, peak):
     done = int(position.get("copy_tp_done") or 0)
     nxt = COPY_TP_FIRST + COPY_TP_STEP * done
     if COPY_TP_PART > 0 and ratio >= nxt:
+        # a coin that jumped several levels at once sells ONE part and counts every level it passed
+        # (25% at a time, never 25% x many in a row)
+        passed = int((ratio - COPY_TP_FIRST) / COPY_TP_STEP) + 1 if COPY_TP_STEP > 0 else done + 1
         return {"action": "sell_part", "fraction": COPY_TP_PART, "reason": "copy_ladder", "level": nxt,
-                "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
+                "levels_done": max(done + 1, passed), "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if COPY_BE_ARM > 0 and peak >= 1 + COPY_BE_ARM and ratio <= 1.0:
         return {"action": "sell", "reason": "copy_breakeven", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     return None

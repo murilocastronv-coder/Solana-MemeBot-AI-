@@ -424,7 +424,8 @@ def exit_cycle(send, chat):
                 _failure(send, chat, "venda parcial", mint, exc)
                 continue
             if r in ("sold", "pending"):
-                state.set_position_fields(mint, copy_tp_done=int(position.get("copy_tp_done") or 0) + 1)
+                state.set_position_fields(mint, copy_tp_done=int(signal.get("levels_done") or
+                                                                 int(position.get("copy_tp_done") or 0) + 1))
             return  # one order per cycle
         amount = int(position["token_amount_raw"])
         if held is not None and held < amount:

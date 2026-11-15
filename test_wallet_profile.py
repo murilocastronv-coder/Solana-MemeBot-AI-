@@ -156,6 +156,8 @@ class CopyGuardTests(unittest.TestCase):
         self.assertEqual((s["action"], s["fraction"]), ("sell_part", 0.25))
         self.assertEqual(m.position_signal(dict(pos, copy_tp_done=1, peak_ratio=2.1), 10, 22.0)["action"], "hold")
         self.assertEqual(m.position_signal(dict(pos, copy_tp_done=1, peak_ratio=2.1), 10, 25.5)["action"], "sell_part")
+        jump = m.position_signal(pos, 10, 60.0)                                   # +500% at once: one part, 9 levels
+        self.assertEqual((jump["fraction"], jump["levels_done"]), (0.25, 9))
 
 
 class NewRulesTests(unittest.TestCase):
