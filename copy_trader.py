@@ -1716,6 +1716,25 @@ def holder_status(w):
     return ("ok" if ok else "fast"), med
 
 
+RUG_LOSS = _env("COPY_RUG_LOSS", 0.80)        # a coin sold 80%+ below its cost = scam / dead coin (rug)
+
+
+def money(recent, holds):
+    """Return on what it invested, average win / loss, coins that turned out scams (rug) and hold time."""
+    invested = sum(float(p.get("cost_closed") or 0) for p in recent)
+    pnl = sum(float(p.get("pnl_usd") or 0) for p in recent)
+    wins = [p["result_pct"] for p in recent if p.get("result_pct", 0) > 0]
+    losses = [p["result_pct"] for p in recent if p.get("result_pct", 0) <= 0]
+    rugs = [p for p in recent if p.get("result_pct", 0) <= -RUG_LOSS]
+    hm = sorted(float(p.get("hold_min") or 0) for p in recent)
+    return {"invested_recent": round(invested, 2), "roi_recent": round(pnl / invested, 4) if invested > 0 else 0.0,
+            "avg_win_pct": round(sum(wins) / len(wins), 4) if wins else 0.0,
+            "avg_loss_pct": round(sum(losses) / len(losses), 4) if losses else 0.0,
+            "rugs_recent": len(rugs), "rug_share": round(len(rugs) / len(recent), 4) if recent else 0.0,
+            "hold_median_min": round(hm[len(hm) // 2], 1) if hm else None,
+            "hold_max_min": round(hm[-1], 1) if hm else None}
+
+
 def weekly(recent, now):
     """Consistency over the result window: weeks with trades and weeks that ended in profit."""
     weeks = {}
@@ -1743,7 +1762,7 @@ def measure(address, rpc, sol_usd, max_tx=None):
              "pnl_recent": round(sum(p.get("pnl_usd", 0.0) for p in recent), 2),
              "trades_recent": len(recent),
              "win_recent": round(sum(1 for p in recent if p.get("pnl_usd", 0) > 0) / len(recent), 3) if recent else 0.0,
-             **weekly(recent, now),
+             **weekly(recent, now), **money(recent, holds),
              "style": wallet_twin.style(summary)}
     return holds, audit
 
@@ -1918,9 +1937,15 @@ def evaluate_wallet(address, rpc, sol_usd, now=None, measure_fn=None, activity_f
     need_win = min(wt.MIN_WIN, 0.8 * float(st.get("win_rate") or wt.MIN_WIN)) if st else wt.MIN_WIN
     wk, wp = int(audit.get("weeks_with_trades") or 0), int(audit.get("weeks_positive") or 0)
     age, days30 = act.get("age_days"), act.get("active_days_30")
+    rug = float(audit.get("rug_share") or 0)
     checks = [
         ("Lucro em " + format(wt.RESULT_DAYS, ".0f") + " dias: US$ " + format(audit.get("pnl_recent", 0), "+,.0f") +
          " (mín. US$ " + format(wt.MIN_PROFIT, ",.0f") + ")", audit.get("pnl_recent", 0) >= max(wt.MIN_PROFIT, 0.01)),
+        ("Retorno sobre o que investiu: " + format(float(audit.get("roi_recent") or 0) * 100, "+.0f") + "% (US$ " +
+         format(float(audit.get("invested_recent") or 0), ",.0f") + " colocados em moedas)", float(audit.get("roi_recent") or 0) > 0),
+        ("Moedas que viraram golpe/morreram (vendeu −" + format(RUG_LOSS * 100, ".0f") + "% ou pior): " +
+         str(int(audit.get("rugs_recent") or 0)) + " = " + format(rug * 100, ".0f") + "% das operações (máx. " +
+         format(wt.MAX_RUG_SHARE * 100, ".0f") + "%)", rug <= wt.MAX_RUG_SHARE),
         ("Semanas no lucro: " + str(wp) + " de " + str(wk) + " (precisa " + format(wt.MIN_WEEK_SHARE * 100, ".0f") +
          "%, mín. " + str(wt.MIN_WEEKS) + " semanas)", wk >= wt.MIN_WEEKS and wp >= wt.MIN_WEEK_SHARE * wk),
         ("Acerto: " + format(audit.get("win_recent", 0) * 100, ".0f") + "% (mín. " + format(need_win * 100, ".0f") + "%)",
@@ -1941,6 +1966,11 @@ def evaluate_wallet(address, rpc, sol_usd, now=None, measure_fn=None, activity_f
              ("✅ VALE A PENA COPIAR: passou em todas as regras do bot." if ok else
               "❌ NÃO VALE copiar agora: falhou em " + str(sum(1 for _, c in checks if not c)) + " regra(s).")]
     lines += [("✅ " if c else "❌ ") + t for t, c in checks]
+    if audit.get("hold_median_min") is not None:
+        lines.append("⏱️ Tempo segurando: metade das moedas até " + format(audit["hold_median_min"], ".0f") +
+                     " min · a que mais segurou: " + format(audit["hold_max_min"], ".0f") + " min")
+    lines.append("💰 Ganho médio quando acerta: " + format(float(audit.get("avg_win_pct") or 0) * 100, "+.0f") +
+                 "% · perda média quando erra: " + format(float(audit.get("avg_loss_pct") or 0) * 100, "+.0f") + "%")
     if st:
         lines.append("📋 Estilo: " + wt.describe(st))
     lines.append("🔎 solscan.io/account/" + address)
