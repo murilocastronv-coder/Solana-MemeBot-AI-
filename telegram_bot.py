@@ -156,7 +156,7 @@ def keyboard():
   [{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
   [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
-  [{"text":"🧪 Backtest 2 meses (US$ 60)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
+  [{"text":"🧪 Backtest 1 ano (US$ 60)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
   [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -328,8 +328,9 @@ def handle(update):
    elif action=="dv_sim":dev_bot.set_real(False);pre="🧪 Robô DEV de volta para a simulação.\n\n"
    elif action.startswith("dv_usd"):pre="💵 Compra por operação: US$ "+format(dev_bot.set_buy_usd(action[6:]),"g")+"\n\n"
    elif action=="dv_bt":
-    send(chat,"🧪 Baixando o histórico de até "+str(dev_bot.BT_DEVS)+" DEVs e testando os últimos "+format(dev_bot.BT_DAYS,".0f")+
-     " dias com US$ "+format(dev_bot.BT_CAPITAL,"g")+"… leva alguns minutos (o resultado chega aqui).")
+    send(chat,"🧪 Baixando o histórico de até "+str(dev_bot.BT_DEVS)+" DEVs (máx. "+format(dev_bot.BT_MAX_S/60,".0f")+
+     " min por toque; meta "+format(dev_bot.BT_TARGET,",d")+" DEVs) e testando o último ano ("+format(dev_bot.BT_DAYS,".0f")+
+     " dias) com US$ "+format(dev_bot.BT_CAPITAL,"g")+"… o resultado chega aqui.")
     def bt():
      try:
       txt=dev_bot.run_backtest(rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=__import__("copy_trader")._sol_usd())

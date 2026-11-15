@@ -135,6 +135,7 @@ class DevBacktestButtonTest(unittest.TestCase):
                       for i in range(80)] + [pos("RAYcoin", 50, 3.0, NOW - 5000, NOW - 5600)]
             txt = db.run_backtest(rpc=object(), sol_usd=200, analyze=lambda *a, **k: ({}, closed, ""), now=NOW)
             self.assertIn("US$ 60", txt)
+            self.assertIn("baixados (meta 10,000)", txt)
             self.assertIn("Histórico disponível", txt)
             self.assertTrue(db._load()["devs"][DEV]["hist"])
             self.assertIn("só moedas da pump.fun", txt)
