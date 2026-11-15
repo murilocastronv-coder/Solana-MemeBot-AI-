@@ -133,7 +133,8 @@ class DevBacktestButtonTest(unittest.TestCase):
             db._save(d)
             closed = [pos("M" + str(i) + "pump", 5 if i % 10 else -5, 0.4 if i % 10 else -0.2, NOW - i * 20000, NOW - i * 20000 - 600)
                       for i in range(80)] + [pos("RAYcoin", 50, 3.0, NOW - 5000, NOW - 5600)]
-            txt = db.run_backtest(rpc=object(), sol_usd=200, analyze=lambda *a, **k: ({}, closed, ""), now=NOW)
+            with mock.patch("dev_follow.fill", return_value=0):
+                txt = db.run_backtest(rpc=object(), sol_usd=200, analyze=lambda *a, **k: ({}, closed, ""), now=NOW)
             self.assertIn("US$ 60", txt)
             self.assertIn("baixados (meta 10,000)", txt)
             self.assertIn("Histórico disponível", txt)

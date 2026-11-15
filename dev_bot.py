@@ -56,6 +56,7 @@ TRANSFER_EXIT = E("DEV_TRANSFER_EXIT", 0.25)
 MAX_RUNUP_DEV = E("DEV_MAX_RUNUP_SINCE_DEV", 0.15)   # no buy if the price rose 15%+ since the dev's buy
 DAILY_LOSS_USD = E("DEV_DAILY_LOSS_USD", 0)        # 0 = no daily loss limit (owner's choice); e.g. 15 stops buys for the day
 BT_PERIODS = (7, 30, 90, 180)
+FOLLOW_FILL_S = E("DEV_FOLLOW_FILL_SECONDS", 300)
 BT_MAX_RET = E("DEV_BT_MAX_RESULT", 10.0)      # a dev trade above +1000% (free creator tokens, near-zero cost) is not
 BT_MIN_COST_USD = E("DEV_BT_MIN_COST_USD", 5)    # something a follower could get: left out of the backtests
 
@@ -233,8 +234,26 @@ def tier(s):
     return "MONITORADO", "acerto " + format(s["win"] * 100, ".0f") + "% / PF " + format(s["pf"], ".1f")
 
 
+_RULE = {"r": None}     # owner-applied follower rule (dev_follow.apply_winner), refreshed every cycle
+
+
+def rule():
+    return _RULE["r"]
+
+
 def approved(dev_info):
-    return (dev_info or {}).get("tier") in ("ELITE", "PREMIUM", "APROVADO")
+    info = dev_info or {}
+    r = _RULE["r"]
+    if not r:
+        return info.get("tier") in ("ELITE", "PREMIUM", "APROVADO")
+    if info.get("tier") in ("BLOQUEADO", "ERRO", None):
+        return False
+    if r["rule"] == "all":
+        return True
+    if r["rule"] in ("dev70", "dev80"):
+        return info.get("trades", 0) >= 20 and info.get("win", 0) >= (0.7 if r["rule"] == "dev70" else 0.8)
+    import dev_follow
+    return dev_follow.follow_ok(info, r["rule"])
 
 
 # ---------------------------------------------------------------- chain helpers
@@ -401,6 +420,10 @@ def exits(prices, now=None, send=None, chat=None, dev_sells=None):
                 why, frac = "DEV vendeu " + format(sold * 100, ".0f") + "%: encerrou", 1.0
             elif sold is not None and sold >= 0.25:
                 why, frac = "DEV vendeu " + format(sold * 100, ".0f") + "%: vendeu a mesma parte", (0.5 if sold >= 0.5 else 0.25)
+            elif (_RULE["r"] or {}).get("sl") and r <= 1 - _RULE["r"]["sl"]:
+                why, frac = "stop −" + format(_RULE["r"]["sl"] * 100, ".0f") + "% (estratégia testada)", 1.0
+            elif (_RULE["r"] or {}).get("tp") and r >= 1 + _RULE["r"]["tp"]:
+                why, frac = "alvo +" + format(_RULE["r"]["tp"] * 100, ".0f") + "% (estratégia testada)", 1.0
             elif STOP_LOSS > 0 and r <= 1 - STOP_LOSS:
                 why, frac = "stop loss −" + format(STOP_LOSS * 100, ".0f") + "%", 1.0
             elif TP1 > 0 and not pos["tp1"] and r >= 1 + TP1:
@@ -569,6 +592,7 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
     MIN trades is dismissed with one cheap call instead of a full history read. Returns devs rated."""
     now = now or time.time()
     d = _load()
+    _RULE["r"] = d.get("follow_rule")
     queue = [(k, v) for k, v in sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
              if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S][:limit or DEV_AUDITS_PER_CYCLE]
     done = 0
@@ -587,11 +611,17 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
                 _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX)
                 stats = rate_dev(closed, now)
                 stats["hist"] = _hist(closed)[-300:]
+                stats["hist_v2"] = True
             except Exception as exc:
                 stats = {"tier": "ERRO", "why": type(exc).__name__}
         with _LOCK:
             dd = _load()
-            dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now)
+            cur = dd["devs"].setdefault(dev, {"tokens_seen": []})
+            if stats.get("hist"):
+                stats["hist"] = _merge_hist(cur.get("hist"), stats["hist"])
+            if cur.get("tier") == "BLOQUEADO" and now < float(cur.get("rated") or 0):
+                continue                                   # blocked dev (hid its coins): stays blocked
+            cur.update(stats, rated=now)
             _save(dd)
         done += 1
         note("DEV " + dev[:6] + "… " + stats.get("tier", "?") + (" — " + stats["why"] if stats.get("why") else "") +
@@ -767,8 +797,20 @@ def backtest(dev_histories, start=500.0, usd=5.0, delay_cost=0.03, train_share=0
 def _hist(closed):
     return [{"opened": c.get("opened"), "closed": c.get("closed"), "result_pct": round(float(c.get("result_pct") or 0), 4),
              "pnl_usd": round(float(c.get("pnl_usd") or 0), 2), "mint": c.get("mint"), "platform": c.get("platform"),
-             "cost_usd": round(float(c.get("cost_closed") or 0), 2) if c.get("cost_closed") is not None else None}
+             "cost_usd": round(float(c.get("cost_closed") or 0), 2) if c.get("cost_closed") is not None else None,
+             "entry_usd": c.get("entry_price_usd"),
+             "sells": [[int(x.get("t") or 0), round(float(x.get("fraction") or 0), 4)] for x in c.get("sells") or []]}
             for c in closed]
+
+
+def _merge_hist(old, new):
+    """Keep the follower results (price replays) already computed when a dev's history is downloaded again."""
+    done = {(h.get("mint"), h.get("opened")): h["f"] for h in old or [] if "f" in h}
+    for h in new:
+        k = (h.get("mint"), h.get("opened"))
+        if k in done:
+            h["f"] = done[k]
+    return new
 
 
 def pump_trade(h):
@@ -809,6 +851,8 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
                     stats = {"tier": "ERRO", "why": type(exc).__name__}
             with _LOCK:
                 dd = _load()
+                if stats.get("hist"):
+                    stats["hist"] = _merge_hist((dd["devs"].get(dev) or {}).get("hist"), stats["hist"])
                 dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now, hist_v2=True)
                 _save(dd)
     d = _load()
@@ -833,6 +877,13 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
              ") · " + str(len(hist)) + " com operações na pump.fun no período · " + str(left) + " na fila" +
              (" — toque de novo para baixar mais" if left else "") + ".")
     text += "\n\n" + periods_text(d, now)
+    try:
+        import dev_follow
+        if rpc is not None:
+            dev_follow.fill(max_s=FOLLOW_FILL_S)
+        text += "\n\n" + dev_follow.report(now)
+    except Exception as exc:
+        text += "\n\n🎯 Backtest de quem copia falhou: " + type(exc).__name__
     with _LOCK:
         dd = _load()
         dd["backtest"] = text
@@ -948,6 +999,10 @@ def status_text():
                  " e volume 5 min ≥ US$ " + format(CURVE_MIN_VOL_5M, ",.0f") + " (sem exigir liquidez) · impacto de preço ≤ 1% · " +
                  ("limite de perda do dia US$ " + format(DAILY_LOSS_USD, "g") if DAILY_LOSS_USD > 0 else "sem limite de perda diário"))
     lines.append(lag_line(d))
+    fr = d.get("follow_rule")
+    if fr:
+        import dev_follow
+        lines.append("🏆 Estratégia testada em uso: " + fr["rule_name"] + " + " + dev_follow.exit_label(fr["exit"]))
     for k, v in sorted(ok, key=lambda kv: -kv[1].get("score", 0))[:5]:
         lines.append("🏅 " + v["tier"] + " `" + k + "` acerto " + format(v["win"] * 100, ".0f") + "% · " + str(v["trades"]) +
                      " ops · PF " + format(v["pf"], ".1f") + " · US$ " + format(v["pnl"], "+,.0f"))
