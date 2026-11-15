@@ -271,6 +271,17 @@ def handle(update):
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
  if action.startswith("bx_"):
   send(chat,"₿ O robô de BTC foi removido. O bot agora roda só o Sniper.",keyboard());return
+ if action.startswith("sb:"):
+  import rocket_bot
+  try:
+   _,usd,mint=action.split(":",2);usd=float(usd)
+  except ValueError:send(chat,"Botão inválido.",keyboard());return
+  send(chat,"⏳ Comprando US$ "+format(usd,"g")+" de `"+mint+"` (anti-golpe e teste de venda antes)…")
+  def run_buy():
+   try:r=rocket_bot.manual_buy(mint,usd,send,chat)
+   except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
+   if r:send(chat,"⛔ Não comprei: "+r,keyboard())
+  run_async(run_buy);return
  if action in REMOVED_ROBOT_ACTIONS:
   send(chat,"🗑️ O Sniper (compras) e o Diamond foram removidos: o bot roda o copy trade e os SINAIS do Sniper. "
    "Posições que eles deixaram abertas continuam com stop e stop móvel até fechar.",keyboard());return

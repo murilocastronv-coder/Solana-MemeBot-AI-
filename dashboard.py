@@ -67,7 +67,7 @@ def _safe(fn, default=""):
 
 
 MODE = {"copy": "👥 Copy", "rocket": "🚀 Sniper", "diamond": "💎 Diamond", "signal": "📡 Sinal", "dip": "📉 Dip", "clone": "🤖 Clone",
-        "consensus": "🤝 Consenso", "sniper": "🎯 Sniper antigo"}
+        "consensus": "🤝 Consenso", "manual": "📡 Sua compra", "sniper": "🎯 Sniper antigo"}
 
 
 def summary():
@@ -239,10 +239,8 @@ def trail_rule(p):
     if mode == "diamond":
         import diamond_bot
         return diamond_bot.TRAIL_ARM * 100, diamond_bot.TRAIL_DROP * 100
-    if mode == "copy":
-        if p.get("copy_orphan"):
-            return (float(lem.ORPHAN_EXIT["arm"]) - 1) * 100, float(lem.ORPHAN_EXIT["drop"]) * 100
-        return None
+    if mode in ("copy", "manual"):
+        return None      # stop at the entry after +50% / -50% stop / 25% ladder (no trailing stop)
     rules = {"consensus": lem.CONSENSUS_EXIT, "sniper": lem.SNIPER_EXIT, "pumpfun": lem.PUMPFUN_EXIT}
     rules.update(lem.REMOVED_BOT_EXIT)
     r = rules.get(mode)

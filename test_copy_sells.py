@@ -258,16 +258,15 @@ class ManualPauseTests(unittest.TestCase):
 
 
 class OrphanExitTests(unittest.TestCase):
-    def test_copy_without_origin_wallet_stop_40_and_trailing_from_25(self):
+    def test_copy_without_origin_wallet_uses_the_owner_rules(self):
+        # owner (Nov 15): stop loss -50%, stop at the entry after +50%, 25% at +100% (no wallet to follow)
         from live_exit_monitor import position_signal
         pos = {"mode": "copy", "copy_orphan": True, "opened_at": time.time()}
-        self.assertEqual(position_signal(pos, 32, 32 * 0.86)["action"], "hold")     # -14%: no longer sold at -15%
-        self.assertEqual(position_signal(pos, 32, 32 * 0.61)["action"], "hold")     # -39%
-        self.assertEqual(position_signal(pos, 32, 32 * 0.59)["reason"], "stop_loss")  # -41%
-        self.assertEqual(position_signal(pos, 32, 32 * 1.32)["reason"], "trailing")   # +32%: trailing on, holds
-        top = dict(pos, peak_ratio=1.60)
-        self.assertEqual(position_signal(top, 32, 32 * 1.50)["action"], "hold")      # 6% below the top
-        self.assertEqual(position_signal(top, 32, 32 * 1.40)["reason"], "take_profit")  # 12.5% below: sells
+        self.assertEqual(position_signal(pos, 32, 32 * 0.59)["action"], "hold")         # -41%
+        self.assertEqual(position_signal(pos, 32, 32 * 0.49)["reason"], "stop_loss")    # -51%
+        self.assertEqual(position_signal(dict(pos, peak_ratio=1.6), 32, 32 * 0.99)["reason"], "copy_breakeven")
+        self.assertEqual(position_signal(pos, 32, 32 * 2.05)["action"], "sell_part")
+        self.assertEqual(position_signal(dict(pos, mode="manual", copy_orphan=False), 32, 32 * 0.49)["reason"], "stop_loss")
 
 
 class ProportionalTests(unittest.TestCase):

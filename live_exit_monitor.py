@@ -38,6 +38,8 @@ def trail_text(position):
         return format(float(REMOVED_BOT_EXIT[position["mode"]]["drop"]) * 100, ".0f")
     if position.get("mode") == "copy":
         return format(float(copy_wallet_exit()["drop"]) * 100, ".0f")
+    if position.get("mode") == "manual":
+        return "0"
     return format(float(SNIPER_EXIT["drop"]) * 100, ".0f")
 DEAD_AFTER_SECONDS = 10 * 60
 CHECK_INTERVAL_SECONDS = 20
@@ -145,8 +147,13 @@ def position_signal(position, cost, proceeds):
     if position.get("mode") == "consensus":
         # robot removed; its open positions keep their rules: stop -40%, from +25% trailing 10% below the top
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **CONSENSUS_EXIT)
-    if position.get("mode") == "copy" and position.get("copy_orphan"):
-        return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **ORPHAN_EXIT)
+    if position.get("mode") == "manual" or (position.get("mode") == "copy" and position.get("copy_orphan")):
+        # owner's buys from a signal (and coins in the wallet with no copied wallet): same rules as the copy
+        # trade - stop loss -50%, stop at the entry after +50%, 25% at +100% and every further +50%
+        ratio = float(proceeds) / float(cost) if cost else 0.0
+        peak = max(ratio, float(position.get("peak_ratio") or 0))
+        guard = copy_wallet_guard(position, ratio, peak)
+        return guard or {"action": "hold", "reason": "manual_hold", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if (position.get("mode") == "copy" and not position.get("copy_orphan")
             and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet"):
         # Copy trade: sells when the copied wallet sells (copy_trader) AND, once in profit,
@@ -211,7 +218,7 @@ def _evaluate():
             signal = position_signal(position, cost, proceeds)
             if signal["peak_ratio"] > float(position.get("peak_ratio", 0)):
                 live_trade_state.update_peak(mint, signal["peak_ratio"])
-            if (position.get("mode") == "copy" and not position.get("copy_orphan") and COPY_BE_ARM > 0
+            if (position.get("mode") in ("copy", "manual") and COPY_BE_ARM > 0
                     and float(signal.get("peak_ratio") or 0) >= 1 + COPY_BE_ARM and not position.get("be_armed")):
                 live_trade_state.set_position_fields(mint, be_armed=True)
                 BE_ARMED.append((mint, position, signal))
