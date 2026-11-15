@@ -141,7 +141,9 @@ def btc_keyboard():
   [{"text":"📊 Último resultado BTC","callback_data":"btc_last"}],
   [{"text":"₿ Robô BTC RSI2 4h: status","callback_data":"bl_status"}],
   [{"text":"🟢 Ligar robô (real)","callback_data":"bl_on"},{"text":"🔴 Desligar robô","callback_data":"bl_off"}],
-  [{"text":str(n)+"x","callback_data":"bl_lev"+str(n)} for n in (2,3,4,5)]]
+  [{"text":str(n)+"x","callback_data":"bl_lev"+str(n)} for n in (2,3,4,5)],
+  [{"text":"$"+str(n),"callback_data":"bl_usd"+str(n)} for n in (20,50,100,200)],
+  [{"text":"✏️ Outro valor","callback_data":"bl_usdask"}]]
 def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
@@ -285,6 +287,12 @@ def handle(update):
  if not cb and chat in BUY_AMOUNT and time.time()-BUY_AMOUNT[chat][1]<600 and AMOUNT_RE.fullmatch((msg or {}).get("text","").strip()):
   mint=BUY_AMOUNT.pop(chat)[0]
   action="sb:"+(msg or {}).get("text","").strip().replace(",",".").lstrip("$")+":"+mint
+ if not cb and chat in BTC_USD_ASK and time.time()-BTC_USD_ASK[chat]<600 and AMOUNT_RE.fullmatch((msg or {}).get("text","").strip()):
+  BTC_USD_ASK.pop(chat,None);action="bl_usd"+(msg or {}).get("text","").strip()
+ if action=="/valor":
+  parts=(msg or {}).get("text","").split()
+  if len(parts)<2:send(chat,"Mande assim: /valor 75",keyboard());return
+  action="bl_usd"+parts[1]
  if action.startswith("sb:"):
   import rocket_bot
   try:
@@ -425,19 +433,25 @@ def handle(update):
    for part in split_message(rep.get("text") or "Sem relatório salvo ainda."):send(chat,part,keyboard())
   except Exception:send(chat,"Ainda não há resultado. Toque em 🔬 Testar estratégias BTC.",keyboard())
   return
- if action in ("bl_status","bl_on","bl_off") or action.startswith("bl_lev"):   # real-money BTC robot (owner, Nov 15)
+ if action=="bl_usdask":
+  BTC_USD_ASK[chat]=time.time()
+  send(chat,"✏️ Quantos US$ por operação no robô BTC? Mande só o número (ex.: 30 ou 75). Entre US$ 10 e US$ 1000.");return
+ if action in ("bl_status","bl_on","bl_off") or action.startswith(("bl_lev","bl_usd")):   # real-money BTC robot (owner, Nov 15)
   import btc_live
   try:
    pre=""
    if action=="bl_on":
     btc_live.set_enabled(True)
-    pre=("🟢 ROBÔ BTC LIGADO (dinheiro real na Jupiter): US$ "+format(btc_live.CAPITAL_USD,".0f")+" de garantia × "+
+    pre=("🟢 ROBÔ BTC LIGADO (dinheiro real na Jupiter): US$ "+format(btc_live.capital(),"g")+" de garantia × "+
      str(btc_live.leverage())+"x. Entra só quando fechar uma vela de 4h com sinal; pode levar dias.\n\n")
    elif action=="bl_off":
     btc_live.set_enabled(False);pre="🔴 Robô BTC desligado: não abre novas. Uma posição aberta continua com stop e saída até fechar.\n\n"
+   elif action.startswith("bl_usd"):
+    usd=btc_live.set_capital(action[6:])
+    pre="💵 Valor por operação: US$ "+format(usd,"g")+(" (vale a partir da próxima entrada)" if btc_live._load()["positions"] else "")+"\n\n"
    elif action.startswith("bl_lev"):
     lev=btc_live.set_leverage(int(action[6:]))
-    pre="⚙️ Alavancagem: "+str(lev)+"x"+(" (vale a partir da próxima entrada)" if btc_live._load()["open"] else "")+"\n\n"
+    pre="⚙️ Alavancagem: "+str(lev)+"x"+(" (vale a partir da próxima entrada)" if btc_live._load()["positions"] else "")+"\n\n"
    send(chat,pre+btc_live.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Robô BTC: "+str(exc)[:200],keyboard())
   return
@@ -575,7 +589,7 @@ def startup_notice():
    import btc_live
    d=btc_live._load()
    robot=("\n₿ Robô BTC RSI2 4h: "+("🟢 LIGADO" if d["enabled"] else "🔴 desligado")+" · "+str(btc_live.leverage())+"x"+
-    (" · posição "+d["open"]["side"].upper()+" aberta" if d.get("open") else ""))
+    (" · "+str(len(d["positions"]))+" posição(ões) aberta(s)" if d.get("positions") else ""))
   except Exception:robot=""
   send(chat,"🔄 Bot reiniciado — ₿ MODO BTC: pesquisa de estratégias e robô BTC."+robot+
    ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
@@ -856,6 +870,7 @@ def run_async(fn,*args):
   fn(*args)
  threading.Thread(target=run,daemon=True).start()
 BTC_LIVE_ERR={}
+BTC_USD_ASK={}
 def btc_live_loop():
  """Real-money BTC robot (RSI2 4h): every minute check the stop / exits, or enter after a 4 h close."""
  import btc_live
