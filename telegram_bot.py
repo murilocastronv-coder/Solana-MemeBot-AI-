@@ -423,8 +423,9 @@ def handle(update):
   except Exception:send(chat,"Ainda não há resultado. Toque em 🔬 Testar estratégias BTC.",keyboard())
   return
  if action in ("/pesquisa_btc","/pesquisabtc","btc_research"):   # research only: tests strategies, places no orders
-  send(chat,"🔬 Pesquisa BTC: baixando 1 ano de velas de 15 min e testando ~430 estratégias de 5 tipos "
-   "(escolhe em 8 meses, confere em 4). Leva uns 3–8 minutos. Nenhuma ordem é enviada.")
+  send(chat,"🔬 Pesquisa BTC: baixando 1 ano de velas e testando ~2.200 variações de 13 estratégias clássicas "
+   "(Turtle, médias, MACD, Supertrend, RSI2, Bollinger, Keltner, SAR, Ichimoku, Heikin-Ashi, ADX, Larry Williams) "
+   "em 15m, 1h e 4h (escolhe em 8 meses, confere em 4). Leva uns 5–15 minutos. Nenhuma ordem é enviada.")
   run_async(btc_research_job,chat);return
  if OWNER_MENU=="btc" and action in ("/start","/menu","help"):
   send(chat,"₿ MODO BTC: aqui só a pesquisa de estratégias de BTC alavancado (nenhuma ordem é enviada).\n"

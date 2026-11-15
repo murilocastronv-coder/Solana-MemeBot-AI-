@@ -23,14 +23,32 @@ def walk(n, drift=0.0, vol=0.003, seed=1):
 class SignalTests(unittest.TestCase):
     def test_every_family_has_variants(self):
         fams = {e["family"] for e in br.entry_configs()}
-        self.assertEqual(fams, {"breakout", "ema_cross", "rsi_rev", "bb_rev", "squeeze"})
-        self.assertGreaterEqual(len(br.entry_configs()) * len(br.exit_configs()), 400)
+        self.assertEqual(fams, set(br.FAMILY_NAMES))
+        self.assertGreaterEqual(len(br.entry_configs()) * len(br.exit_configs()) * len(br.TFS), 2000)
+
+    def test_every_variant_fires_on_a_random_walk(self):
+        data = br.Data(walk(3000, seed=5))
+        new = {"macd", "supertrend", "keltner", "psar", "ichimoku", "heikin", "adx", "williams"}
+        for e in br.entry_configs():
+            if e["family"] in new:
+                self.assertTrue(any(br.signals(data, e)), e)
+
+    def test_resample_builds_complete_candles(self):
+        cs = walk(16 * 10 + 5, seed=3)
+        h4 = br.resample(cs, 14400)
+        self.assertTrue(all(c["t"] % 14400 == 0 for c in h4))
+        g = [c for c in cs if c["t"] // 14400 * 14400 == h4[1]["t"]]
+        self.assertEqual((h4[1]["o"], h4[1]["c"], h4[1]["h"]), (g[0]["o"], g[-1]["c"], max(c["h"] for c in g)))
 
     def test_no_look_ahead(self):
         cs = walk(3000, 0.0001, seed=4)
         full, cut = br.Data(cs), br.Data(cs[:2000])
         for e in br.entry_configs():
             self.assertEqual(br.signals(full, e)[:2000], br.signals(cut, e), e)
+        h1 = br.resample(cs, 3600)
+        full, cut = br.Data(h1, 3600), br.Data(h1[:500], 3600)
+        for e in br.entry_configs():
+            self.assertEqual(br.signals(full, e)[:500], br.signals(cut, e), e)
 
     def test_stop_before_target_in_same_candle(self):
         cs = walk(400, seed=2)
@@ -51,7 +69,8 @@ class SearchTests(unittest.TestCase):
         t = time.time()
         rep = br.search(cs)
         took = time.time() - t
-        self.assertEqual(rep["tested"], len(br.entry_configs()) * len(br.exit_configs()))
+        self.assertEqual(rep["tested"], len(br.entry_configs()) * len(br.exit_configs()) * len(br.TFS))
+        self.assertEqual(set(rep["per_tf"]), {"15m", "1h", "4h"})
         text = br.report_text(rep)
         self.assertIn("PESQUISA BTC", text)
         if rep["winner"]:
