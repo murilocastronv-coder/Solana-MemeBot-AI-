@@ -642,7 +642,30 @@ def launch_stats(dev, d=None, launches_fn=None):
     return {"launches": len(times), "launch_days": round((ts[-1] - ts[0]) / 86400, 1) if len(ts) > 1 else 0.0}
 
 
-def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=None):
+TIER_OK = ("ELITE", "PREMIUM", "APROVADO")
+
+
+def _notify_tier(dev, was, st, send=None, chat=None):
+    """Owner (Nov 15): Telegram notice when a dev becomes approved (and when an approved dev loses it)."""
+    now_ok, was_ok = st.get("tier") in TIER_OK, was in TIER_OK
+    if not send or not chat or now_ok == was_ok or st.get("tier") is None:
+        return
+    try:
+        if now_ok:
+            send(chat, "🏅 NOVO DEV APROVADO (" + st["tier"] + ")\n`" + dev + "`\nAcerto " + format(st["win"] * 100, ".0f") +
+                 "% · " + str(st["trades"]) + " operações · PF " + format(st["pf"], ".1f") + " · lucro US$ " +
+                 format(st["pnl"], "+,.0f") + " · score " + format(st["score"], ".0f") +
+                 ("\n🪪 " + str(st["launches"]) + " moedas criadas com esta carteira em " + format(st.get("launch_days", 0), ".0f") +
+                  " dias" if "launches" in st else "") +
+                 "\nO robô vai copiar as próximas compras dele (US$ " + format(buy_usd(), "g") + ", se passar nos filtros).")
+        else:
+            send(chat, "⚠️ DEV `" + dev + "` perdeu a aprovação: " + (st.get("why") or st.get("tier", "")) +
+                 ". O robô não copia mais as compras dele.")
+    except Exception:
+        logging.exception("devbot notice failed")
+
+
+def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=None, send=None, chat=None):
     """Rate the devs waiting in line (never rated first). A wallet with too few transactions to have
     MIN trades is dismissed with one cheap call instead of a full history read. Returns devs rated."""
     now = now or time.time()
@@ -695,9 +718,11 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
                 stats["hist"] = _merge_hist(cur.get("hist"), stats["hist"])
             if cur.get("tier") == "BLOQUEADO" and now < float(cur.get("rated") or 0):
                 continue                                   # blocked dev (hid its coins): stays blocked
+            was = cur.get("tier")
             cur.update(stats, rated=now)
             _save(dd)
         done += 1
+        _notify_tier(dev, was, stats, send, chat)
         note("DEV " + dev[:6] + "… " + stats.get("tier", "?") + (" — " + stats["why"] if stats.get("why") else "") +
              (" · acerto " + format(stats["win"] * 100, ".0f") + "% · " + str(stats["trades"]) + " ops · PF " +
               format(stats["pf"], ".1f") + " · score " + format(stats["score"], ".0f") if "win" in stats else ""))
