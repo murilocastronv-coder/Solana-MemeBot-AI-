@@ -364,3 +364,23 @@ class RecentResultTests(unittest.TestCase):
             c.cycle()
         op.assert_not_called()
         self.assertIn("aguardando auditoria", c.status_text())
+
+
+class CopyBreakevenNoticeTests(unittest.TestCase):
+    def test_notice_once_when_the_entry_stop_arms(self):
+        from unittest import mock
+        import live_exit_monitor as m
+        pos = {"mode": "copy", "token_amount_raw": 100, "cost_usd": 10.0, "opened_at": 0}
+        st = {"positions": {"MINT": pos}, "pending": {}}
+        m.BE_ARMED.clear()
+        with mock.patch.object(m, "_load", return_value=st), mock.patch.object(m, "quote_value_usd", return_value=16.0), \
+                mock.patch("live_trade_state.update_peak"), mock.patch("live_trade_state.set_position_fields") as setf:
+            list(m._evaluate())
+        self.assertEqual(len(m.BE_ARMED), 1)
+        setf.assert_any_call("MINT", be_armed=True)
+        m.BE_ARMED.clear()
+        with mock.patch.object(m, "_load", return_value={"positions": {"MINT": dict(pos, be_armed=True)}, "pending": {}}), \
+                mock.patch.object(m, "quote_value_usd", return_value=16.0), mock.patch("live_trade_state.update_peak"), \
+                mock.patch("live_trade_state.set_position_fields"):
+            list(m._evaluate())
+        self.assertEqual(m.BE_ARMED, [])

@@ -392,7 +392,12 @@ def exit_cycle(send, chat):
     now = time.monotonic()
     signals = sell_signals()
     _log_positions(signals)
-    from live_exit_monitor import ARMED, trail_text
+    from live_exit_monitor import ARMED, BE_ARMED, COPY_BE_ARM, trail_text
+    while BE_ARMED:
+        m, p, sig = BE_ARMED.pop(0)
+        send(chat, "🛡️ STOP NA ENTRADA ATIVADO — " + str(p.get("symbol") or m[:6]) + " " + format(sig["change_pct"], "+.0f") +
+             "% (passou de +" + format(COPY_BE_ARM * 100, ".0f") + "%)\nSe voltar até o preço da compra, vendo tudo sem prejuízo. "
+             "Continua vendendo junto com a carteira copiada.\n" + m)
     while ARMED:
         m, p, sig = ARMED.pop(0)
         send(chat, "🚀 STOP MÓVEL ATIVADO — " + str(p.get("symbol") or m[:6]) + " " + format(sig["change_pct"], "+.0f") +
@@ -431,8 +436,8 @@ def exit_cycle(send, chat):
         if held is not None and held < amount:
             state.set_position_amount(mint, held)  # transfer-fee tokens: sell what we really hold
             amount = held
-        label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO ESGOTADO",
-                 "copy_breakeven": "🛡️ STOP NA ENTRADA"}.get(signal["reason"], "🛑 STOP LOSS")
+        label = {"take_profit": "🚀 STOP MÓVEL ACIONADO", "time_stop": "⏱️ TEMPO ESGOTADO",
+                 "copy_breakeven": "🛡️ STOP NA ENTRADA ACIONADO"}.get(signal["reason"], "🛑 STOP LOSS ACIONADO")
         send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO " + symbol + "\n" + mint)
         try:
             state.mark_exit_reason(mint, signal["reason"])
