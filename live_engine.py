@@ -221,7 +221,8 @@ def sell_part(mint, fraction, reason, send, chat, note=None):
         send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + format(float(fraction) * 100, ".0f") + "% de " +
              symbol + " (" + (note or "a carteira copiada vendeu essa parte") + ")\n💵 Parte: US$ " + format(settled["cost_usd"], ".2f") +
              " → US$ " + format(settled["proceeds_usd"], ".2f") + " · P/L " + format(pnl, "+.2f") + " USD\n" +
-             "📦 O resto continua aberto" + (" com stop móvel." if note else " e vende junto com a carteira.") + "\n🔗 https://solscan.io/tx/" + settled["signature"])
+             "📦 O resto continua aberto" + (" e vende junto com a carteira (stop na entrada ativo)." if str(reason).startswith("copy")
+                                            else " com stop móvel." if note else " e vende junto com a carteira.") + "\n🔗 https://solscan.io/tx/" + settled["signature"])
         return "sold"
     send(chat, "⏳ Venda parcial enviada, conferindo saldo. Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" +
          str(result["signature"]))
@@ -297,6 +298,7 @@ def sell_message(symbol, signal, settled):
            "launch_dev_sold": "🚨 Criador vendeu (sinal de rug): saiu na hora",
            "launch_time": "⏱️ Tempo máximo encerrado",
            "copy_follow": "👥 A carteira copiada vendeu",
+           "copy_breakeven": "🛡️ Copy: subiu e voltou para a entrada (stop na entrada, sem prejuízo)",
            "rocket_protect": "🛡️ Sniper: proteção de lucro (chegou a +15% e voltou para -5%)",
            "rocket_coin_crash": "🛑 Sniper: uma moeda caiu 50% (fechou todas)",
            "rocket_basket_stop": "🛑 Sniper: as ordens juntas caíram 25% (fechou todas)",
@@ -411,11 +413,25 @@ def exit_cycle(send, chat):
             send(chat, "⚠️ A carteira não tem mais " + symbol + " (" + mint + "). Foi vendida fora do bot ou a moeda "
                  "sumiu. Removi da lista para o robô continuar.")
             continue
+        if signal["action"] == "sell_part":
+            # copy profit ladder: take COPY_TP_PART of what is left, the rest keeps following the wallet
+            try:
+                r = sell_part(mint, signal["fraction"], signal["reason"], send, chat,
+                              note="lucro: subiu " + format(signal["change_pct"], "+.0f") + "%, tirei " +
+                              format(signal["fraction"] * 100, ".0f") + "%")
+            except Exception as exc:
+                _sell_failed[mint] = time.monotonic()
+                _failure(send, chat, "venda parcial", mint, exc)
+                continue
+            if r in ("sold", "pending"):
+                state.set_position_fields(mint, copy_tp_done=int(position.get("copy_tp_done") or 0) + 1)
+            return  # one order per cycle
         amount = int(position["token_amount_raw"])
         if held is not None and held < amount:
             state.set_position_amount(mint, held)  # transfer-fee tokens: sell what we really hold
             amount = held
-        label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO ESGOTADO"}.get(signal["reason"], "🛑 STOP LOSS")
+        label = {"take_profit": "🚀 STOP MÓVEL", "time_stop": "⏱️ TEMPO ESGOTADO",
+                 "copy_breakeven": "🛡️ STOP NA ENTRADA"}.get(signal["reason"], "🛑 STOP LOSS")
         send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO " + symbol + "\n" + mint)
         try:
             state.mark_exit_reason(mint, signal["reason"])

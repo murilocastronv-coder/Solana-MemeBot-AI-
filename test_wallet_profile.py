@@ -139,10 +139,23 @@ class FollowWalletExitTests(unittest.TestCase):
         import time
         import live_exit_monitor as m
         pos = {"mode": "copy", "copy_tp": 0.3, "copy_sl": 0.1, "opened_at": time.time()}
-        self.assertEqual(m.position_signal(pos, 10, 30.0)["action"], "hold")    # +200%: still holds
-        self.assertEqual(m.position_signal(pos, 10, 2.0)["action"], "hold")     # -80%: still holds
+        self.assertEqual(m.position_signal(pos, 10, 15.0)["action"], "hold")    # +50%: follows the wallet
+        self.assertEqual(m.position_signal(pos, 10, 2.0)["action"], "hold")     # -80% (never went up): still holds
         robot = dict(pos, mode="clone")
         self.assertEqual(m.position_signal(robot, 10, 13.1)["action"], "sell")  # strategy robot keeps TP/SL
+
+
+class CopyGuardTests(unittest.TestCase):
+    def test_breakeven_and_ladder(self):
+        import time
+        import live_exit_monitor as m
+        pos = {"mode": "copy", "opened_at": time.time()}
+        self.assertEqual(m.position_signal(dict(pos, peak_ratio=1.3), 10, 9.9)["reason"], "copy_breakeven")
+        self.assertEqual(m.position_signal(dict(pos, peak_ratio=1.1), 10, 9.9)["action"], "hold")   # never reached +25%
+        s = m.position_signal(pos, 10, 20.5)                                      # +105%: take 25%
+        self.assertEqual((s["action"], s["fraction"]), ("sell_part", 0.25))
+        self.assertEqual(m.position_signal(dict(pos, copy_tp_done=1, peak_ratio=2.1), 10, 22.0)["action"], "hold")
+        self.assertEqual(m.position_signal(dict(pos, copy_tp_done=1, peak_ratio=2.1), 10, 25.5)["action"], "sell_part")
 
 
 class NewRulesTests(unittest.TestCase):
