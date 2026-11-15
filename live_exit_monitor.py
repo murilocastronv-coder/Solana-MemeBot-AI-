@@ -57,10 +57,13 @@ COPY_BE_ARM = float(os.getenv("COPY_BE_ARM", "0.25"))
 COPY_TP_FIRST = float(os.getenv("COPY_TP_FIRST", "2.0"))
 COPY_TP_STEP = float(os.getenv("COPY_TP_STEP", "0.5"))
 COPY_TP_PART = float(os.getenv("COPY_TP_PART", "0.25"))
+COPY_HARD_STOP = float(os.getenv("COPY_HARD_STOP", "0.50"))     # owner (Nov 15): stop loss -50% on every copy
 
 
 def copy_wallet_guard(position, ratio, peak):
     """Ladder / breakeven signal for a copy position, or None."""
+    if COPY_HARD_STOP > 0 and ratio <= 1 - COPY_HARD_STOP:
+        return {"action": "sell", "reason": "stop_loss", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     done = int(position.get("copy_tp_done") or 0)
     nxt = COPY_TP_FIRST + COPY_TP_STEP * done
     if COPY_TP_PART > 0 and ratio >= nxt:

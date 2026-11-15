@@ -7,7 +7,7 @@ POS = {"mode": "copy", "token_amount_raw": 1, "cost_usd": 10}
 
 class CopyTrailingStopTest(unittest.TestCase):
     def test_holds_below_arm_without_fixed_stop(self):
-        self.assertEqual(m.position_signal(dict(POS), 10, 5)["action"], "hold")      # -50%: only the wallet exits
+        self.assertEqual(m.position_signal(dict(POS), 10, 6)["action"], "hold")      # -40%: only the wallet exits (stop is -50%)
         self.assertEqual(m.position_signal(dict(POS), 10, 12)["action"], "hold")     # +20%: not armed yet
 
     def test_arms_and_sells_below_top(self):
