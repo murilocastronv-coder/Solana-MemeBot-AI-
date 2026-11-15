@@ -139,6 +139,7 @@ OWNER_MENU=os.getenv("OWNER_MENU","btc").strip().lower()   # "btc" (owner, Nov 1
 def btc_keyboard():
  return [[{"text":"🔬 Testar estratégias BTC","callback_data":"btc_research"}],
   [{"text":"📊 Último resultado BTC","callback_data":"btc_last"}],
+  [{"text":"🧪 Testar compra no fundo (6 meses)","callback_data":"btc_dip"}],
   [{"text":"₿ Robô BTC RSI2 4h: status","callback_data":"bl_status"}],
   [{"text":"🟢 Ligar robô (real)","callback_data":"bl_on"},{"text":"🔴 Desligar robô","callback_data":"bl_off"}],
   [{"text":str(n)+"x","callback_data":"bl_lev"+str(n)} for n in (2,3,4,5)],
@@ -461,6 +462,21 @@ def handle(update):
    send(chat,pre+btc_live.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Robô BTC: "+str(exc)[:200],keyboard())
   return
+ if action in ("btc_dip","/fundo"):   # owner's "buy the bottom" strategy, backtest only
+  import btc_dip
+  if btc_dip.RESULT["running"]:send(chat,"🧪 O teste já está rodando, o resultado chega aqui.",keyboard());return
+  send(chat,"🧪 Testando a compra no fundo nos últimos 6 meses do BTC (cai 15% → compra, cada −15% compra de novo, "
+   "vende tudo com +7%) em 1x a 5x. Leva 1–3 minutos. Nenhuma ordem é enviada.")
+  def job():
+   btc_dip.RESULT["running"]=True
+   try:
+    btc_dip.RESULT["text"]=btc_dip.run()
+    for part in split_message(btc_dip.RESULT["text"]):send(chat,part,keyboard())
+   except Exception as exc:
+    logging.exception("btc dip test failed")
+    send(chat,"⛔ Teste da compra no fundo falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
+   finally:btc_dip.RESULT["running"]=False
+  run_async(job);return
  if action in ("/pesquisa_btc","/pesquisabtc","btc_research"):   # research only: tests strategies, places no orders
   send(chat,"🔬 Pesquisa BTC: baixando 1 ano de velas e testando ~2.200 variações de 13 estratégias clássicas "
    "(Turtle, médias, MACD, Supertrend, RSI2, Bollinger, Keltner, SAR, Ichimoku, Heikin-Ashi, ADX, Larry Williams) "

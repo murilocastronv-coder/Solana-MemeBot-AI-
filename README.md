@@ -201,3 +201,8 @@ conferência, então o futuro tende a ser pior. Não é promessa de lucro.
 - **📥 Depositar / 💸 Retirar / 💰 Saldo** (menu BTC, só o dono): Depositar mostra o endereço da carteira
   do bot; Retirar pede o endereço de destino, o valor em SOL (ou `tudo`, deixando 0,003 SOL para taxas)
   e só envia depois do botão **✅ Confirmar saque** (`/cancelar` cancela).
+
+## 🧪 Compra no fundo (`/fundo`, só teste)
+Teste dos últimos 6 meses da estratégia do dono: compra US$ 100 quando o BTC cai 15% do topo, compra de
+novo a cada −15% (máx. 3 compras), vende tudo com +7% acima do preço médio. Mostra cada operação,
+o resultado em 1x a 5x (com liquidação, taxas e juros) e uma comparação com quedas de 10% e 20%.
