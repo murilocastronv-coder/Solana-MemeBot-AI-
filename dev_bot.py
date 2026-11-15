@@ -608,7 +608,7 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
         if stats is None:
             try:
                 import wallet_profile
-                _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX)
+                _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX, mcaps=False)
                 stats = rate_dev(closed, now)
                 stats["hist"] = _hist(closed)[-300:]
                 stats["hist_v2"] = True
@@ -844,7 +844,7 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
             if stats is None:
                 try:
                     import wallet_profile
-                    _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=max(DEV_AUDIT_TX, 1000))
+                    _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=max(DEV_AUDIT_TX, 1000), mcaps=False)
                     stats = rate_dev(closed, now)
                     stats["hist"] = _hist(closed)[-1000:]
                 except Exception as exc:
