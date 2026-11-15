@@ -40,7 +40,11 @@ def csrf_ok(token):
     return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
 
 
-ACTIONS = {"copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado",
+ACTIONS = {"dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
+           "dv_bt365": "Backtest DEV de 12 meses iniciado", "dv_btc": "Backtest DEV do período escolhido iniciado",
+           "dv_btx": "Backtest DEV cancelado", "dv_on": "Robô DEV rodando", "dv_off": "Robô DEV pausado",
+           "dv_stop": "PARADA DE EMERGÊNCIA: robô DEV pausado e posições vendidas",
+           "copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado",
            "rks_on": "Sinais do Sniper ligados", "rks_off": "Sinais do Sniper desligados"}
 
 
@@ -136,6 +140,8 @@ a{color:#9db4ff}.pill{display:inline-block;padding:2px 8px;border-radius:99px;fo
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
 .btn{border:0;border-radius:10px;padding:10px 14px;font-size:15px;font-weight:600;color:#fff;background:#3a3f4b;cursor:pointer;margin:2px 4px 2px 0}
 .btn.go{background:#2e8b57}.btn.stop{background:#b23b3b}
+.btn.big{display:block;width:100%;font-size:18px;padding:16px;background:#7c5cff}
+.bar{height:14px;border-radius:7px;background:var(--line);overflow:hidden}.bar>i{display:block;height:100%;background:var(--acc)}
 .trail{border-color:#5b4bd1}.flash{animation:fl 1s ease-in-out 4}
 @keyframes fl{50%{background:#2b2560;border-color:#a594ff}}
 .tabs{display:flex;gap:6px;overflow-x:auto;margin:12px 0 4px;padding-bottom:4px}
@@ -312,8 +318,49 @@ TABS_JS = """
 </script>
 """
 
-TAB_LIST = (("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
+TAB_LIST = (("t-bt", "🧪 Backtest"), ("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
             ("t-bots", "🤖 Robôs"), ("t-avisos", "🔔 Avisos"))
+
+
+def _sparkline(vals, w=320, h=60):
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    span = (hi - lo) or 1
+    pts = " ".join(format(i * w / (len(vals) - 1), ".1f") + "," + format(h - (v - lo) / span * (h - 4) - 2, ".1f")
+                   for i, v in enumerate(vals))
+    color = "var(--up)" if vals[-1] >= vals[0] else "var(--down)"
+    return ("<svg viewBox='0 0 " + str(w) + " " + str(h) + "' style='width:100%;max-width:" + str(w) +
+            "px;height:auto'><polyline fill='none' stroke='" + color + "' stroke-width='2' points='" + pts + "'/></svg>")
+
+
+def backtest_tab():
+    """Owner's spec: big EXECUTAR BACKTEST — 5 MESES button, period choice, progress, cancel, history, CSV."""
+    import dev_backtest as dbt
+    j = dbt.job()
+    rs = dbt.runs()
+    out = ["<div class='card'><h2>🧪 Backtest do robô DEV</h2>", _button("dv_bt150", "▶ EXECUTAR BACKTEST — 5 MESES", "big"),
+           "<div style='margin-top:8px'>", _button("dv_bt180", "6 meses"), _button("dv_bt365", "12 meses"),
+           _button("dv_btx", "⏹️ Cancelar", "stop"), "</div>",
+           "<form method='post' action='/painel/acao' style='margin-top:10px'><input type='hidden' name='csrf' value='",
+           csrf_token(), "'><input type='hidden' name='acao' value='dv_btc'>Período escolhido: <input type='date' name='inicio' "
+           "required> até <input type='date' name='fim' required> <button class='btn'>▶ Executar</button></form>"]
+    if j:
+        prog = int(j.get("progress") or 0)
+        out += ["<div style='margin-top:12px'><b>", _e(j.get("label", "")), "</b> — ", _e(j.get("status", "")), " · ",
+                _e(j.get("stage", "")), "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div>",
+                "<div class='mut'>", str(prog), "% · começou há ", _ago(j.get("started")), "</div></div>"]
+    out.append("<div class='mut' style='margin-top:8px'>Roda no servidor: pode fechar a página. O resultado chega também no "
+               "Telegram. Nenhum número é inventado: períodos sem dados aparecem como faltando.</div></div>")
+    for r in rs[::-1]:
+        best = (r.get("summary") or {}).get(r.get("best") or "", {})
+        curve = (best.get("full") or {}).get("curve") or []
+        out += ["<div class='card'><h2>", _e(r.get("label")), " · ", _e(time.strftime("%d/%m %H:%M", time.gmtime(r.get("created") or 0))),
+                "</h2>", _sparkline(curve), "<pre>", _e(r.get("text", "")), "</pre><a href='/painel/backtest.csv?id=",
+                _e(r.get("id")), "'>⬇️ Baixar operações (CSV)</a></div>"]
+    if not rs:
+        out.append("<div class='card mut'>Nenhum backtest salvo ainda.</div>")
+    return "".join(out)
 
 
 def page(msg=""):
@@ -330,6 +377,9 @@ def page(msg=""):
     if msg:
         out += ["<div class='card' style='border-color:var(--acc)'>✅ ", _e(msg), "</div>"]
     out.append("<nav class='tabs'>" + "".join("<button type='button' data-t='" + t + "'>" + label + "</button>" for t, label in TAB_LIST) + "</nav>")
+
+    # ---- Backtest DEV
+    out += ["<section class='tab' id='t-bt'>", _safe(backtest_tab), "</section>"]
 
     # ---- Resumo
     out.append("<section class='tab' id='t-resumo'>")
