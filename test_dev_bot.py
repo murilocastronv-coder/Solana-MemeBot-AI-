@@ -115,6 +115,10 @@ class DevCycleTest(unittest.TestCase):
         good = [pos("M" + str(i), 20, 0.5, NOW - i * 20000) for i in range(32)] + [pos("X", -2, -0.1, NOW - 99 * 3600)]
         kw = dict(rpc=rpc, pairs=[pair()], get_tx=lambda r, s: txs.get(s, {}), sol_usd=200,
                   safety=lambda m: "", analyze=lambda *a, **k: ({}, good, ""), prices_fn=lambda ms, bm: {"TOK": 1.0})
+        lp = mock.patch.object(db, "MIN_LAUNCHES", 1), mock.patch.object(db, "MIN_LAUNCH_DAYS", 0)
+        for x in lp:
+            x.start()
+            self.addCleanup(x.stop)
         db.cycle(now=NOW, **kw)          # finds the creator, rates the dev, remembers its last tx
         self.assertEqual(db._load()["devs"][DEV]["tier"], "ELITE")
         db.cycle(now=NOW + 60, **kw)     # the dev buys its own token (5% of the supply) -> simulated copy
@@ -154,7 +158,7 @@ class DevTransferScamTest(unittest.TestCase):
     def test_hidden_transfer_sells_and_blocks(self):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
             d = db._load()
-            d["devs"] = {DEV: {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3, "rated": NOW, "last_sig": "old"}}
+            d["devs"] = {DEV: {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3, "rated": NOW, "last_sig": "old", "launches": 10}}
             d["tokens"] = {"TOK": {"dev": DEV, "seen": NOW, "symbol": "TOK", "last_sig": "old"}}
             db._save(d)
             db.sim_buy(pair(), DEV, "t", NOW)
@@ -257,3 +261,17 @@ class DevBacktestOutlierTest(unittest.TestCase):
             self.assertIn("1 fora", txt)
             self.assertFalse(db.bt_ok({"result_pct": 0.5, "cost_usd": 0.01}))
             self.assertTrue(db.bt_ok({"result_pct": 0.5, "cost_usd": 20}))
+
+
+class DevSameWalletTest(unittest.TestCase):
+    def test_throwaway_wallet_is_not_approved(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            good = [pos("M" + str(i), 20, 0.5, NOW - i * 20000) for i in range(32)]
+            st = db.rate_dev(good, NOW)
+            self.assertEqual(st["tier"], "ELITE")
+            st.update(db.launch_stats(DEV, launches_fn=lambda d: [(NOW - 3600, "A"), (NOW, "B")]))
+            self.assertEqual(db.tier(st)[0], "MONITORADO")
+            self.assertIn("troca de carteira", db.tier(st)[1])
+            st.update(db.launch_stats(DEV, launches_fn=lambda d: [(NOW - i * 3 * 86400, "C" + str(i)) for i in range(6)]))
+            self.assertEqual(st["launches"], 6)
+            self.assertEqual(db.tier(st)[0], "ELITE")

@@ -98,6 +98,27 @@ def helius_parse(tx, wallet):
     return None
 
 
+def helius_launches(address, key, get=None, pages=2):
+    """Timestamps of the coins this wallet CREATED (Helius type=CREATE, mostly pump.fun launches)."""
+    url = "https://api.helius.xyz/v0/addresses/" + address + "/transactions"
+    out, before = [], None
+    for _ in range(pages):
+        params = {"api-key": key, "limit": 100, "type": "CREATE"}
+        if before:
+            params["before"] = before
+        page = _helius_get(url, params, get) or []
+        if not isinstance(page, list) or not page:
+            break
+        for tx in page:
+            if not tx.get("transactionError") and tx.get("feePayer", address) == address:
+                out.append((int(tx.get("timestamp") or 0), next((t.get("mint") for t in tx.get("tokenTransfers") or []
+                                                                    if t.get("mint")), None)))
+        before = page[-1].get("signature")
+        if len(page) < 100 or not before:
+            break
+    return out
+
+
 def helius_trades(address, max_tx, key, get=None):
     """Trades from Helius' parsed history: 100 transactions per call instead of 1 RPC call each."""
     url = "https://api.helius.xyz/v0/addresses/" + address + "/transactions"
