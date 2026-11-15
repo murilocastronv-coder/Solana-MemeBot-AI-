@@ -384,3 +384,42 @@ class CopyBreakevenNoticeTests(unittest.TestCase):
                 mock.patch("live_trade_state.set_position_fields"):
             list(m._evaluate())
         self.assertEqual(m.BE_ARMED, [])
+
+
+class HeliusParseTest(unittest.TestCase):
+    def test_enhanced_tx_buy_and_sell(self):
+        import wallet_profile as wp
+        W = "Wallet111"
+        buy = {"signature": "s1", "timestamp": 100, "source": "PUMP_FUN", "transactionError": None,
+               "accountData": [{"account": W, "nativeBalanceChange": -1_000_000_000, "tokenBalanceChanges": [
+                   {"userAccount": W, "mint": "Mpump", "rawTokenAmount": {"tokenAmount": "5000000", "decimals": 6}}]}]}
+        sell = {"signature": "s2", "timestamp": 200, "source": "PUMP_AMM",
+                "accountData": [{"account": W, "nativeBalanceChange": 2_000_000_000, "tokenBalanceChanges": [
+                    {"userAccount": W, "mint": "Mpump", "rawTokenAmount": {"tokenAmount": "-5000000", "decimals": 6}}]}]}
+        b = wp.helius_parse(buy, W)
+        self.assertEqual((b["side"], b["tokens"], b["sol"], b["platform"]), ("buy", 5.0, 1.0, "pump.fun"))
+        s = wp.helius_parse(sell, W)
+        self.assertEqual((s["side"], s["sol"], s["platform"]), ("sell", 2.0, "PumpSwap"))
+
+        class R:
+            status_code = 200
+
+            def __init__(self, data):
+                self.data = data
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.data
+
+        pages = [[sell, buy], []]
+        _, closed, _ = wp.analyze(W, rpc=None, sol_usd=100, max_tx=300, mcaps=False, helius="KEY",
+                                  helius_get=lambda url, params, timeout: R(pages.pop(0)))
+        self.assertEqual(len(closed), 1)
+        self.assertAlmostEqual(closed[0]["pnl_usd"], 100.0)
+
+    def test_key_only_from_helius_url(self):
+        import wallet_profile as wp
+        self.assertEqual(wp.helius_key("https://mainnet.helius-rpc.com/?api-key=abc&x=1"), "abc")
+        self.assertEqual(wp.helius_key("https://api.mainnet-beta.solana.com"), "")

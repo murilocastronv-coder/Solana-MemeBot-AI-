@@ -32,6 +32,92 @@ PROGRAMS = {
 }
 
 MAX_SIGNATURES = int(os.getenv("PROFILE_MAX_TX", "400"))
+HELIUS_SOURCES = {"PUMP_FUN": "pump.fun", "PUMP_AMM": "PumpSwap", "RAYDIUM": "Raydium", "JUPITER": "Jupiter",
+                  "METEORA": "Meteora", "ORCA": "Orca", "RAYDIUM_LAUNCHLAB": "Raydium LaunchLab"}
+HELIUS_GAP_S = float(os.getenv("HELIUS_API_GAP_SECONDS", "0.4"))
+_helius_last = [0.0]
+
+
+def helius_key(rpc_url=None):
+    """The Helius API key inside SOLANA_RPC_URL (…helius-rpc.com/?api-key=KEY), or ''. Never logged."""
+    url = rpc_url if rpc_url is not None else os.getenv("SOLANA_RPC_URL", "")
+    if "helius" not in url or "api-key=" not in url:
+        return ""
+    return url.split("api-key=", 1)[1].split("&", 1)[0]
+
+
+def _helius_get(url, params, get=None):
+    import threading
+    import requests
+    lock = _helius_get.__dict__.setdefault("lock", threading.Lock())
+    with lock:
+        wait = _helius_last[0] + HELIUS_GAP_S - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _helius_last[0] = time.time()
+    for attempt in range(4):
+        r = (get or requests.get)(url, params=params, timeout=25)
+        if r.status_code == 429 or r.status_code >= 500:
+            time.sleep(1.0 * 2 ** attempt)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r.raise_for_status()
+    return []
+
+
+def helius_parse(tx, wallet):
+    """Same trade dict as parse_swap, from a Helius enhanced transaction (accountData balance changes)."""
+    if not isinstance(tx, dict) or tx.get("transactionError"):
+        return None
+    deltas, sol = {}, 0.0
+    for acc in tx.get("accountData") or []:
+        if acc.get("account") == wallet:
+            sol += float(acc.get("nativeBalanceChange") or 0) / 1e9
+        for ch in acc.get("tokenBalanceChanges") or []:
+            if ch.get("userAccount") != wallet:
+                continue
+            raw = ch.get("rawTokenAmount") or {}
+            dec = int(raw.get("decimals") or 0)
+            amount = int(raw.get("tokenAmount") or 0) / (10 ** dec)
+            deltas[ch.get("mint")] = deltas.get(ch.get("mint"), 0.0) + amount
+    sol += deltas.get(SOL_MINT, 0.0)
+    stable = deltas.get(USDC_MINT, 0.0) + deltas.get(USDT_MINT, 0.0)
+    tokens = {m: v for m, v in deltas.items() if m and m not in QUOTES and abs(v) > 0}
+    if len(tokens) != 1:
+        return None
+    mint, change = next(iter(tokens.items()))
+    platform = HELIUS_SOURCES.get(str(tx.get("source") or "").upper(), "outro")
+    if platform == "outro" and str(mint).endswith("pump"):
+        platform = "pump.fun"
+    t = int(tx.get("timestamp") or 0)
+    if change > 0 and (sol < 0 or stable < 0):
+        return {"side": "buy", "mint": mint, "tokens": change, "sol": -sol, "stable": -stable, "platform": platform, "t": t}
+    if change < 0 and (sol > 0 or stable > 0):
+        return {"side": "sell", "mint": mint, "tokens": -change, "sol": sol, "stable": stable, "platform": platform, "t": t}
+    return None
+
+
+def helius_trades(address, max_tx, key, get=None):
+    """Trades from Helius' parsed history: 100 transactions per call instead of 1 RPC call each."""
+    url = "https://api.helius.xyz/v0/addresses/" + address + "/transactions"
+    trades, before, seen = [], None, 0
+    while seen < max_tx:
+        params = {"api-key": key, "limit": min(100, max_tx - seen)}
+        if before:
+            params["before"] = before
+        page = _helius_get(url, params, get) or []
+        if not isinstance(page, list) or not page:
+            break
+        seen += len(page)
+        before = page[-1].get("signature")
+        for tx in page:
+            tr = helius_parse(tx, address)
+            if tr:
+                trades.append(tr)
+        if not before:
+            break
+    return trades, seen
 
 
 def _keys(tx):
@@ -245,9 +331,25 @@ def report(address, s):
     return "\n".join(lines)
 
 
-def analyze(address, rpc, sol_usd, max_tx=MAX_SIGNATURES, get_json=None, tx_version=None):
+def analyze(address, rpc, sol_usd, max_tx=MAX_SIGNATURES, get_json=None, tx_version=None, mcaps=True,
+            helius=None, helius_get=None):
     """Full analysis. Returns (summary dict, closed positions, report text)."""
     tx_version = tx_version if tx_version is not None else int(os.getenv("SOLANA_MAX_TX_VERSION", "1"))
+    trades = None
+    key = helius_key() if helius is None else helius
+    if key:
+        try:
+            trades, _ = helius_trades(address, max_tx, key, helius_get)
+        except Exception as exc:
+            import logging
+            logging.info("helius history failed (%s), using RPC", type(exc).__name__)
+            trades = None
+    if trades is None:
+        trades = _rpc_trades(address, rpc, max_tx, tx_version)
+    return _finish(address, rpc, sol_usd, trades, get_json, mcaps)
+
+
+def _rpc_trades(address, rpc, max_tx, tx_version):
     sigs, before = [], None
     while len(sigs) < max_tx:
         opts = {"limit": min(1000, max_tx - len(sigs))}
@@ -270,6 +372,10 @@ def analyze(address, rpc, sol_usd, max_tx=MAX_SIGNATURES, get_json=None, tx_vers
         tr = parse_swap(tx, address) if isinstance(tx, dict) else None
         if tr:
             trades.append(tr)
+    return trades
+
+
+def _finish(address, rpc, sol_usd, trades, get_json=None, with_mcaps=True):
     closed, open_now = build_positions(trades, sol_usd)
     ages = []
     if get_json and (closed or open_now):
@@ -287,7 +393,7 @@ def analyze(address, rpc, sol_usd, max_tx=MAX_SIGNATURES, get_json=None, tx_vers
         ages = [(p["opened"] - created[p["mint"]]) / 60 for p in closed + open_now
                 if p["mint"] in created and p["opened"] >= created[p["mint"]]]
     mcaps = []
-    for p in (closed + open_now)[:120]:
+    for p in (closed + open_now)[:120 if with_mcaps else 0]:
         try:
             sup = rpc("getTokenSupply", [p["mint"]]) or {}
             supply = float((sup.get("value") or {}).get("uiAmount") or 0)
