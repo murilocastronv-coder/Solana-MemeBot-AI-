@@ -126,12 +126,14 @@ class DevBacktestButtonTest(unittest.TestCase):
             d = db._load()
             d["devs"] = {DEV: {"tokens_seen": []}}
             db._save(d)
-            closed = [pos("M" + str(i), 5 if i % 10 else -5, 0.4 if i % 10 else -0.2, NOW - i * 20000, NOW - i * 20000 - 600)
-                      for i in range(80)]
+            closed = [pos("M" + str(i) + "pump", 5 if i % 10 else -5, 0.4 if i % 10 else -0.2, NOW - i * 20000, NOW - i * 20000 - 600)
+                      for i in range(80)] + [pos("RAYcoin", 50, 3.0, NOW - 5000, NOW - 5600)]
             txt = db.run_backtest(rpc=object(), sol_usd=200, analyze=lambda *a, **k: ({}, closed, ""), now=NOW)
             self.assertIn("US$ 60", txt)
             self.assertIn("Histórico disponível", txt)
             self.assertTrue(db._load()["devs"][DEV]["hist"])
+            self.assertIn("só moedas da pump.fun", txt)
+            self.assertIn("80 operações reais", txt)          # the Raydium trade is left out
 
 
 class DevBacktestEmptyTest(unittest.TestCase):
