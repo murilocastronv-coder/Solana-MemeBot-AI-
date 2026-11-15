@@ -168,8 +168,9 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
         return None
     _tried[mint] = time.monotonic()
     tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) "}.get(mode, "")
+    liq = liquidity_line(mint, p)
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
-         " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
+         " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + (liq + "\n" if liq else "") + mint)
     try:
         result = bridge.submit_swap(mint, "buy", int(round(order_usd * 1_000_000)), wallet, add_on=add_on)
         settled = _settle(result["order_id"], wallet)
@@ -182,6 +183,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
         send(chat, "🟢 " + tag + "COMPROU " + symbol + "\n"
              "💵 Valor: US$ " + format(order_usd, ".2f") + " (" + format(result["input_amount_raw"] / 1e9, ".4f") + " SOL)\n"
              + EXIT_TEXT[mode] + "\n"
+             + (liq + "\n" if liq else "") +
              "🛡️ Anti-golpe OK\n"
              "📦 Posições abertas: " + str(n) + "/" + str(state.MAX_POSITIONS) + "\n"
              "📄 " + mint + "\n"
@@ -190,6 +192,40 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
         send(chat, "⏳ Compra enviada, conferindo saldo (" + str(settled.get("reason", settled.get("status"))) +
              "). Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" + str(result["signature"]))
     return settled
+
+
+_LIQ_CACHE = {}
+
+
+def liquidity_line(mint, p=None):
+    """'💧 Liquidez: US$ X · market cap US$ Y' of the coin (DexScreener, best pool), '' if unknown."""
+    liq = mcap = None
+    if p:
+        liq = (p.get("liquidity") or {}).get("usd")
+        mcap = p.get("marketCap") or p.get("fdv")
+    if liq is None:
+        hit = _LIQ_CACHE.get(mint)
+        if hit and time.time() - hit[0] < 60:
+            liq, mcap = hit[1], hit[2]
+        else:
+            try:
+                import signals as sg
+                rows = sg._get(sg.DEX + "/tokens/v1/solana/" + mint) or []
+                best = max((r for r in rows if isinstance(r, dict)),
+                           key=lambda r: float((r.get("liquidity") or {}).get("usd") or 0), default=None)
+                if best:
+                    liq = (best.get("liquidity") or {}).get("usd")
+                    mcap = best.get("marketCap") or best.get("fdv")
+                    _LIQ_CACHE[mint] = (time.time(), liq, mcap)
+            except Exception:
+                return ""
+    if liq is None:
+        return ""
+
+    def usd(x):
+        x = float(x or 0)
+        return format(x / 1e6, ",.2f") + " mi" if x >= 1e6 else format(x / 1e3, ",.1f") + " mil"
+    return "💧 Liquidez: US$ " + usd(liq) + (" · market cap US$ " + usd(mcap) if mcap else "")
 
 
 def sell_part(mint, fraction, reason, send, chat, note=None):
