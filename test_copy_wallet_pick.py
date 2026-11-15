@@ -80,3 +80,18 @@ class ResetFoundTest(unittest.TestCase):
             self.assertIn(OTHER, d["wallets"])
             self.assertEqual(d["rejected"], {})
             self.assertEqual(ct.reset_found_wallets_once(), [])
+
+
+class DropReferenceTest(unittest.TestCase):
+    def test_reference_removed_once_and_not_put_back(self):
+        import pathlib
+        import copy_trader as ct
+        import wallet_twin
+        p = pathlib.Path(tempfile.mkdtemp()) / "c.json"
+        with patch.object(ct, "_path", return_value=p), patch.object(wallet_twin, "REFERENCE", ADDR), \
+                patch.object(wallet_twin, "ENABLED", True):
+            ct.ensure_reference()
+            self.assertTrue(ct.drop_reference_once())
+            self.assertFalse(ct.ensure_reference())
+            self.assertNotIn(ADDR, ct._load()["wallets"])
+            self.assertFalse(ct.drop_reference_once())
