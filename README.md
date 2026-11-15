@@ -189,3 +189,12 @@ conferência (perto de 50% = sorte). Não envia ordens; o resultado fica em `btc
   desligadas e a busca/auditoria de carteiras não roda; as vendas automáticas das posições abertas
   continuam. `OWNER_MENU=full` volta o menu completo.
 
+
+## ₿ Robô BTC RSI2 4h (dinheiro real, Jupiter Perps)
+A estratégia que mais lucrou na conferência da pesquisa: **RSI2 de Connors 10/90 a favor da EMA200
+no gráfico de 4 h**, stop de 1 ATR, sem alvo, sai no sinal contrário ou em 4 dias. Garantia de
+US$ 100 por operação (`BTC_CAPITAL_USD`), alavancagem escolhida no menu entre **2x e 5x** (nunca
+mais). Começa **desligado**; liga em **🟢 Ligar robô (real)**. Pausa sozinho quando as operações
+fechadas perdem US$ 50 no total (`BTC_MAX_TOTAL_LOSS_USD`). A carteira do bot precisa de SOL (troca
+por USDC para a garantia e volta para SOL depois). Foi escolhida depois de ver os 4 meses de
+conferência, então o futuro tende a ser pior. Não é promessa de lucro.
