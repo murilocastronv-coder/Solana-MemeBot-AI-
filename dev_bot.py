@@ -56,8 +56,10 @@ TRANSFER_EXIT = E("DEV_TRANSFER_EXIT", 0.25)
 # owner (Nov 15): only pump.fun coins (launch curve, PumpSwap or a pump.fun mint)
 PUMP_ONLY = os.getenv("DEV_PUMP_ONLY", "true").strip().lower() != "false"
 BT_CAPITAL = E("DEV_BT_CAPITAL", 60)
-BT_DAYS = E("DEV_BT_DAYS", 60)
-BT_DEVS = int(E("DEV_BT_DEVS", 40))
+BT_DAYS = E("DEV_BT_DAYS", 365)                    # owner: 1 year
+BT_DEVS = int(E("DEV_BT_DEVS", 300))               # devs downloaded per click (the next click continues)
+BT_TARGET = int(E("DEV_BT_TARGET", 10_000))        # owner: test with 10,000 devs (reached over several clicks)
+BT_MAX_S = E("DEV_BT_MAX_MINUTES", 15) * 60        # one click never runs longer than this
 
 _LOCK = threading.RLock()
 LAST = {"at": 0, "why": "", "tokens": 0, "devs": 0}
@@ -450,7 +452,7 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
             sigs = rpc("getSignaturesForAddress", [dev, {"limit": QUICK_SIGS}]) or []
             if len(sigs) < QUICK_SIGS:
                 stats = {"tier": "MONITORADO", "why": "carteira com pouco histórico (" + str(len(sigs)) + " transações)",
-                         "trades": 0, "hist": []}
+                         "trades": 0, "hist": [], "hist_v2": True}
         except Exception:
             pass
         if stats is None:
@@ -693,14 +695,26 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
         # devs never downloaded, or downloaded before the coin / platform was stored (pump.fun filter)
         todo = [k for k, v in d["devs"].items() if "hist" not in v or (v["hist"] and "mint" not in v["hist"][0])
                 or (not v["hist"] and not v.get("hist_v2"))][:BT_DEVS]
+        started = time.time()
         for dev in todo:
+            if time.time() - started > BT_MAX_S:
+                break                                   # the next click continues from here
+            stats = None
             try:
-                import wallet_profile
-                _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=max(DEV_AUDIT_TX, 1000))
-                stats = rate_dev(closed, now)
-                stats["hist"] = _hist(closed)[-1000:]
-            except Exception as exc:
-                stats = {"tier": "ERRO", "why": type(exc).__name__}
+                sigs = rpc("getSignaturesForAddress", [dev, {"limit": QUICK_SIGS}]) or []
+                if len(sigs) < QUICK_SIGS:
+                    stats = {"tier": "MONITORADO", "why": "carteira com pouco histórico (" + str(len(sigs)) + " transações)",
+                             "trades": 0, "hist": []}
+            except Exception:
+                pass
+            if stats is None:
+                try:
+                    import wallet_profile
+                    _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=max(DEV_AUDIT_TX, 1000))
+                    stats = rate_dev(closed, now)
+                    stats["hist"] = _hist(closed)[-1000:]
+                except Exception as exc:
+                    stats = {"tier": "ERRO", "why": type(exc).__name__}
             with _LOCK:
                 dd = _load()
                 dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now, hist_v2=True)
@@ -716,6 +730,12 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
     if first:
         text += ("\n📅 Histórico disponível: " + format((now - first) / 86400, ".0f") + " dias (pedido: " +
                  format(days, ".0f") + "). " + str(sum(len(v) for v in hist.values())) + " operações reais dos DEVs.")
+    d = _load()
+    got = sum(1 for v in d["devs"].values() if v.get("hist_v2"))
+    left = sum(1 for v in d["devs"].values() if not v.get("hist_v2"))
+    text += ("\n👥 DEVs: " + str(len(d["devs"])) + " descobertos · " + str(got) + " baixados (meta " + format(BT_TARGET, ",d") +
+             ") · " + str(len(hist)) + " com operações na pump.fun no período · " + str(left) + " na fila" +
+             (" — toque de novo para baixar mais" if left else "") + ".")
     with _LOCK:
         dd = _load()
         dd["backtest"] = text
