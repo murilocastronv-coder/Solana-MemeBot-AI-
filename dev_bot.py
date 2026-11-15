@@ -56,6 +56,15 @@ TRANSFER_EXIT = E("DEV_TRANSFER_EXIT", 0.25)
 MAX_RUNUP_DEV = E("DEV_MAX_RUNUP_SINCE_DEV", 0.15)   # no buy if the price rose 15%+ since the dev's buy
 DAILY_LOSS_USD = E("DEV_DAILY_LOSS_USD", 0)        # 0 = no daily loss limit (owner's choice); e.g. 15 stops buys for the day
 BT_PERIODS = (7, 30, 90, 180)
+BT_MAX_RET = E("DEV_BT_MAX_RESULT", 10.0)      # a dev trade above +1000% (free creator tokens, near-zero cost) is not
+BT_MIN_COST_USD = E("DEV_BT_MIN_COST_USD", 5)    # something a follower could get: left out of the backtests
+
+
+def bt_ok(h):
+    """A dev trade a follower could really have copied (no free tokens / dust cost / absurd return)."""
+    r = float(h.get("result_pct") or 0)
+    cost = h.get("cost_usd")
+    return r <= BT_MAX_RET and (cost is None or float(cost) >= BT_MIN_COST_USD)
 BT_PERIOD_CAPITAL = E("DEV_BT_PERIOD_CAPITAL", 500)
 CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 5_000)      # coins still on the pump.fun curve (no pool yet)
 CURVE_MIN_VOL_5M = E("DEV_CURVE_MIN_VOLUME_5M", 1_000)
@@ -757,7 +766,8 @@ def backtest(dev_histories, start=500.0, usd=5.0, delay_cost=0.03, train_share=0
 
 def _hist(closed):
     return [{"opened": c.get("opened"), "closed": c.get("closed"), "result_pct": round(float(c.get("result_pct") or 0), 4),
-             "pnl_usd": round(float(c.get("pnl_usd") or 0), 2), "mint": c.get("mint"), "platform": c.get("platform")}
+             "pnl_usd": round(float(c.get("pnl_usd") or 0), 2), "mint": c.get("mint"), "platform": c.get("platform"),
+             "cost_usd": round(float(c.get("cost_closed") or 0), 2) if c.get("cost_closed") is not None else None}
             for c in closed]
 
 
@@ -803,15 +813,19 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
                 _save(dd)
     d = _load()
     since = now - days * 86400
-    hist = {k: [h for h in v["hist"] if (h.get("opened") or 0) >= since and (not PUMP_ONLY or pump_trade(h))]
+    hist = {k: [h for h in v["hist"] if (h.get("opened") or 0) >= since and (not PUMP_ONLY or pump_trade(h)) and bt_ok(h)]
             for k, v in d["devs"].items() if v.get("hist")}
     hist = {k: v for k, v in hist.items() if v}
+    dropped = sum(1 for v in d["devs"].values() for h in v.get("hist") or []
+                  if (h.get("opened") or 0) >= since and (not PUMP_ONLY or pump_trade(h)) and not bt_ok(h))
     first = min((h["opened"] for v in hist.values() for h in v), default=None)
     usd = max(1.0, min(buy_usd(), capital / 10))
     text = backtest_text(backtest(hist, start=capital, usd=usd), len(hist), capital, usd)
     if first:
         text += ("\n📅 Histórico disponível: " + format((now - first) / 86400, ".0f") + " dias (pedido: " +
-                 format(days, ".0f") + "). " + str(sum(len(v) for v in hist.values())) + " operações reais dos DEVs.")
+                 format(days, ".0f") + "). " + str(sum(len(v) for v in hist.values())) + " operações reais dos DEVs" +
+                 (" (" + str(dropped) + " fora: tokens de graça/custo quase zero ou ganho acima de +" +
+                  format(BT_MAX_RET * 100, ".0f") + "%, que quem copia não consegue)" if dropped else "") + ".")
     d = _load()
     got = sum(1 for v in d["devs"].values() if v.get("hist_v2"))
     left = sum(1 for v in d["devs"].values() if not v.get("hist_v2"))
@@ -840,7 +854,7 @@ def periods_text(d=None, now=None, capital=None):
     for days in BT_PERIODS:
         since = now - days * 86400
         hist = {k: [h for h in v["hist"] if (h.get("closed") or 0) and (h.get("opened") or 0) >= since
-                    and (not PUMP_ONLY or pump_trade(h))]
+                    and (not PUMP_ONLY or pump_trade(h)) and bt_ok(h)]
                 for k, v in d["devs"].items() if v.get("hist")}
         # the DEV's rating uses its full past (also before the window) - only entries inside the window count
         full = {k: [h for h in v["hist"] if not PUMP_ONLY or pump_trade(h)] for k, v in d["devs"].items() if v.get("hist")}
