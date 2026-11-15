@@ -103,3 +103,27 @@ class MinimumBuyTest(unittest.TestCase):
         with patch.object(ct, "PROPORTIONAL_MIN_USD", 20.0):
             self.assertEqual(ct.proportional_usd(0.01, 150, 100, limits=(0.05, 0.06)), 20.0)   # 5% = 7.5 -> 20
             self.assertIsNone(ct.proportional_usd(0.01, 150, 15, limits=(0.05, 0.06)))       # only 13 free: skip
+
+
+class EvaluateWalletTest(unittest.TestCase):
+    def test_report_says_if_worth_copying(self):
+        import copy_trader as ct
+        import wallet_twin as wt
+        style = {"hold_min": 45.0, "win_rate": 0.6, "trades_day": 10, "size_usd": 50, "pump_share": 0.9,
+                 "curve_share": 0.1, "entry_age_min": 30}
+        good = {"pnl_recent": 2500, "win_recent": 0.6, "trades_recent": 80, "weeks_with_trades": 4,
+                "weeks_positive": 4, "style": style}
+        with patch.object(wt, "MIN_PROFIT", 1000.0), patch.object(ct, "MIN_ACTIVE_DAYS_30", 25), \
+                patch.object(ct, "MIN_WALLET_DAYS", 30):
+            ok, text = ct.evaluate_wallet(OTHER, None, 200, measure_fn=lambda *a: ([], good),
+                                          activity_fn=lambda a: {"age_days": 90, "active_days_30": 28},
+                                          balance_fn=lambda a: 5000)
+            self.assertTrue(ok)
+            self.assertIn("VALE A PENA COPIAR", text)
+            bad = dict(good, pnl_recent=200, weeks_positive=2)
+            ok, text = ct.evaluate_wallet(OTHER, None, 200, measure_fn=lambda *a: ([], bad),
+                                          activity_fn=lambda a: {"age_days": 90, "active_days_30": 10},
+                                          balance_fn=lambda a: 5000)
+            self.assertFalse(ok)
+            self.assertIn("NÃO VALE", text)
+            self.assertIn("❌ Dias operando", text)

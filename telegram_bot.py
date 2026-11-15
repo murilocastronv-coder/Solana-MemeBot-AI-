@@ -153,6 +153,7 @@ def keyboard():
  return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
+  [{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -404,6 +405,11 @@ def handle(update):
   try:send(chat,discovery_text(),keyboard())
   except Exception as exc:send(chat,"Busca indisponível: "+type(exc).__name__,keyboard())
   return
+ if action in ("cw_eval","/analisar") or (not cb and chat in EVAL_WALLET and time.time()-EVAL_WALLET[chat]<600
+   and SOL_ADDRESS.fullmatch(action or "")):
+  eval_wallet_action(chat,action,(msg or {}).get("text",""));return
+ if action.startswith("cw_addx:"):
+  copy_wallet_action(chat,"/copiar","/copiar "+action.split(":",1)[1]);return
  if action in ("cw_add","cw_list","/copiar","/carteiras") or action.startswith("cw_rm:") or (
    not cb and chat in ADD_WALLET and time.time()-ADD_WALLET[chat]<600 and SOL_ADDRESS.fullmatch(action or "")):
   copy_wallet_action(chat,action,(msg or {}).get("text",""));return
@@ -781,6 +787,30 @@ def copy_beat_line():
  ago=int(time.time()-COPY_BEAT["at"])
  return ("🚨 " if ago>120 else "🔁 ")+"Copy trade: última rodada há "+str(ago)+" s (levou "+format(COPY_BEAT["took"],".0f")+" s)"+(" · erro "+COPY_BEAT["error"] if COPY_BEAT.get("error") else "")
 ADD_WALLET={}
+EVAL_WALLET={}
+def eval_wallet_action(chat,action,text):
+ """Owner sends any wallet: the bot checks it with the search rules and says if it is worth copying."""
+ if action=="cw_eval":
+  EVAL_WALLET[chat]=time.time();ADD_WALLET.pop(chat,None)
+  send(chat,"🔍 ANALISAR CARTEIRA\nMande o ENDEREÇO da carteira Solana (só o endereço) ou /analisar ENDERECO.\n"
+   "Eu leio o histórico dela na blockchain e confiro com as mesmas regras da busca automática.");return
+ parts=text.split()
+ address=parts[1] if action=="/analisar" and len(parts)>1 else (parts[0] if parts else "")
+ if not SOL_ADDRESS.fullmatch(address):
+  send(chat,"Uso: /analisar ENDERECO_DA_CARTEIRA",keyboard());return
+ EVAL_WALLET.pop(chat,None)
+ if not os.getenv("SOLANA_RPC_URL"):
+  send(chat,"⛔ Para analisar carteiras o bot precisa do RPC Solana (SOLANA_RPC_URL no Render).",keyboard());return
+ send(chat,"⏳ Analisando `"+address+"`… (lê o histórico na blockchain, leva 1–3 min)")
+ def job():
+  import copy_trader as ct
+  try:
+   ok,text=ct.evaluate_wallet(address,dex_rpc(),ct._sol_usd())
+   kb=([[{"text":"➕ Copiar essa carteira","callback_data":"cw_addx:"+address}]] if ok else
+       [[{"text":"➕ Copiar mesmo assim","callback_data":"cw_addx:"+address}]])+keyboard()
+   send(chat,text,kb)
+  except Exception as exc:send(chat,"⛔ Não consegui analisar: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
+ run_async(job)
 BUY_AMOUNT={}     # chat -> (mint, asked_at): the owner is typing how many US$ to buy of a signal's coin
 AMOUNT_RE=re.compile(r"\$?\d{1,6}([.,]\d{1,2})?")
 SOL_ADDRESS=re.compile(r"[1-9A-HJ-NP-Za-km-z]{32,44}")

@@ -1896,6 +1896,57 @@ def reset_found_wallets_once():
     return removed
 
 
+def evaluate_wallet(address, rpc, sol_usd, now=None, measure_fn=None, activity_fn=None, balance_fn=None):
+    """Owner sends any wallet: check it against the same rules the automatic search uses.
+    Returns (worth_copying, report text)."""
+    import wallet_twin as wt
+    from solders.pubkey import Pubkey
+    Pubkey.from_string(address)
+    now = now or time.time()
+    _, audit = (measure_fn or measure)(address, rpc, sol_usd)
+    try:
+        if activity_fn:
+            act = activity_fn(address)
+        else:
+            import dex_wallets
+            act = dex_wallets.wallet_activity(address, rpc, int(now))
+    except Exception:
+        act = {}
+    bal = (balance_fn or wallet_usd)(address)
+    st = audit.get("style") or {}
+    hold = st.get("hold_min")
+    need_win = min(wt.MIN_WIN, 0.8 * float(st.get("win_rate") or wt.MIN_WIN)) if st else wt.MIN_WIN
+    wk, wp = int(audit.get("weeks_with_trades") or 0), int(audit.get("weeks_positive") or 0)
+    age, days30 = act.get("age_days"), act.get("active_days_30")
+    checks = [
+        ("Lucro em " + format(wt.RESULT_DAYS, ".0f") + " dias: US$ " + format(audit.get("pnl_recent", 0), "+,.0f") +
+         " (mín. US$ " + format(wt.MIN_PROFIT, ",.0f") + ")", audit.get("pnl_recent", 0) >= max(wt.MIN_PROFIT, 0.01)),
+        ("Semanas no lucro: " + str(wp) + " de " + str(wk) + " (precisa " + format(wt.MIN_WEEK_SHARE * 100, ".0f") +
+         "%, mín. " + str(wt.MIN_WEEKS) + " semanas)", wk >= wt.MIN_WEEKS and wp >= wt.MIN_WEEK_SHARE * wk),
+        ("Acerto: " + format(audit.get("win_recent", 0) * 100, ".0f") + "% (mín. " + format(need_win * 100, ".0f") + "%)",
+         audit.get("win_recent", 0) >= need_win),
+        ("Operações recentes: " + str(audit.get("trades_recent", 0)) + " (mín. " + str(wt.MIN_TRADES) + ")",
+         audit.get("trades_recent", 0) >= wt.MIN_TRADES),
+        ("Segura cada moeda: " + ("? min" if hold is None else format(hold, ".0f") + " min") + " (mín. " +
+         format(wt.SNIPE_HOLD_MIN, ".0f") + " min)", hold is not None and wt.SNIPE_HOLD_MIN <= hold <= wt.SNIPE_HOLD_MAX),
+        ("Dias operando nos últimos 30: " + ("?" if days30 is None else str(days30)) + " (mín. " + str(MIN_ACTIVE_DAYS_30) + ")",
+         MIN_ACTIVE_DAYS_30 <= 0 or (days30 is not None and days30 >= MIN_ACTIVE_DAYS_30)),
+        ("Idade da carteira: " + ("?" if age is None else format(age, ".0f") + " dias") + " (mín. " + format(MIN_WALLET_DAYS, ".0f") + ")",
+         MIN_WALLET_DAYS <= 0 or (age is not None and age >= MIN_WALLET_DAYS)),
+        ("Saldo: US$ " + ("?" if bal is None else format(bal, ",.0f")) + " (mín. US$ " + format(MIN_WALLET_USD, ".0f") + ")",
+         MIN_WALLET_USD <= 0 or (bal is not None and bal >= MIN_WALLET_USD)),
+    ]
+    ok = all(c for _, c in checks)
+    lines = ["🔍 ANÁLISE DA CARTEIRA", "`" + address + "`",
+             ("✅ VALE A PENA COPIAR: passou em todas as regras do bot." if ok else
+              "❌ NÃO VALE copiar agora: falhou em " + str(sum(1 for _, c in checks if not c)) + " regra(s).")]
+    lines += [("✅ " if c else "❌ ") + t for t, c in checks]
+    if st:
+        lines.append("📋 Estilo: " + wt.describe(st))
+    lines.append("🔎 solscan.io/account/" + address)
+    return ok, "\n".join(lines)
+
+
 def drop_reference_once():
     """Owner (Nov 15): stop copying the reference wallet (DNMU…); the search finds new ones. The reference
     stays only as the measuring stick of the search. With an open copy it stays just to sell with it."""
