@@ -226,6 +226,10 @@ def tier(s):
         return "MONITORADO", "lucro concentrado em uma moeda"
     if s["max_dd"] > 0.20:
         return "MONITORADO", "drawdown alto"
+    if "launches" in s and (s["launches"] < MIN_LAUNCHES or s.get("launch_days", 0) < MIN_LAUNCH_DAYS):
+        return "MONITORADO", ("troca de carteira: só " + str(s["launches"]) + " moedas criadas com esta carteira em " +
+                              format(s.get("launch_days", 0), ".0f") + " dias (mín. " + str(MIN_LAUNCHES) + " em " +
+                              format(MIN_LAUNCH_DAYS, ".0f") + " dias)")
     for name, w, n, pf in TIERS:
         if s["win"] >= w and s["trades"] >= n and s["pf"] >= pf:
             if s["score"] < MIN_SCORE:
@@ -588,6 +592,9 @@ def emergency_stop(send=None, chat=None, now=None):
 
 
 DEV_FIRST_TX = int(E("DEV_FIRST_TX", 100))
+# owner (Nov 15): only devs that always launch with the SAME wallet (not throw-away wallets)
+MIN_LAUNCHES = int(E("DEV_MIN_LAUNCHES", 5))
+MIN_LAUNCH_DAYS = E("DEV_MIN_LAUNCH_DAYS", 7)
 BT_TX = int(E("DEV_BT_TX", 300))
 DEV_CALLS_PER_HOUR = int(E("DEV_HISTORY_CALLS_PER_HOUR", 100))   # Helius history calls (~100 credits each)
 _CALLS = []
@@ -612,14 +619,39 @@ def _clear_reject(st):
     return st.get("rugs", 0) >= 3
 
 
-def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
+def launch_stats(dev, d=None, launches_fn=None):
+    """How many coins this wallet created and over how many days (Helius CREATE history + coins the bot saw)."""
+    d = d or _load()
+    seen = {m: float(t.get("seen") or 0) for m, t in d["tokens"].items() if t.get("dev") == dev}
+    try:
+        import wallet_profile
+        if launches_fn is not None:
+            rows = launches_fn(dev)
+        else:
+            key = wallet_profile.helius_key()
+            rows = wallet_profile.helius_launches(dev, key) if key else []
+    except Exception as exc:
+        logging.info("devbot launches %s: %s", dev[:6], type(exc).__name__)
+        rows = []
+    times = {}
+    for t, m in rows:
+        times[m or ("t" + str(t))] = t
+    for m, t in seen.items():
+        times.setdefault(m, t)
+    ts = sorted(t for t in times.values() if t)
+    return {"launches": len(times), "launch_days": round((ts[-1] - ts[0]) / 86400, 1) if len(ts) > 1 else 0.0}
+
+
+def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=None):
     """Rate the devs waiting in line (never rated first). A wallet with too few transactions to have
     MIN trades is dismissed with one cheap call instead of a full history read. Returns devs rated."""
     now = now or time.time()
     d = _load()
     _RULE["r"] = d.get("follow_rule")
-    queue = [(k, v) for k, v in sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
-             if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S][:limit or DEV_AUDITS_PER_CYCLE]
+    old_ok = [(k, v) for k, v in d["devs"].items() if approved(v) and "launches" not in v]
+    queue = old_ok + [(k, v) for k, v in sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
+                      if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S and not (approved(v) and "launches" not in v)]
+    queue = queue[:limit or DEV_AUDITS_PER_CYCLE]
     done = 0
     for dev, info in queue:
         stats = None
@@ -644,6 +676,10 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
                     _spend(2)
                     _, closed, _ = fn(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX, mcaps=False)
                     stats = rate_dev(closed, now)
+                if stats["tier"] in ("ELITE", "PREMIUM", "APROVADO"):
+                    _spend()
+                    stats.update(launch_stats(dev, d, launches_fn))
+                    stats["tier"], stats["why"] = tier(stats)
                 stats["hist"] = _hist(closed)[-300:]
                 stats["hist_v2"] = True
             except Exception as exc:
@@ -1016,7 +1052,8 @@ def status_text():
     ok = [(k, v) for k, v in devs.items() if approved(v)]
     lines = ["🧑‍💻 ROBÔ DEV — " + ("🟢 RODANDO" if d.get("enabled") else "⏸️ PAUSADO") +
              (" (💵 DINHEIRO REAL)" if d.get("real") else " (SIMULAÇÃO, sem dinheiro real)"),
-             "🛡️ Só moedas da pump.fun · só copia se o DEV tiver no máximo " + format(MAX_DEV_SHARE * 100, ".0f") +
+             "🛡️ Só moedas da pump.fun · só DEV que cria moedas sempre com a mesma carteira (mín. " + str(MIN_LAUNCHES) +
+             " em " + format(MIN_LAUNCH_DAYS, ".0f") + " dias) · só copia se o DEV tiver no máximo " + format(MAX_DEV_SHARE * 100, ".0f") +
              "% da moeda · DEV que esconde tokens em outra carteira é bloqueado e o bot vende tudo",
              "💼 Saldo simulado US$ " + format(m["equity"], ",.2f") + " (início US$ " + format(m["start"], ",.0f") + ") · hoje " +
              format(m["pnl_day"], "+.2f") + " · total " + format(m["pnl_total"], "+.2f"),
@@ -1040,7 +1077,9 @@ def status_text():
         lines.append("🏆 Estratégia testada em uso: " + fr["rule_name"] + " + " + dev_follow.exit_label(fr["exit"]))
     for k, v in sorted(ok, key=lambda kv: -kv[1].get("score", 0))[:5]:
         lines.append("🏅 " + v["tier"] + " `" + k + "` acerto " + format(v["win"] * 100, ".0f") + "% · " + str(v["trades"]) +
-                     " ops · PF " + format(v["pf"], ".1f") + " · US$ " + format(v["pnl"], "+,.0f"))
+                     " ops · PF " + format(v["pf"], ".1f") + " · US$ " + format(v["pnl"], "+,.0f") +
+                     (" · " + str(v["launches"]) + " moedas criadas em " + format(v.get("launch_days", 0), ".0f") + " dias"
+                      if "launches" in v else ""))
     for m_, p in d["positions"].items():
         lines.append("📈 " + p["symbol"] + " entrada " + format(p["entry"], ".6g") + " → " + format(p["last"], ".6g") + " (" +
                      format((p["last"] / p["entry"] - 1) * 100, "+.1f") + "%)")
