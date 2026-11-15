@@ -142,6 +142,7 @@ EXIT_TEXT = {
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
     "rocket": "🚀 Sniper: 🛑 stop fixo -30% | 🚀 a partir de +15% stop móvel (10% abaixo do topo) | ⏱️ não chegou a +15% em 60 min: vende | 💰 2x vende metade, 5x mais metade",
+    "dev": "🧑‍💻 Robô DEV: vende quando o DEV vende | 🛑 stop −8% | 💰 +15% vende 50% e stop móvel 8%",
     "manual": "📡 Compra pelo sinal: 🛑 stop loss −50% | 🛡️ subiu +50%: stop na entrada | 💰 em +100% tira 25%, e mais 25% a cada +50%",
     "diamond": "💎 Diamond: 🛑 stop -10% | 🚀 a partir de +12% stop móvel (6% abaixo do topo) | ⏱️ fim da rodada: vende",
     "dip": "📉 Dip Bot: 🛑 stop -40% | 🚀 a partir de +12% stop móvel (vende 6% abaixo do topo) | ⏱️ sai em 6 h se não subir",
@@ -167,7 +168,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) ", "dev": "🧑‍💻 DEV "}.get(mode, "")
     liq = liquidity_line(mint, p)
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + (liq + "\n" if liq else "") + mint)

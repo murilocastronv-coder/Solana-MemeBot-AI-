@@ -97,7 +97,11 @@ class DevCycleTest(unittest.TestCase):
                    "preBalances": [100], "postBalances": [50]}, "transaction": {"message": {"accountKeys": [DEV]}}}}
         calls = {"n": 0}
 
+        supply = {"amount": "10000"}
+
         def rpc(method, params):
+            if method == "getTokenSupply":
+                return {"value": supply}
             if params[0] == "TOK":
                 return [{"signature": "create"}]
             calls["n"] += 1
@@ -108,5 +112,23 @@ class DevCycleTest(unittest.TestCase):
                   safety=lambda m: "", analyze=lambda *a, **k: ({}, good, ""), prices_fn=lambda ms, bm: {"TOK": 1.0})
         db.cycle(now=NOW, **kw)          # finds the creator, rates the dev, remembers its last tx
         self.assertEqual(db._load()["devs"][DEV]["tier"], "ELITE")
-        db.cycle(now=NOW + 60, **kw)     # the dev buys its own token -> simulated copy
+        db.cycle(now=NOW + 60, **kw)     # the dev buys its own token (5% of the supply) -> simulated copy
         self.assertIn("TOK", db._load()["positions"])
+
+    def test_dev_holding_too_much_is_not_copied(self):
+        self.assertEqual(db.dev_share(lambda m, p: {"value": {"amount": "1000"}}, "T", 500), 0.5)
+        self.assertGreater(0.5, db.MAX_DEV_SHARE)
+
+
+class DevBacktestButtonTest(unittest.TestCase):
+    def test_downloads_devs_and_reports_capital_60(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            d["devs"] = {DEV: {"tokens_seen": []}}
+            db._save(d)
+            closed = [pos("M" + str(i), 5 if i % 10 else -5, 0.4 if i % 10 else -0.2, NOW - i * 20000, NOW - i * 20000 - 600)
+                      for i in range(80)]
+            txt = db.run_backtest(rpc=object(), sol_usd=200, analyze=lambda *a, **k: ({}, closed, ""), now=NOW)
+            self.assertIn("US$ 60", txt)
+            self.assertIn("Histórico disponível", txt)
+            self.assertTrue(db._load()["devs"][DEV]["hist"])
