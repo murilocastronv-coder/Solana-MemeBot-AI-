@@ -372,3 +372,19 @@ class TestPeriodTests(unittest.TestCase):
         with patch.object(c, "measure", return_value=audit(5000.0)):
             self.assertEqual(c.preaudit_and_follow(cand(), None, 200.0), "full")
 
+
+class FillTests(unittest.TestCase):
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        p = patch.dict(os.environ, {"BOT_WALLET_FILE": os.path.join(d, "w.json")})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_audits_faster_while_there_is_room(self):
+        self.assertEqual(c.free_slots(), c.MAX_AUTO_WALLETS)
+        self.assertEqual(c.audits_this_round(), 3)
+        for _ in range(c.MAX_AUTO_WALLETS):
+            c.auto_follow(cand())
+        self.assertEqual(c.free_slots(), 0)
+        self.assertEqual(c.audits_this_round(), 1)
+

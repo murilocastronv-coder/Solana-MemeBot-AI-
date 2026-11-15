@@ -88,8 +88,8 @@ O que a carteira usa para decidir entrar (sinais, informações, leitura própri
 blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simulação antes.
 
 ## Limites de ordens e regra dos 5 minutos
-- **No máximo 6 ordens abertas ao mesmo tempo**, somando copy trade e robô da estratégia
-  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 6 abertas, nada novo abre.
+- **No máximo 8 ordens abertas ao mesmo tempo**, somando copy trade e robô da estratégia
+  (`MAX_OPEN_ORDERS` na simulação, `MAX_POSITIONS` nas ordens reais). Com 8 abertas, nada novo abre.
 - **Toda carteira seguida**, inclusive as de `/clonar` e `/seguir`, só tem compras copiadas se
   segurar as moedas por 5 min ou mais (mediana). Carteira mais rápida fica na lista, mas não
   abre ordem. A compra mínima de US$ 40 vale para todas.
@@ -128,8 +128,8 @@ blockchain: o robô reproduz o **perfil medido**, não as razões. Teste em simu
   últimos 9 dias. Só copia com lucro, **pelo menos 40 operações** e acerto ≥ 50% nesse período, e
   fica só com as **20 de maior lucro** (`COPY_RESULT_DAYS`, `COPY_RESULT_MIN_TRADES`,
   `COPY_RESULT_MIN_WIN`, `COPY_TOP_WALLETS`). Quem não passa ou fica fora das 20 é removida.
-- **Lista estável:** a busca audita a carteira **antes** de seguir (1 por rodada,
-  `COPY_PREAUDIT_PER_CYCLE`), então só entram carteiras já aprovadas. Reprovadas e removidas não
+- **Lista estável:** a busca audita a carteira **antes** de seguir (até 3 por rodada enquanto há vaga, `COPY_PREAUDIT_WHEN_ROOM`;
+  1 com a lista cheia, `COPY_PREAUDIT_PER_CYCLE`), então só entram carteiras já aprovadas. Reprovadas e removidas não
   voltam por 3 dias (`COPY_REJECT_DAYS`). Com a lista cheia, uma aprovada só é trocada por outra
   com lucro nos 9 dias pelo menos 20% maior (`COPY_REPLACE_PNL_MARGIN`) e sem posição aberta.
 - **Período de teste:** toda carteira que entra é copiada por pelo menos 3 dias (`COPY_TEST_DAYS`)

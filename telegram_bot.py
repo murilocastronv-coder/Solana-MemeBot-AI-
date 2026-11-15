@@ -456,8 +456,9 @@ def wallet_discovery_loop():
    # audit BEFORE following (a few per round): only approved wallets enter the list
    rpc=dex_rpc()
    checked=0
+   limit=copy_trader.audits_this_round()   # up to 3 while there are free slots, 1 when the list is full
    for candidate in candidates:
-    if checked>=copy_trader.PREAUDIT_PER_CYCLE:break
+    if checked>=limit:break
     a=candidate["wallet"]
     if a in followed or copy_trader.is_rejected(a) or not copy_trader.prefilter(candidate):continue
     checked+=1
