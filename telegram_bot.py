@@ -154,6 +154,9 @@ def keyboard():
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
   [{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
+  [{"text":"🧑‍💻 Robô DEV (simulação)","callback_data":"dv_status"}],
+  [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
+  [{"text":"🧪 Backtest DEVs","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -311,6 +314,24 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
+ if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev") or action.startswith("dv_usd"):
+  import dev_bot
+  try:
+   pre=""
+   if action=="dv_on":dev_bot.set_enabled(True);pre="▶️ Robô DEV rodando (simulação).\n\n"
+   elif action=="dv_off":dev_bot.set_enabled(False);pre="⏸️ Robô DEV pausado: não compra; as posições simuladas continuam com stop.\n\n"
+   elif action=="dv_close":dev_bot.close_all();pre="🧹 Posições simuladas do robô DEV encerradas.\n\n"
+   elif action.startswith("dv_usd"):pre="💵 Compra por operação: US$ "+format(dev_bot.set_buy_usd(action[6:]),"g")+"\n\n"
+   elif action=="dv_bt":
+    send(chat,"🧪 Rodando o backtest com o histórico dos DEVs já analisados…")
+    run_async(lambda:[send(chat,part,keyboard()) for part in split_message(dev_bot.run_backtest())]);return
+   send(chat,pre+dev_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Robô DEV: "+str(exc)[:200],keyboard())
+  return
+ if action=="/valor_dev":
+  parts=(msg or {}).get("text","").split()
+  if len(parts)<2:send(chat,"Mande assim: /valor_dev 5",keyboard());return
+  action="dv_usd"+parts[1]
  if action in REMOVED_ROBOT_ACTIONS:
   send(chat,"🗑️ O Sniper (compras) e o Diamond foram removidos: o bot roda o copy trade e os SINAIS do Sniper. "
    "Posições que eles deixaram abertas continuam com stop e stop móvel até fechar.",keyboard());return
@@ -1031,6 +1052,26 @@ def copy_only_once():
    except Exception:logging.exception("copy only: real engine not started")
    logging.info("copy only: copy trade back on (real money)")
  except Exception:logging.exception("copy only failed")
+def dev_loop():
+ """DEV copy trading in simulation, 24/7 (owner, Nov 15)."""
+ import dev_bot
+ while True:
+  time.sleep(dev_bot.CYCLE_S)
+  try:
+   chat=active_chat()
+   if not os.getenv("SOLANA_RPC_URL"):continue
+   dev_bot.cycle(send,chat,rpc=dex_rpc(),sol_usd=__import__("copy_trader")._sol_usd())
+  except Exception as exc:logging.exception("devbot cycle failed: %s",type(exc).__name__)
+def dev_mode_once():
+ """Owner (Nov 15): the DEV robot runs in simulation; the real-money copy trade is switched off once
+ (open copies keep their automatic sells)."""
+ try:
+  import copy_trader
+  d=copy_trader._load()
+  if not d.get("dev_mode_v1"):
+   d["dev_mode_v1"]=True;copy_trader._save(d);copy_trader.set_mode(False)
+   logging.info("dev mode: real copy trade off")
+ except Exception:logging.exception("dev mode failed")
 def btc_leftover_loop():
  """BTC robot removed: only manage a position it may still hold (automatic sale), then stop."""
  import btc_dip_live
@@ -1070,6 +1111,8 @@ def loop():
   threading.Thread(target=btc_dip_loop,daemon=True).start()
  else:
   copy_only_once()         # only the copy trade (owner): BTC robot and signals off
+  dev_mode_once()          # DEV robot in simulation; real copy trade off (owner, Nov 15)
+  threading.Thread(target=dev_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=rocket_loop,daemon=True).start()

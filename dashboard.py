@@ -398,6 +398,13 @@ def page(msg=""):
     # ---- Robôs
     out.append("<section class='tab' id='t-bots'>")
     out += ["<div class='card'><h2>👥 Copy trade</h2><pre>", _e(_safe(ct.status_text)), "</pre></div>"]
+    try:
+        import dev_bot
+        out += ["<div class='card'><h2>🧑‍💻 Robô DEV (simulação)</h2><pre>", _e(_safe(dev_bot.status_text)), "</pre>",
+                "<h2>🧪 Backtest</h2><pre>", _e(dev_bot._load().get("backtest") or "Ainda não rodado (botão 🧪 Backtest DEVs no Telegram)."),
+                "</pre></div>"]
+    except Exception:
+        pass
     out.append("</section>")
 
     # ---- Avisos
