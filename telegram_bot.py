@@ -154,7 +154,7 @@ def keyboard():
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"📋 Minhas carteiras","callback_data":"cw_list"}],
   [{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
-  [{"text":"🧑‍💻 Robô DEV (simulação)","callback_data":"dv_status"}],
+  [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🧪 Backtest 2 meses (US$ 60)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
   [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}],

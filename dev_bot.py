@@ -7,7 +7,7 @@ share. Independent stop loss / take profit / trailing stop. Every decision is lo
 Honest limits: the dev is the wallet that paid the token's first transaction (creator); related wallets
 are not merged automatically. Prices are DexScreener's at the moment the bot sees the trade (seconds after
 the dev), with estimated swap cost and slippage. Nothing here promises profit.
-Storage: the bot's persistent disk (dev_bot.json); PostgreSQL can replace it later (no free slot on Render).
+Storage: PostgreSQL on Render (DATABASE_URL, table kv/events) with the persistent disk (dev_bot.json) as backup.
 """
 import json
 import logging
@@ -63,6 +63,15 @@ def _path():
 def _load():
     d = {"enabled": True, "cash": START_USD, "start": START_USD, "positions": {}, "history": [], "tokens": {},
          "devs": {}, "equity_peak": START_USD, "max_dd": 0.0, "fees": 0.0, "log": [], "backtest": ""}
+    import pg_store
+    if pg_store.enabled():
+        try:
+            got = pg_store.get("dev_bot")
+            if got is not None:
+                d.update(got)
+                return d
+        except Exception:
+            pass                                 # database down: read the disk copy below
     p = _path()
     if p.exists():
         try:
@@ -73,6 +82,12 @@ def _load():
 
 
 def _save(d):
+    import pg_store
+    if pg_store.enabled():
+        try:
+            pg_store.put("dev_bot", d)
+        except Exception as exc:
+            logging.warning("devbot: postgres save failed (%s), disk only", type(exc).__name__)
     p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".devbot.")
@@ -84,6 +99,12 @@ def _save(d):
 def note(text):
     """Decision log (Render logs + the last 200 in the state for the panel)."""
     logging.info("devbot %s", text)
+    try:
+        import pg_store
+        if pg_store.enabled():
+            pg_store.event("devbot", {"text": text})
+    except Exception:
+        pass
     with _LOCK:
         d = _load()
         d["log"] = (d.get("log") or [])[-199:] + [time.strftime("%d/%m %H:%M", time.gmtime()) + " " + text]
@@ -640,7 +661,8 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
         dd = _load()
         dd["backtest"] = text
         _save(dd)
-    note("backtest: " + text.split("\n")[-2][:150])
+    lines = text.split("\n")
+    note("backtest: " + (lines[-2] if len(lines) > 1 else lines[0])[:150])
     return text
 
 
