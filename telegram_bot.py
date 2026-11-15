@@ -410,6 +410,10 @@ def handle(update):
    send(chat,pre+status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
   return
+ if action in ("/pesquisa_btc","/pesquisabtc"):   # research only: tests strategies, places no orders
+  send(chat,"🔬 Pesquisa BTC: baixando 1 ano de velas de 15 min e testando ~430 estratégias de 5 tipos "
+   "(escolhe em 8 meses, confere em 4). Leva uns 3–8 minutos. Nenhuma ordem é enviada.")
+  run_async(btc_research_job,chat);return
  legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","/btc_reset",
   "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real",
   "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
@@ -787,6 +791,16 @@ def audit_loop():
  while True:
   if os.getenv("SOLANA_RPC_URL") and active_chat():audit_job()
   time.sleep(int(os.getenv("COPY_AUDIT_EVERY_HOURS","6"))*3600)
+def btc_research_job(chat):
+ try:
+  import btc_research
+  rep=btc_research.search()
+  try:btc_research.save(rep,str(trade_state._path().with_name("btc_research.json")))
+  except Exception:logging.warning("btc research save failed")
+  for part in split_message(btc_research.report_text(rep)):send(chat,part)
+ except Exception as exc:
+  logging.exception("btc research failed")
+  send(chat,"⛔ Pesquisa BTC falhou: "+type(exc).__name__+": "+str(exc)[:150])
 def run_async(fn,*args):
  interactive=getattr(CTX,"interactive",False)   # a job the owner asked for answers in full
  def run():
