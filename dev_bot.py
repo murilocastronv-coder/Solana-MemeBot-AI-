@@ -648,9 +648,13 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
     now = now or time.time()
     d = _load()
     _RULE["r"] = d.get("follow_rule")
-    old_ok = [(k, v) for k, v in d["devs"].items() if approved(v) and "launches" not in v]
+    # devs approved by the rating (tier) before the same-wallet rule existed: re-checked first, once
+    # (by tier, not approved(): with a follower rule every dev counts as approved and they would loop forever)
+    tiers = ("ELITE", "PREMIUM", "APROVADO")
+    old_ok = [(k, v) for k, v in d["devs"].items() if v.get("tier") in tiers and "launches" not in v
+              and now - float(v.get("rated") or 0) >= 60]
     queue = old_ok + [(k, v) for k, v in sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
-                      if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S and not (approved(v) and "launches" not in v)]
+                      if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S and (k, v) not in old_ok]
     queue = queue[:limit or DEV_AUDITS_PER_CYCLE]
     done = 0
     for dev, info in queue:

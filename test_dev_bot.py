@@ -275,3 +275,18 @@ class DevSameWalletTest(unittest.TestCase):
             st.update(db.launch_stats(DEV, launches_fn=lambda d: [(NOW - i * 3 * 86400, "C" + str(i)) for i in range(6)]))
             self.assertEqual(st["launches"], 6)
             self.assertEqual(db.tier(st)[0], "ELITE")
+
+
+class DevAuditLoopTest(unittest.TestCase):
+    def test_follow_rule_does_not_requeue_every_dev(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            d["follow_rule"] = {"rule": "all", "rule_name": "x", "exit": "mirror", "sl": 0, "tp": 0}
+            d["devs"] = {"A": {"tier": "MONITORADO", "rated": NOW - 10}, "B": {"tier": "MONITORADO", "rated": NOW - 20}}
+            db._save(d)
+            calls = []
+            try:
+                n = db.audit_devs(lambda m, p: calls.append(p[0]) or [], 100, NOW, analyze=lambda *a, **k: ({}, [], ""))
+            finally:
+                db._RULE["r"] = None
+            self.assertEqual(n, 0)               # recently rated: nothing re-audited
