@@ -142,7 +142,7 @@ EXIT_TEXT = {
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
     "rocket": "🚀 Sniper: 🛑 stop fixo -30% | 🚀 a partir de +15% stop móvel (10% abaixo do topo) | ⏱️ não chegou a +15% em 60 min: vende | 💰 2x vende metade, 5x mais metade",
-    "dev": "🧑‍💻 Robô DEV: vende quando o DEV vende | 🛑 stop −8% | 💰 +15% vende 50% e stop móvel 8%",
+    "dev": "🧑‍💻 Robô DEV: faz o mesmo que o DEV — vende só quando ele vende, a mesma parte (sem stop e sem alvo)",
     "manual": "📡 Compra pelo sinal: 🛑 stop loss −50% | 🛡️ subiu +50%: stop na entrada | 💰 em +100% tira 25%, e mais 25% a cada +50%",
     "diamond": "💎 Diamond: 🛑 stop -10% | 🚀 a partir de +12% stop móvel (6% abaixo do topo) | ⏱️ fim da rodada: vende",
     "dip": "📉 Dip Bot: 🛑 stop -40% | 🚀 a partir de +12% stop móvel (vende 6% abaixo do topo) | ⏱️ sai em 6 h se não subir",
