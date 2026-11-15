@@ -290,3 +290,21 @@ class DevAuditLoopTest(unittest.TestCase):
             finally:
                 db._RULE["r"] = None
             self.assertEqual(n, 0)               # recently rated: nothing re-audited
+
+
+class DevApprovedNoticeTest(unittest.TestCase):
+    def test_notice_when_dev_gets_and_loses_approval(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        p = mock.patch.object(db, "_path", return_value=pathlib.Path(tmp.name) / "d.json")
+        p.start()
+        self.addCleanup(p.stop)
+        sent = []
+        st = {"tier": "ELITE", "win": 0.92, "trades": 40, "pf": 5.0, "pnl": 1000, "score": 85, "launches": 9, "launch_days": 12}
+        db._notify_tier(DEV, "NA FILA", st, lambda c, m: sent.append(m), 1)
+        self.assertIn("NOVO DEV APROVADO", sent[-1])
+        self.assertIn(DEV, sent[-1])
+        db._notify_tier(DEV, "ELITE", st, lambda c, m: sent.append(m), 1)      # still approved: no repeat
+        self.assertEqual(len(sent), 1)
+        db._notify_tier(DEV, "ELITE", {"tier": "MONITORADO", "why": "troca de carteira"}, lambda c, m: sent.append(m), 1)
+        self.assertIn("perdeu a aprovação", sent[-1])

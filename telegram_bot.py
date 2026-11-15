@@ -1094,7 +1094,7 @@ def dev_audit_loop():
   n=0
   try:
    if os.getenv("SOLANA_RPC_URL") and dev_bot.enabled():
-    n=dev_bot.audit_devs(DEV_RPC.setdefault("rpc",dex_rpc()),__import__("copy_trader")._sol_usd())
+    n=dev_bot.audit_devs(DEV_RPC.setdefault("rpc",dex_rpc()),__import__("copy_trader")._sol_usd(),send=send,chat=active_chat())
   except Exception as exc:logging.exception("devbot audit failed: %s",type(exc).__name__)
   time.sleep(2 if n else 20)
 def dev_follow_loop():
