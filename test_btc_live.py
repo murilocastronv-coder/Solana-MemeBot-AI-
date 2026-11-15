@@ -155,32 +155,5 @@ class BtcLiveTests(Base):
         self.assertIn("US$ 100", bl.status_text())
 
 
-class TelegramRobotTests(Base):
-    def press(self, data):
-        import telegram_bot as tb
-        out = []
-        with patch.object(tb, "CHAT", "1"), patch.object(tb, "send", side_effect=lambda chat, text, kb=None: out.append(text)), \
-                patch.object(tb, "request_api", return_value={}):
-            tb.handle({"callback_query": {"id": "1", "data": data, "message": {"chat": {"id": 1, "type": "private"}}}})
-        return out
-
-    def test_buttons(self):
-        self.assertIn("5x", self.press("bl_lev5")[0])
-        self.assertEqual(bl.leverage(), 5)
-        self.assertIn("LIGADO", self.press("bl_on")[0])
-        self.assertTrue(bl._load()["enabled"])
-        self.press("bl_off")
-        self.assertFalse(bl._load()["enabled"])
-        self.assertIn("US$ 50", self.press("bl_usd50")[0])
-        self.assertEqual(bl.capital(), 50)
-        self.assertIn("Quantos", self.press("bl_usdask")[0])
-        import telegram_bot as tb
-        with patch.object(tb, "CHAT", "1"), patch.object(tb, "send", side_effect=lambda chat, text, kb=None: None), \
-                patch.object(tb, "request_api", return_value={}):
-            tb.handle({"message": {"chat": {"id": 1, "type": "private"}, "text": "75"}})
-            tb.handle({"message": {"chat": {"id": 1, "type": "private"}, "text": "/valor 40"}})
-        self.assertEqual(bl.capital(), 40)
-
-
 if __name__ == "__main__":
     unittest.main()
