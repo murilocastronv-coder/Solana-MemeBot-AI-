@@ -138,7 +138,10 @@ def remove_robots_once():
 OWNER_MENU=os.getenv("OWNER_MENU","btc").strip().lower()   # "btc" (owner, Nov 15): only the BTC research; "full": old menu
 def btc_keyboard():
  return [[{"text":"🔬 Testar estratégias BTC","callback_data":"btc_research"}],
-  [{"text":"📊 Último resultado BTC","callback_data":"btc_last"}]]
+  [{"text":"📊 Último resultado BTC","callback_data":"btc_last"}],
+  [{"text":"₿ Robô BTC RSI2 4h: status","callback_data":"bl_status"}],
+  [{"text":"🟢 Ligar robô (real)","callback_data":"bl_on"},{"text":"🔴 Desligar robô","callback_data":"bl_off"}],
+  [{"text":str(n)+"x","callback_data":"bl_lev"+str(n)} for n in (2,3,4,5)]]
 def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
@@ -422,13 +425,29 @@ def handle(update):
    for part in split_message(rep.get("text") or "Sem relatório salvo ainda."):send(chat,part,keyboard())
   except Exception:send(chat,"Ainda não há resultado. Toque em 🔬 Testar estratégias BTC.",keyboard())
   return
+ if action in ("bl_status","bl_on","bl_off") or action.startswith("bl_lev"):   # real-money BTC robot (owner, Nov 15)
+  import btc_live
+  try:
+   pre=""
+   if action=="bl_on":
+    btc_live.set_enabled(True)
+    pre=("🟢 ROBÔ BTC LIGADO (dinheiro real na Jupiter): US$ "+format(btc_live.CAPITAL_USD,".0f")+" de garantia × "+
+     str(btc_live.leverage())+"x. Entra só quando fechar uma vela de 4h com sinal; pode levar dias.\n\n")
+   elif action=="bl_off":
+    btc_live.set_enabled(False);pre="🔴 Robô BTC desligado: não abre novas. Uma posição aberta continua com stop e saída até fechar.\n\n"
+   elif action.startswith("bl_lev"):
+    lev=btc_live.set_leverage(int(action[6:]))
+    pre="⚙️ Alavancagem: "+str(lev)+"x"+(" (vale a partir da próxima entrada)" if btc_live._load()["open"] else "")+"\n\n"
+   send(chat,pre+btc_live.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Robô BTC: "+str(exc)[:200],keyboard())
+  return
  if action in ("/pesquisa_btc","/pesquisabtc","btc_research"):   # research only: tests strategies, places no orders
   send(chat,"🔬 Pesquisa BTC: baixando 1 ano de velas e testando ~2.200 variações de 13 estratégias clássicas "
    "(Turtle, médias, MACD, Supertrend, RSI2, Bollinger, Keltner, SAR, Ichimoku, Heikin-Ashi, ADX, Larry Williams) "
    "em 15m, 1h e 4h (escolhe em 8 meses, confere em 4). Leva uns 5–15 minutos. Nenhuma ordem é enviada.")
   run_async(btc_research_job,chat);return
  if OWNER_MENU=="btc" and action in ("/start","/menu","help"):
-  send(chat,"₿ MODO BTC: aqui só a pesquisa de estratégias de BTC alavancado (nenhuma ordem é enviada).\n"
+  send(chat,"₿ MODO BTC: pesquisa de estratégias (só teste) e o robô BTC RSI2 4h (dinheiro real, você liga e escolhe 2x a 5x).\n"
    "Copy trade, Sniper e sinais estão desligados; as posições que já estavam abertas continuam sendo vendidas sozinhas.",keyboard());return
  legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","/btc_reset",
   "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real",
@@ -552,7 +571,13 @@ def startup_notice():
  if not chat:return
  if OWNER_MENU=="btc":
   st=trade_state.status()
-  send(chat,"🔄 Bot reiniciado — ₿ MODO BTC: só a pesquisa de estratégias (nenhuma ordem é enviada)."+
+  try:
+   import btc_live
+   d=btc_live._load()
+   robot=("\n₿ Robô BTC RSI2 4h: "+("🟢 LIGADO" if d["enabled"] else "🔴 desligado")+" · "+str(btc_live.leverage())+"x"+
+    (" · posição "+d["open"]["side"].upper()+" aberta" if d.get("open") else ""))
+  except Exception:robot=""
+  send(chat,"🔄 Bot reiniciado — ₿ MODO BTC: pesquisa de estratégias e robô BTC."+robot+
    ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
     if st["positions"] else ""),keyboard())
   return
@@ -830,6 +855,20 @@ def run_async(fn,*args):
   CTX.interactive=interactive
   fn(*args)
  threading.Thread(target=run,daemon=True).start()
+BTC_LIVE_ERR={}
+def btc_live_loop():
+ """Real-money BTC robot (RSI2 4h): every minute check the stop / exits, or enter after a 4 h close."""
+ import btc_live
+ while True:
+  time.sleep(btc_live.CHECK_EVERY_S)
+  try:
+   chat=active_chat()
+   if chat:btc_live.cycle(send,chat)
+  except Exception as exc:
+   msg=type(exc).__name__+": "+str(exc)[:120]
+   btc_live.LAST["why"]="erro: "+msg
+   if msg!=BTC_LIVE_ERR.get("last") or time.time()-BTC_LIVE_ERR.get("at",0)>600:
+    BTC_LIVE_ERR.update(last=msg,at=time.time());logging.warning("btc live cycle failed: %s",msg)
 def stop_all_buying():
  """Switch off every automatic buy (copy trade, Sniper, signal auto-buys). Sells keep running."""
  for step in (lambda:__import__("copy_trader").set_mode(False),
@@ -855,6 +894,7 @@ def loop():
  remove_robots_once()      # Diamond removed; the Sniper only sends signals (owner, Nov 14)
  if OWNER_MENU=="btc":
   stop_all_buying()        # BTC mode: no automatic buys; open positions keep their automatic sells
+  threading.Thread(target=btc_live_loop,daemon=True).start()
  threading.Thread(target=rocket_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  if OWNER_MENU!="btc":     # wallet search/audit only matter for the copy trade (saves RPC credits)
