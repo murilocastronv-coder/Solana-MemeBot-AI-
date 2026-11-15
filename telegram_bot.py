@@ -157,6 +157,7 @@ def keyboard():
   [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
+  [{"text":"✅ Usar estratégia vencedora","callback_data":"dv_apply"},{"text":"↩️ Regra original (80%)","callback_data":"dv_orig"}],
   [{"text":"🧪 Backtest (1 ano + 7/30/90/180 dias)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
   [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
@@ -316,13 +317,21 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
- if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim","dv_stop") or action.startswith("dv_usd"):
+ if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim","dv_stop","dv_apply","dv_orig") or action.startswith("dv_usd"):
   import dev_bot
   try:
    pre=""
    if action=="dv_on":dev_bot.set_enabled(True);pre="▶️ Robô DEV rodando (simulação).\n\n"
    elif action=="dv_off":dev_bot.set_enabled(False);pre="⏸️ Robô DEV pausado: não compra; as posições simuladas continuam com stop.\n\n"
    elif action=="dv_stop":pre="🛑 PARADA DE EMERGÊNCIA: robô DEV pausado e "+str(dev_bot.emergency_stop(send,chat))+" posição(ões) vendida(s) agora.\n\n"
+   elif action=="dv_apply":
+    import dev_follow
+    r=dev_follow.apply_winner()
+    pre=("✅ Robô DEV agora usa a estratégia que deu lucro fora da amostra: "+r["rule_name"]+" + "+dev_follow.exit_label(r["exit"])+
+     ". US$ "+format(dev_bot.buy_usd(),"g")+" por compra, máx. "+str(dev_bot.MAX_OPEN)+" abertas.\n\n") if r else \
+     "⛔ Ainda não há estratégia que deu lucro fora da amostra. Toque no 🧪 Backtest; o robô continua com a regra original.\n\n"
+   elif action=="dv_orig":
+    __import__("dev_follow").clear_rule();pre="↩️ Robô DEV de volta à regra original: DEV com acerto ≥ 80%, vende só quando o DEV vende.\n\n"
    elif action=="dv_close":dev_bot.close_all();pre="🧹 Posições simuladas do robô DEV encerradas.\n\n"
    elif action=="dv_real":
     live_engine.start();dev_bot.set_real(True)
@@ -1088,6 +1097,19 @@ def dev_audit_loop():
     n=dev_bot.audit_devs(DEV_RPC.setdefault("rpc",dex_rpc()),__import__("copy_trader")._sol_usd())
   except Exception as exc:logging.exception("devbot audit failed: %s",type(exc).__name__)
   time.sleep(2 if n else 20)
+def dev_follow_loop():
+ """Replays the devs' trades on real price history (GeckoTerminal) all the time, for the follower backtest."""
+ import dev_follow
+ time.sleep(120)
+ while True:
+  n=0
+  try:
+   if dev_bot_enabled():n=dev_follow.fill(max_s=240)
+  except Exception as exc:logging.exception("devbot follow failed: %s",type(exc).__name__)
+  time.sleep(10 if n else 300)
+def dev_bot_enabled():
+ try:return __import__("dev_bot").enabled()
+ except Exception:return False
 def dev_real_once():
  """Owner (Nov 15, later): the DEV robot trades real money. Once."""
  try:
@@ -1152,6 +1174,7 @@ def loop():
   dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
   threading.Thread(target=dev_loop,daemon=True).start()
   threading.Thread(target=dev_audit_loop,daemon=True).start()
+  threading.Thread(target=dev_follow_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=rocket_loop,daemon=True).start()
