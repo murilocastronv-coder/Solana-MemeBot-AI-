@@ -20,7 +20,7 @@ def audit(style, pnl=50.0, win=0.6, trades=60):
 
 def cand():
     return {"wallet": str(Keypair().pubkey()), "closed_trades": 20, "realized_lamports": 10**9,
-            "hold_samples": [60, 90, 120], "average_buy_lamports": 10**8, "age_days": 90, "active_days_7": 7}
+            "hold_samples": [60, 90, 120], "average_buy_lamports": 10**8, "age_days": 90, "active_days_7": 7, "active_days_30": 27}
 
 
 class TwinTests(unittest.TestCase):
@@ -102,3 +102,19 @@ class BigProfitTest(unittest.TestCase):
         with patch.object(wt, "MIN_PROFIT", 1000.0):
             self.assertIn("abaixo de US$ 1,000", wt.judge(swing, audit(swing, pnl=300), REF_STYLE)[2])
             self.assertTrue(wt.judge(swing, audit(swing, pnl=2500), REF_STYLE)[0])
+
+
+class MonthlyConsistencyTest(unittest.TestCase):
+    def test_active_25_days_and_consistent_weeks(self):
+        self.assertFalse(c.active_monthly({"active_days_30": 20}))
+        self.assertTrue(c.active_monthly({"active_days_30": 26}))
+        self.assertFalse(c.active_monthly({}))
+        now = 10**9
+        recent = [{"closed": now - d * 86400, "pnl_usd": v} for d, v in ((1, 50), (8, 30), (15, -10), (22, 40))]
+        w = c.weekly(recent, now)
+        self.assertEqual((w["weeks_with_trades"], w["weeks_positive"]), (4, 3))
+        swing = dict(REF_STYLE, hold_min=60.0)
+        good = dict(audit(swing), **w)
+        self.assertTrue(wt.judge(swing, good, REF_STYLE)[0])
+        bad = dict(audit(swing), weeks_with_trades=4, weeks_positive=2)
+        self.assertIn("inconsistente", wt.judge(swing, bad, REF_STYLE)[2])

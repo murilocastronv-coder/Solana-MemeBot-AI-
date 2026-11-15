@@ -512,6 +512,17 @@ def old_enough(stats):
     return age is not None and float(age) >= MIN_WALLET_DAYS
 
 
+MIN_ACTIVE_DAYS_30 = int(_env("COPY_MIN_ACTIVE_DAYS_30", 25))
+
+
+def active_monthly(stats):
+    """Owner (Nov 15): trades on >= MIN_ACTIVE_DAYS_30 of the last 30 days (unknown counts as no)."""
+    if MIN_ACTIVE_DAYS_30 <= 0:
+        return True
+    n = stats.get("active_days_30")
+    return n is not None and int(n) >= MIN_ACTIVE_DAYS_30
+
+
 def active_daily(stats):
     """Active on >= MIN_ACTIVE_DAYS of the last 7 days (unknown counts as no)."""
     if MIN_ACTIVE_DAYS <= 0:
@@ -1704,6 +1715,15 @@ def holder_status(w):
     return ("ok" if ok else "fast"), med
 
 
+def weekly(recent, now):
+    """Consistency over the result window: weeks with trades and weeks that ended in profit."""
+    weeks = {}
+    for p in recent:
+        k = int((now - float(p.get("closed", now))) // (7 * 86400))
+        weeks[k] = weeks.get(k, 0.0) + float(p.get("pnl_usd", 0.0))
+    return {"weeks_with_trades": len(weeks), "weeks_positive": sum(1 for v in weeks.values() if v > 0)}
+
+
 def measure(address, rpc, sol_usd, max_tx=None):
     """Read the wallet's history: (hold seconds per closed position, audit dict)."""
     import wallet_profile
@@ -1722,6 +1742,7 @@ def measure(address, rpc, sol_usd, max_tx=None):
              "pnl_recent": round(sum(p.get("pnl_usd", 0.0) for p in recent), 2),
              "trades_recent": len(recent),
              "win_recent": round(sum(1 for p in recent if p.get("pnl_usd", 0) > 0) / len(recent), 3) if recent else 0.0,
+             **weekly(recent, now),
              "style": wallet_twin.style(summary)}
     return holds, audit
 
@@ -1799,7 +1820,7 @@ def prefilter(candidate):
     if twin_mode():                      # the style is compared with the reference wallet in the audit
         return (int(candidate.get("closed_trades", 0)) >= MIN_ROUND_TRIPS and
                 int(candidate.get("realized_lamports", 0)) > 0 and old_enough(candidate) and active_daily(candidate)
-                and str(candidate.get("wallet")) != _twin_ref())
+                and active_monthly(candidate) and str(candidate.get("wallet")) != _twin_ref())
     return (len(holds) >= MIN_ROUND_TRIPS and _median(holds) >= MIN_HOLD_SECONDS and
             long_share(holds) >= MIN_LONG_SHARE and int(candidate.get("closed_trades", 0)) >= MIN_ROUND_TRIPS and
             int(candidate.get("realized_lamports", 0)) > 0 and old_enough(candidate) and
@@ -1848,6 +1869,30 @@ def mark_owner_removed(address):
         d = _load()
         d.setdefault("owner_removed", {})[address] = time.time()
         _save(d)
+
+
+def reset_found_wallets_once():
+    """Owner (Nov 15): drop every wallet the search found so far (no good results) and the rejection list,
+    so the search starts again with the new rules. The reference wallet and the owner's picks stay; a found
+    wallet with an open copy stays only to sell together with it."""
+    removed = []
+    with _LOCK:
+        d = _load()
+        if d.get("reset_found_v1"):
+            return []
+        busy = _busy(d)
+        for a, w in list(d["wallets"].items()):
+            if w.get("auto_discovered") and not w.get("owner_pick") and not mirror(a, w):
+                if a in busy:
+                    w["leaving"] = True
+                else:
+                    d["wallets"].pop(a)
+                removed.append(a)
+        d.update(reset_found_v1=True, rejected={},
+                 search_stats={"analyzed": 0, "approved": 0, "rejected": 0, "since": time.time()})
+        _save(d)
+    _event("busca recomeçou do zero: " + str(len(removed)) + " carteiras achadas antes saíram")
+    return removed
 
 
 def ensure_reference():
@@ -2091,6 +2136,7 @@ def cycle(send=None, chat=None):
     except Exception as exc:
         LAST_ERROR["text"] = "só a carteira de referência: " + type(exc).__name__
     try:
+        reset_found_wallets_once()
         ensure_reference()
     except Exception as exc:
         LAST_ERROR["text"] = "carteira de referência: " + type(exc).__name__
@@ -2276,8 +2322,9 @@ def status_text():
                      format(wallet_twin.SNIPE_HOLD_MAX, ".0f") + " min, operam parecido com ela (≥ " + format(wallet_twin.MIN_SIMILARITY, ".0f") + "%) e estão no lucro" if wallet_twin.SNIPER else
                      "\n🔎 Caçando carteiras: seguram " + _mins(wallet_twin.SNIPE_HOLD_MIN) + " a " +
                      _mins(wallet_twin.SNIPE_HOLD_MAX) + " por moeda, lucro ≥ US$ " + format(wallet_twin.MIN_PROFIT, ",.0f") +
-                     " em " + format(wallet_twin.RESULT_DAYS, ".0f") + " dias, carteira com " + format(MIN_WALLET_DAYS, ".0f") +
-                     "+ dias") + "\n" + search_line())
+                     " em " + format(wallet_twin.RESULT_DAYS, ".0f") + " dias, lucro em " +
+                     format(wallet_twin.MIN_WEEK_SHARE * 100, ".0f") + "%+ das semanas, opera " + str(MIN_ACTIVE_DAYS_30) +
+                     "+ dias no mês, carteira com " + format(MIN_WALLET_DAYS, ".0f") + "+ dias") + "\n" + search_line())
         if TWIN_LOG:
             lines.append("Últimas analisadas: " + " · ".join(t + " " + a[:5] + "… " + format(s, ".0f") + "% " + why
                                                             for t, a, s, why in TWIN_LOG[-4:]))

@@ -23,6 +23,9 @@ MIN_WIN = float(os.getenv("COPY_TWIN_MIN_WIN", "0.45"))
 MIN_TRADES = int(float(os.getenv("COPY_TWIN_MIN_TRADES", "15")))
 # Owner's choice (Nov 14): wallets with BIG memecoin profit in the result window (COPY_RESULT_DAYS, 30 days)
 MIN_PROFIT = float(os.getenv("COPY_RESULT_MIN_USD", "0"))
+# consistent: profit in most weeks of the window (owner: "resultado consistente")
+MIN_WEEKS = int(float(os.getenv("COPY_MIN_WEEKS", "3")))
+MIN_WEEK_SHARE = float(os.getenv("COPY_MIN_WEEK_SHARE", "0.75"))
 RESULT_DAYS = float(os.getenv("COPY_RESULT_DAYS", "9"))
 PROFILE_MAX_AGE_S = float(os.getenv("COPY_TWIN_PROFILE_HOURS", "12")) * 3600
 PUMP = ("pump.fun", "PumpSwap")
@@ -151,6 +154,12 @@ def judge(cand_style, audit, ref):
         return False, sim, "poucas operações recentes"
     if a.get("pnl_recent", 0) <= 0:
         return False, sim, "sem lucro recente"
+    if "weeks_with_trades" in a and MIN_WEEKS > 0:
+        wk, wp = int(a.get("weeks_with_trades") or 0), int(a.get("weeks_positive") or 0)
+        if wk < MIN_WEEKS:
+            return False, sim, "pouco histórico (" + str(wk) + " semanas com operações)"
+        if wp < MIN_WEEK_SHARE * wk:
+            return False, sim, "lucro inconsistente (" + str(wp) + " de " + str(wk) + " semanas no lucro)"
     if a.get("pnl_recent", 0) < MIN_PROFIT:
         return False, sim, ("lucro de " + format(RESULT_DAYS, ".0f") + " dias abaixo de US$ " + format(MIN_PROFIT, ",.0f") +
                             " (" + format(a.get("pnl_recent", 0), "+,.0f") + ")")
