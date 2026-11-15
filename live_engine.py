@@ -142,6 +142,7 @@ EXIT_TEXT = {
     "sniper": "🛑 Stop -" + format(float(os.getenv("SNIPER_STOP_LOSS", "0.40")) * 100, ".0f") + "% | 🚀 a partir de +25% deixa correr (vende 12% abaixo do topo) | ⏱️ sai em 30 min se não decolar",
     "consensus": "🛑 Stop -40% | 🚀 a partir de +25% stop móvel (vende 10% abaixo do topo)",
     "rocket": "🚀 Sniper: 🛑 stop fixo -30% | 🚀 a partir de +15% stop móvel (10% abaixo do topo) | ⏱️ não chegou a +15% em 60 min: vende | 💰 2x vende metade, 5x mais metade",
+    "manual": "📡 Compra pelo sinal: 🛑 stop loss −50% | 🛡️ subiu +50%: stop na entrada | 💰 em +100% tira 25%, e mais 25% a cada +50%",
     "diamond": "💎 Diamond: 🛑 stop -10% | 🚀 a partir de +12% stop móvel (6% abaixo do topo) | ⏱️ fim da rodada: vende",
     "dip": "📉 Dip Bot: 🛑 stop -40% | 🚀 a partir de +12% stop móvel (vende 6% abaixo do topo) | ⏱️ sai em 6 h se não subir",
     "signal": "📡 Sinal: vende 1/2 no TP1, 1/4 no TP2 e o resto no TP3 | 🛑 stop do sinal (abaixo do fundo) | ⏱️ fecha em 24 h se não andar",
@@ -166,7 +167,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) "}.get(mode, "")
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + mint)
     try:
@@ -221,7 +222,8 @@ def sell_part(mint, fraction, reason, send, chat, note=None):
         send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + format(float(fraction) * 100, ".0f") + "% de " +
              symbol + " (" + (note or "a carteira copiada vendeu essa parte") + ")\n💵 Parte: US$ " + format(settled["cost_usd"], ".2f") +
              " → US$ " + format(settled["proceeds_usd"], ".2f") + " · P/L " + format(pnl, "+.2f") + " USD\n" +
-             "📦 O resto continua aberto" + (" e vende junto com a carteira (stop na entrada ativo)." if str(reason).startswith("copy")
+             "📦 O resto continua aberto" + ((" e vende junto com a carteira (stop na entrada ativo)." if position.get("mode") == "copy"
+                                             else " com stop na entrada e stop −50%.") if str(reason).startswith("copy")
                                             else " com stop móvel." if note else " e vende junto com a carteira.") + "\n🔗 https://solscan.io/tx/" + settled["signature"])
         return "sold"
     send(chat, "⏳ Venda parcial enviada, conferindo saldo. Libero sozinho em ~2 min.\nTx: https://solscan.io/tx/" +

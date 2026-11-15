@@ -150,6 +150,45 @@ def _px(x):
     return format(x, ".12f").rstrip("0").rstrip(".") if x > 0 else "0"
 
 
+SIGNAL_BUY_USD = tuple(float(x) for x in os.getenv("SIGNAL_BUY_USD", "10,20,30").split(",") if x.strip())
+
+
+def buy_buttons(mint):
+    """One tap buys the signal's coin with real money (owner's rules: SL -50%, stop at entry after +50%,
+    25% at +100% and every +50%)."""
+    return [[{"text": "💵 Comprar US$ " + format(v, "g"), "callback_data": "sb:" + format(v, "g") + ":" + mint}
+             for v in SIGNAL_BUY_USD[:3]]]
+
+
+def manual_buy(mint, usd, send, chat):
+    """Owner tapped a signal's buy button. '' when bought, else why not."""
+    import copy_trader as ct
+    import live_engine
+    import live_trade_state as st
+    if not live_engine.ready():
+        try:
+            live_engine.start()
+        except Exception as exc:
+            return "robô real não está pronto: " + str(exc)[:80]
+    positions = st._load()["positions"]
+    if mint in positions:
+        return "você já tem essa moeda aberta"
+    allowed, why = st.can_open()
+    if not allowed:
+        return why
+    if len(positions) >= st.MAX_POSITIONS:
+        return "limite de " + str(st.MAX_POSITIONS) + " posições abertas"
+    free = ct.wallet_usd(live_engine.get_address(), max_age=0)
+    if free is None or free < usd + RESERVE_USD:
+        return "saldo livre baixo (US$ " + format(free or 0, ".2f") + ")"
+    r = sg.safety_reason(mint)
+    if r:
+        return "anti-golpe: " + r
+    settled = live_engine._execute_buy({"baseToken": {"address": mint}}, mint, mint[:6], send, chat,
+                                       live_engine.get_address(), None, "manual", usd=usd)
+    return "" if settled else "compra não confirmada"
+
+
 def signal_text(p):
     """Signal with the same rules the Sniper uses; values between backticks are tap-to-copy in Telegram."""
     mint = p["baseToken"]["address"]
@@ -565,7 +604,7 @@ def cycle(send=None, chat=None, pairs=None, now=None, safety=None, buyer=None):
                 sc = sq.score(p)
                 t = sq.threshold()[0]
                 if sc >= t:
-                    send(chat, signal_text(p) + "\n" + sq.line(sc))
+                    send(chat, signal_text(p) + "\n" + sq.line(sc), buy_buttons(mint))
                     sq.record(p, sc, now)
                 else:
                     why["sinal fraco (nota < " + str(t) + ")"] = why.get("sinal fraco (nota < " + str(t) + ")", 0) + 1

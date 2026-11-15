@@ -171,7 +171,7 @@ class SignalTests(unittest.TestCase):
         rb.set_enabled(False)
         rb.set_signals(True)
         sent, bought = [], []
-        rb.cycle(lambda c, t: sent.append(t), 1, pairs=[pair()], now=NOW, safety=lambda m, curve=False: "",
+        rb.cycle(lambda c, t, *kb: sent.append(t), 1, pairs=[pair()], now=NOW, safety=lambda m, curve=False: "",
                  buyer=lambda p, s, c: bought.append(1) or "")
         self.assertEqual(bought, [])
         self.assertTrue(any("SINAL SNIPER" in t for t in sent))
@@ -179,7 +179,7 @@ class SignalTests(unittest.TestCase):
     def test_scam_gets_no_signal(self):
         rb.set_signals(True)
         sent = []
-        rb.cycle(lambda c, t: sent.append(t), 1, pairs=[pair()], now=NOW, safety=lambda m, curve=False: "freeze ativo")
+        rb.cycle(lambda c, t, *kb: sent.append(t), 1, pairs=[pair()], now=NOW, safety=lambda m, curve=False: "freeze ativo")
         self.assertFalse(any("SINAL SNIPER" in t for t in sent))
 
 
@@ -232,3 +232,11 @@ class GrowthPlanTest(unittest.TestCase):
         g = rb.track_account(2_000, now=jan + 32 * 86400)
         self.assertAlmostEqual(g["locked"], 200)
         self.assertEqual(g["months"], {"2026-01": 1000})
+
+
+
+class SignalBuyButtonTest(unittest.TestCase):
+    def test_buttons(self):
+        rows = rb.buy_buttons(MINT)
+        self.assertTrue(all(b["callback_data"].startswith("sb:") and len(b["callback_data"]) <= 64 for b in rows[0]))
+        self.assertIn(MINT, rows[0][0]["callback_data"])
