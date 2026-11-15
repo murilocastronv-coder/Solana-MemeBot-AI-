@@ -22,7 +22,7 @@ E = lambda k, d: sg._f(k, d)   # noqa: E731 - every number configurable on Rende
 
 START_USD = E("DEV_SIM_START_USD", 500)
 BUY_USD = E("DEV_BUY_USD", 5)
-MIN_SCORE = E("DEV_MIN_SCORE", 80)
+MIN_SCORE = E("DEV_MIN_SCORE", 0)        # owner (Nov 15, prompt criteria): no DEV SCORE minimum
 MIN_LIQ = E("DEV_MIN_LIQUIDITY_USD", 20_000)
 MIN_VOL_5M = E("DEV_MIN_VOLUME_5M", 5_000)
 MAX_OPEN = int(E("DEV_MAX_OPEN", 3))
@@ -46,7 +46,8 @@ DEV_REAUDIT_S = E("DEV_REAUDIT_HOURS", 12) * 3600
 WATCH_S = E("DEV_WATCH_HOURS", 24) * 3600
 # Approval (second spec): hit rate, closed trades, distinct tokens, profit factor, no rug pattern
 TIERS = (("ELITE", 0.90, 30, 2.5), ("PREMIUM", 0.85, 25, 2.0), ("APROVADO", 0.80, 20, 2.0))
-MIN_TOKENS = int(E("DEV_MIN_TOKENS", 10))
+MIN_TOKENS = int(E("DEV_MIN_TOKENS", 0))   # owner (Nov 15, prompt criteria): no distinct-coin minimum
+MAX_DEV_DD = E("DEV_MAX_DRAWDOWN", 0)      # 0 = off (prompt criteria)
 MAX_TOP_COIN_SHARE = E("DEV_MAX_TOP_COIN_SHARE", 0.60)     # profit from one coin only = excluded
 RUG_LOSS = 0.80
 # owner (Nov 15): the dev can hold at most 35% of the coin's supply (more = it can crash the price)
@@ -216,7 +217,7 @@ def tier(s):
     """('ELITE' | 'PREMIUM' | 'APROVADO' | 'MONITORADO', why)."""
     if s["trades"] < TIERS[-1][2]:
         return "MONITORADO", "poucas operações (" + str(s["trades"]) + ")"
-    if s["tokens"] < MIN_TOKENS:
+    if MIN_TOKENS and s["tokens"] < MIN_TOKENS:
         return "MONITORADO", "poucos tokens diferentes (" + str(s["tokens"]) + ")"
     if s["pnl"] <= 0:
         return "MONITORADO", "sem lucro líquido"
@@ -224,7 +225,7 @@ def tier(s):
         return "MONITORADO", "tem operações que viraram rug (" + str(s["rugs"]) + ")"
     if s["top_share"] > MAX_TOP_COIN_SHARE:
         return "MONITORADO", "lucro concentrado em uma moeda"
-    if s["max_dd"] > 0.20:
+    if MAX_DEV_DD and s["max_dd"] > MAX_DEV_DD:
         return "MONITORADO", "drawdown alto"
     if "launches" in s and (s["launches"] < MIN_LAUNCHES or s.get("launch_days", 0) < MIN_LAUNCH_DAYS):
         return "MONITORADO", ("troca de carteira: só " + str(s["launches"]) + " moedas criadas com esta carteira em " +
@@ -232,7 +233,7 @@ def tier(s):
                               format(MIN_LAUNCH_DAYS, ".0f") + " dias)")
     for name, w, n, pf in TIERS:
         if s["win"] >= w and s["trades"] >= n and s["pf"] >= pf:
-            if s["score"] < MIN_SCORE:
+            if MIN_SCORE and s["score"] < MIN_SCORE:
                 return "MONITORADO", "DEV SCORE " + format(s["score"], ".0f") + " < " + format(MIN_SCORE, ".0f")
             return name, ""
     return "MONITORADO", "acerto " + format(s["win"] * 100, ".0f") + "% / PF " + format(s["pf"], ".1f")
@@ -471,7 +472,7 @@ def buy_reason(p, info):
         return "não é moeda da pump.fun"
     if not approved(info):
         return "DEV não aprovado (" + (info or {}).get("tier", "sem análise") + ")"
-    if float(info.get("score") or 0) < MIN_SCORE:
+    if MIN_SCORE and float(info.get("score") or 0) < MIN_SCORE:
         return "DEV SCORE baixo"
     if p.get("dexId") == "pumpfun":
         # still on the bonding curve: no pool liquidity yet - judge by market cap and activity instead
@@ -663,6 +664,29 @@ def _notify_tier(dev, was, st, send=None, chat=None):
                  ". O robô não copia mais as compras dele.")
     except Exception:
         logging.exception("devbot notice failed")
+
+
+def retier_once():
+    """Owner (Nov 15): prompt criteria. Devs already rated are re-classified from their stored numbers; the ones
+    that pass now go back in line so the audit checks the same-wallet rule (and notifies) before they are copied."""
+    with _LOCK:
+        d = _load()
+        if d.get("retier_v1"):
+            return 0
+        n = 0
+        for v in d["devs"].values():
+            if "win" not in v or v.get("tier") in ("BLOQUEADO", "ERRO") or "rugs" not in v:
+                continue
+            t, why = tier(v)
+            if t in TIER_OK and v.get("tier") not in TIER_OK:
+                v.update(tier="NA FILA", why="critérios novos: conferir a mesma carteira", rated=0)
+                n += 1
+            elif t not in TIER_OK and v.get("tier") in TIER_OK:
+                v.update(tier=t, why=why)
+        d["retier_v1"] = True
+        _save(d)
+    note("critérios do prompt: " + str(n) + " DEVs voltaram para a fila para conferir a carteira")
+    return n
 
 
 def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=None, send=None, chat=None):
@@ -1114,7 +1138,7 @@ def status_text():
              " · drawdown máx " + format(m["max_dd"] * 100, ".1f") + "% · taxas US$ " + format(m["fees"], ".2f"),
              "🔎 Tokens vigiados: " + str(len(d["tokens"])) + " · DEVs aprovados vigiados em qualquer moeda nova · DEVs analisados: " +
              str(sum(1 for v in devs.values() if v.get("rated"))) + " · aprovados: " + str(len(ok)),
-             "⚙️ US$ " + format(buy_usd(), "g") + " por compra · score ≥ " + format(MIN_SCORE, ".0f") + " · liquidez ≥ US$ " +
+             "⚙️ US$ " + format(buy_usd(), "g") + " por compra · DEV: acerto ≥ 80%, ≥ 20 ops, PF ≥ 2, lucro, sem rug, mesma carteira · liquidez ≥ US$ " +
              format(MIN_LIQ / 1000, ".0f") + " mil · volume 5 min ≥ US$ " + format(MIN_VOL_5M / 1000, ".0f") +
              " mil · " + ("vende só quando o DEV vende (a mesma parte), sem stop e sem alvo" if MIRROR_DEV and STOP_LOSS <= 0
                           else "stop −" + format(STOP_LOSS * 100, ".0f") + "% · TP +" + format(TP1 * 100, ".0f") + "%")]
