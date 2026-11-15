@@ -271,11 +271,18 @@ def handle(update):
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
  if action.startswith("bx_"):
   send(chat,"₿ O robô de BTC foi removido. O bot agora roda só o Sniper.",keyboard());return
+ if action.startswith("sbx:"):
+  BUY_AMOUNT[chat]=(action.split(":",1)[1],time.time())
+  send(chat,"✏️ Quantos US$ você quer colocar nessa moeda? Mande só o número (ex.: 15 ou 7.5).\n`"+action.split(":",1)[1]+"`");return
+ if not cb and chat in BUY_AMOUNT and time.time()-BUY_AMOUNT[chat][1]<600 and AMOUNT_RE.fullmatch((msg or {}).get("text","").strip()):
+  mint=BUY_AMOUNT.pop(chat)[0]
+  action="sb:"+(msg or {}).get("text","").strip().replace(",",".").lstrip("$")+":"+mint
  if action.startswith("sb:"):
   import rocket_bot
   try:
    _,usd,mint=action.split(":",2);usd=float(usd)
   except ValueError:send(chat,"Botão inválido.",keyboard());return
+  if usd<1:send(chat,"⛔ O valor mínimo é US$ 1.",keyboard());return
   send(chat,"⏳ Comprando US$ "+format(usd,"g")+" de `"+mint+"` (anti-golpe e teste de venda antes)…")
   def run_buy():
    try:r=rocket_bot.manual_buy(mint,usd,send,chat)
@@ -631,6 +638,8 @@ def copy_beat_line():
  ago=int(time.time()-COPY_BEAT["at"])
  return ("🚨 " if ago>120 else "🔁 ")+"Copy trade: última rodada há "+str(ago)+" s (levou "+format(COPY_BEAT["took"],".0f")+" s)"+(" · erro "+COPY_BEAT["error"] if COPY_BEAT.get("error") else "")
 ADD_WALLET={}
+BUY_AMOUNT={}     # chat -> (mint, asked_at): the owner is typing how many US$ to buy of a signal's coin
+AMOUNT_RE=re.compile(r"\$?\d{1,6}([.,]\d{1,2})?")
 SOL_ADDRESS=re.compile(r"[1-9A-HJ-NP-Za-km-z]{32,44}")
 def copy_wallet_action(chat,action,text):
  """Owner chooses the wallets to copy: add by address, list, remove."""
