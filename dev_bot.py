@@ -46,7 +46,7 @@ DEV_REAUDIT_S = E("DEV_REAUDIT_HOURS", 12) * 3600
 WATCH_S = E("DEV_WATCH_HOURS", 24) * 3600
 # Approval (second spec): hit rate, closed trades, distinct tokens, profit factor, no rug pattern
 TIERS = (("ELITE", 0.90, 30, 2.5), ("PREMIUM", 0.85, 25, 2.0), ("APROVADO", 0.80, 20, 2.0))
-MIN_TOKENS = int(E("DEV_MIN_TOKENS", 0))   # owner (Nov 15, prompt criteria): no distinct-coin minimum
+MIN_TOKENS = int(E("DEV_MIN_TOKENS", 10))  # DEV Hunter prompt (Nov 15): history of at least 10 tokens
 MAX_DEV_DD = E("DEV_MAX_DRAWDOWN", 0)      # 0 = off (prompt criteria)
 MAX_TOP_COIN_SHARE = E("DEV_MAX_TOP_COIN_SHARE", 0.60)     # profit from one coin only = excluded
 RUG_LOSS = 0.80
@@ -232,6 +232,8 @@ def tier(s):
                               format(s.get("launch_days", 0), ".0f") + " dias (mín. " + str(MIN_LAUNCHES) + " em " +
                               format(MIN_LAUNCH_DAYS, ".0f") + " dias)")
     for name, w, n, pf in TIERS:
+        if name == "APROVADO":
+            w, n = max(w, float(_CFG.get("min_win") or 0)), max(n, int(_CFG.get("min_trades") or 0))
         if s["win"] >= w and s["trades"] >= n and s["pf"] >= pf:
             if MIN_SCORE and s["score"] < MIN_SCORE:
                 return "MONITORADO", "DEV SCORE " + format(s["score"], ".0f") + " < " + format(MIN_SCORE, ".0f")
@@ -239,6 +241,7 @@ def tier(s):
     return "MONITORADO", "acerto " + format(s["win"] * 100, ".0f") + "% / PF " + format(s["pf"], ".1f")
 
 
+_CFG = {}               # hunter controls (min hit rate / min trades for APROVADO), refreshed from the state
 _RULE = {"r": None}     # owner-applied follower rule (dev_follow.apply_winner), refreshed every cycle
 
 
@@ -523,6 +526,19 @@ def dev_moves(tx, dev):
     return out
 
 
+def _own(info, mint):
+    return mint in set((info or {}).get("launch_mints") or []) or mint in set((info or {}).get("tokens_seen") or [])
+
+
+def _signal(info, send, chat, text):
+    """Telegram signal for moves of devs approved by the ranking (not for every dev of a follower rule)."""
+    if send and chat and (info or {}).get("tier") in TIER_OK:
+        try:
+            send(chat, text)
+        except Exception:
+            logging.exception("devbot signal failed")
+
+
 def handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send=None, chat=None, safety=None, dev_sells=None):
     """React to one dev move: copy a buy (filters), mirror a sell, exit on a hidden transfer."""
     mint, kind, frac = mv["mint"], mv["kind"], mv["frac"]
@@ -553,12 +569,20 @@ def handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send=None, chat=N
         lag = now - float((tx or {}).get("blockTime") or now)
         if why:
             note("DEV " + dev[:6] + "… comprou " + sym + " — NÃO copiei: " + why)
+            _signal(info, send, chat, "📡 SINAL DEV " + str(info.get("tier")) + " `" + dev + "` comprou " + sym +
+                    (" (moeda que ele criou)" if _own(info, mint) else " (moeda de outro)") + " · detectado " +
+                    format(lag, ".0f") + " s depois\n⛔ NÃO copiei: " + why + "\n📄 `" + mint + "`")
             return
-        sim_buy(p, dev, "DEV " + info["tier"] + " (acerto " + format(info["win"] * 100, ".0f") + "%, score " +
-                format(info["score"], ".0f") + ") comprou · " + format(lag, ".0f") + " s depois do DEV", now, send, chat, lag=lag)
+        sim_buy(p, dev, "DEV " + info["tier"] + " (acerto " + format(info["win"] * 100, ".0f") + "%" +
+                (", moeda que ele criou" if _own(info, mint) else ", moeda de outro") + ") comprou · " +
+                format(lag, ".0f") + " s depois do DEV", now, send, chat, lag=lag)
     elif kind == "sell":
         dev_sells[mint] = max(dev_sells.get(mint, 0), frac)
         note("DEV " + dev[:6] + "… vendeu " + format(frac * 100, ".0f") + "% de " + sym)
+        if frac >= 0.10:
+            _signal(info, send, chat, ("🔴" if frac >= 0.75 else "🟠") + " SINAL DEV " + str(info.get("tier")) + " `" + dev +
+                    "` vendeu " + format(frac * 100, ".0f") + "% de " + sym +
+                    (" — o robô vende a mesma parte" if held_pos else " (o robô não tem essa moeda)"))
     elif kind == "transfer" and frac >= TRANSFER_EXIT:
         dev_sells[mint] = 1.0
         note("🚨 DEV " + dev[:6] + "… moveu " + format(frac * 100, ".0f") + "% dos tokens de " + sym +
@@ -640,10 +664,38 @@ def launch_stats(dev, d=None, launches_fn=None):
     for m, t in seen.items():
         times.setdefault(m, t)
     ts = sorted(t for t in times.values() if t)
-    return {"launches": len(times), "launch_days": round((ts[-1] - ts[0]) / 86400, 1) if len(ts) > 1 else 0.0}
+    return {"launches": len(times), "launch_days": round((ts[-1] - ts[0]) / 86400, 1) if len(ts) > 1 else 0.0,
+            "launch_mints": [m for m in times if not str(m).startswith("t")][-300:]}
+
+
+def wilson(wins, n, z=1.96):
+    """95% confidence interval of a hit rate (small samples get a wide interval)."""
+    if not n:
+        return 0.0, 0.0
+    p = wins / n
+    den = 1 + z * z / n
+    mid = (p + z * z / (2 * n)) / den
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / den
+    return round(max(0.0, mid - half), 3), round(min(1.0, mid + half), 3)
+
+
+def split_stats(closed, launch_mints):
+    """Hit rate on the dev's OWN launches vs other people's coins, and the confidence interval of the total."""
+    own = set(launch_mints or [])
+    out = {}
+    for key, rows in (("own", [c for c in closed if c.get("mint") in own]), ("other", [c for c in closed if c.get("mint") not in own])):
+        w = sum(1 for c in rows if float(c.get("pnl_usd") or 0) > 0)
+        out["n_" + key], out["win_" + key] = len(rows), round(w / len(rows), 3) if rows else None
+    w = sum(1 for c in closed if float(c.get("pnl_usd") or 0) > 0)
+    out["win_ci"] = wilson(w, len(closed))
+    return out
 
 
 TIER_OK = ("ELITE", "PREMIUM", "APROVADO")
+
+
+def _pct_txt(w, n):
+    return ("—" if w is None else format(w * 100, ".0f") + "%") + " em " + str(n or 0) + " ops"
 
 
 def _notify_tier(dev, was, st, send=None, chat=None):
@@ -658,6 +710,10 @@ def _notify_tier(dev, was, st, send=None, chat=None):
                  format(st["pnl"], "+,.0f") + " · score " + format(st["score"], ".0f") +
                  ("\n🪪 " + str(st["launches"]) + " moedas criadas com esta carteira em " + format(st.get("launch_days", 0), ".0f") +
                   " dias" if "launches" in st else "") +
+                 ("\n📏 Acerto real fica entre " + format(st["win_ci"][0] * 100, ".0f") + "% e " + format(st["win_ci"][1] * 100, ".0f") +
+                  "% (confiança 95%)" if st.get("win_ci") else "") +
+                 ("\n🪙 Nas moedas dele: " + _pct_txt(st.get("win_own"), st.get("n_own")) + " · nas de outros: " +
+                  _pct_txt(st.get("win_other"), st.get("n_other")) if "n_own" in st else "") +
                  "\nO robô vai copiar as próximas compras dele (US$ " + format(buy_usd(), "g") + ", se passar nos filtros).")
         else:
             send(chat, "⚠️ DEV `" + dev + "` perdeu a aprovação: " + (st.get("why") or st.get("tier", "")) +
@@ -671,7 +727,7 @@ def retier_once():
     that pass now go back in line so the audit checks the same-wallet rule (and notifies) before they are copied."""
     with _LOCK:
         d = _load()
-        if d.get("retier_v1"):
+        if d.get("retier_v2"):
             return 0
         n = 0
         for v in d["devs"].values():
@@ -683,7 +739,7 @@ def retier_once():
                 n += 1
             elif t not in TIER_OK and v.get("tier") in TIER_OK:
                 v.update(tier=t, why=why)
-        d["retier_v1"] = True
+        d["retier_v2"] = True
         _save(d)
     note("critérios do prompt: " + str(n) + " DEVs voltaram para a fila para conferir a carteira")
     return n
@@ -695,6 +751,8 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
     now = now or time.time()
     d = _load()
     _RULE["r"] = d.get("follow_rule")
+    _CFG.clear()
+    _CFG.update(d.get("hunt_cfg") or {})
     # devs approved by the rating (tier) before the same-wallet rule existed: re-checked first, once
     # (by tier, not approved(): with a follower rule every dev counts as approved and they would loop forever)
     tiers = ("ELITE", "PREMIUM", "APROVADO")
@@ -730,6 +788,7 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
                 if stats["tier"] in ("ELITE", "PREMIUM", "APROVADO"):
                     _spend()
                     stats.update(launch_stats(dev, d, launches_fn))
+                    stats.update(split_stats(closed, stats.get("launch_mints")))
                     stats["tier"], stats["why"] = tier(stats)
                 stats["hist"] = _hist(closed)[-300:]
                 stats["hist_v2"] = True

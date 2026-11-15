@@ -40,7 +40,7 @@ def csrf_ok(token):
     return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
 
 
-ACTIONS = {"dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
+ACTIONS = {"hunt": "Busca de DEVs lucrativos iniciada", "hunt_x": "Busca de DEVs parada", "dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
            "dv_bt365": "Backtest DEV de 12 meses iniciado", "dv_btc": "Backtest DEV do período escolhido iniciado",
            "dv_btx": "Backtest DEV cancelado", "dv_on": "Robô DEV rodando", "dv_off": "Robô DEV pausado",
            "dv_stop": "PARADA DE EMERGÊNCIA: robô DEV pausado e posições vendidas",
@@ -318,7 +318,7 @@ TABS_JS = """
 </script>
 """
 
-TAB_LIST = (("t-bt", "🧪 Backtest"), ("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
+TAB_LIST = (("t-devs", "🕵️ DEVs"), ("t-bt", "🧪 Backtest"), ("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
             ("t-bots", "🤖 Robôs"), ("t-avisos", "🔔 Avisos"))
 
 
@@ -332,6 +332,51 @@ def _sparkline(vals, w=320, h=60):
     color = "var(--up)" if vals[-1] >= vals[0] else "var(--down)"
     return ("<svg viewBox='0 0 " + str(w) + " " + str(h) + "' style='width:100%;max-width:" + str(w) +
             "px;height:auto'><polyline fill='none' stroke='" + color + "' stroke-width='2' points='" + pts + "'/></svg>")
+
+
+def devs_tab(order="lucro"):
+    """DEV Hunter panel: BUSCAR DEVS LUCRATIVOS (7/30/90 days, max candidates, min hit rate, min trades), progress,
+    results and the sortable table of devs."""
+    import dev_hunter as dh
+    j, r = dh.job(), dh.results()
+    out = ["<div class='card'><h2>🕵️ Buscar DEVs lucrativos</h2><form method='post' action='/painel/acao'>",
+           "<input type='hidden' name='csrf' value='", csrf_token(), "'><input type='hidden' name='acao' value='hunt'>",
+           "Período <select name='dias'><option value='7'>7 dias</option><option value='30' selected>30 dias</option>"
+           "<option value='90'>90 dias</option></select> · máx. candidatos <input name='max' type='number' value='300' "
+           "min='10' max='2000' style='width:80px'> · acerto mín. <input name='acerto' type='number' value='80' min='80' max='100' "
+           "style='width:60px'>% · operações mín. <input name='ops' type='number' value='20' min='20' style='width:60px'>",
+           "<button class='btn big' style='margin-top:10px'>🔎 BUSCAR DEVS LUCRATIVOS</button></form>",
+           _button("hunt_x", "⏹️ Parar busca", "stop")]
+    if j:
+        prog = int(j.get("progress") or 0)
+        out += ["<div style='margin-top:10px'>", _e(j.get("status", "")), " · ", _e(j.get("stage", "")),
+                "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div></div>"]
+    out += ["<div class='grid' style='margin-top:10px'>"]
+    for label, val in (("Achadas", r["found"]), ("Analisadas", r["analysed"]), ("✅ Aprovadas", r["approved"]),
+                       ("❌ Rejeitadas", r["rejected"]), ("Na fila", r["queue"])):
+        out += ["<div class='card kpi' style='margin:0'><div class='l'>", label, "</div><div class='v'>", str(val), "</div></div>"]
+    out.append("</div>")
+    if r["reasons"]:
+        out.append("<div class='mut'>Motivos das rejeições: " + _e(" · ".join(k + " " + str(v) for k, v in r["reasons"].items())) + "</div>")
+    out.append("<div class='mut'>A análise de cada carteira usa os créditos da Helius com limite por hora: centenas de "
+               "carteiras levam algumas horas. Aprovado = acerto ≥ 80%, ≥ 20 ops, ≥ 10 tokens, lucro, PF ≥ 2, sem rug, mesma carteira.</div></div>")
+    rows = dh.table(order)
+    out += ["<div class='card'><h2>📋 DEVs</h2>Ordenar: <a href='/painel?ordem=lucro#t-devs'>lucro</a> · "
+            "<a href='/painel?ordem=acerto#t-devs'>acerto</a> · <a href='/painel?ordem=atividade#t-devs'>atividade</a>",
+            "<div class='tw'><table><tr><th>Carteira</th><th>Classe</th><th>Acerto (95%)</th><th>Ops</th><th>Próprias / outras</th>"
+            "<th>Lançou</th><th>Lucro</th><th>PF</th><th>DD</th><th>Última</th><th>Monitorando</th></tr>"]
+    for x in rows:
+        ci = x.get("ci") or [0, 0]
+        own = ("—" if x.get("n_own") is None else (format((x["win_own"] or 0) * 100, ".0f") + "%/" + str(x["n_own"]) + " · " +
+                                                  format((x["win_other"] or 0) * 100, ".0f") + "%/" + str(x["n_other"])))
+        out += ["<tr><td><a href='https://solscan.io/account/", _e(x["dev"]), "' target='_blank'>", _e(x["dev"][:6]), "…</a></td><td>",
+                _e(x["tier"]), "</td><td>", format(x["win"] * 100, ".0f"), "% <span class='mut'>(", format(ci[0] * 100, ".0f"), "–",
+                format(ci[1] * 100, ".0f"), "%)</span></td><td>", str(x["trades"]), "</td><td>", own, "</td><td>",
+                "—" if x["launches"] is None else str(x["launches"]), "</td><td>", _usd(x["pnl"] or 0, True), "</td><td>",
+                format(x["pf"] or 0, ".1f"), "</td><td>", format((x["dd"] or 0) * 100, ".0f"), "%</td><td>",
+                ("há " + _ago(x["last"])) if x["last"] else "—", "</td><td>", "✅" if x["watch"] else "—", "</td></tr>"]
+    out.append("</table></div></div>")
+    return "".join(out)
 
 
 def backtest_tab():
@@ -363,7 +408,7 @@ def backtest_tab():
     return "".join(out)
 
 
-def page(msg=""):
+def page(msg="", order="lucro"):
     import copy_trader as ct
     try:
         import rocket_bot
@@ -377,6 +422,9 @@ def page(msg=""):
     if msg:
         out += ["<div class='card' style='border-color:var(--acc)'>✅ ", _e(msg), "</div>"]
     out.append("<nav class='tabs'>" + "".join("<button type='button' data-t='" + t + "'>" + label + "</button>" for t, label in TAB_LIST) + "</nav>")
+
+    # ---- DEV Hunter
+    out += ["<section class='tab' id='t-devs'>", _safe(lambda: devs_tab(order)), "</section>"]
 
     # ---- Backtest DEV
     out += ["<section class='tab' id='t-bt'>", _safe(backtest_tab), "</section>"]

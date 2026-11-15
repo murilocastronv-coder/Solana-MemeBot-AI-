@@ -35,7 +35,7 @@ class DevBotTest(unittest.TestCase):
         s = db.rate_dev(good, NOW)
         self.assertEqual(s["tier"], "ELITE")
         one_coin = [pos("ONE", 20, 0.5, NOW - i * 3600) for i in range(30)]
-        self.assertIn("concentrado", db.rate_dev(one_coin, NOW)["why"])   # prompt criteria: no coin minimum, but no one-coin luck
+        self.assertIn("tokens", db.rate_dev(one_coin, NOW)["why"])   # DEV Hunter: at least 10 different tokens
         rug = good + [pos("R", -9, -0.95, NOW - 5)]
         self.assertIn("rug", db.rate_dev(rug, NOW)["why"])
 
@@ -321,3 +321,37 @@ class DevPromptCriteriaTest(unittest.TestCase):
             self.assertEqual(db.retier_once(), 1)
             self.assertEqual(db._load()["devs"][DEV]["tier"], "NA FILA")
             self.assertEqual(db.retier_once(), 0)
+
+
+class DevHunterTest(unittest.TestCase):
+    def test_hunt_queues_new_creators_once_and_reports(self):
+        import dev_hunter as dh
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            calls = {"n": 0}
+
+            def history(rpc, addr, gte=None, lte=None, order="asc", limit=100):
+                calls["n"] += 1
+                return [{"blockTime": gte, "transaction": {"message": {"accountKeys": ["CREATOR" + str(calls["n"] % 3)]}},
+                         "meta": {"logMessages": ["Instruction: Create"], "postTokenBalances": [{"mint": "X" + str(gte) + "pump"}]}}]
+            n = dh.hunt(object(), 7, 50, now=NOW, history=history)
+            self.assertEqual(n, 3)                         # 3 distinct creators, duplicates skipped
+            d = db._load()
+            self.assertEqual(sum(1 for v in d["devs"].values() if v.get("found_by") == "hunter"), 3)
+            d["devs"]["CREATOR0"].update(tier="MONITORADO", why="sem lucro líquido", win=0.2, trades=30, pnl=-5, pf=0.5)
+            db._save(d)
+            r = dh.results()
+            self.assertEqual((r["found"], r["analysed"], r["rejected"], r["queue"]), (3, 1, 1, 2))
+            self.assertIn("sem lucro líquido", r["reasons"])
+            self.assertEqual(dh.table()[0]["dev"], "CREATOR0")
+
+    def test_wilson_and_split(self):
+        lo, hi = db.wilson(18, 20)
+        self.assertTrue(0.65 < lo < 0.75 and 0.95 < hi <= 1.0)
+        closed = [{"mint": "A", "pnl_usd": 5}, {"mint": "A", "pnl_usd": -1}, {"mint": "B", "pnl_usd": 3}]
+        s = db.split_stats(closed, ["A"])
+        self.assertEqual((s["n_own"], s["win_own"], s["n_other"], s["win_other"]), (2, 0.5, 1, 1.0))
+
+    def test_min_win_control_never_below_80(self):
+        import dev_hunter as dh
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            self.assertEqual(dh.set_cfg(0.5, 5), {"min_win": 0.8, "min_trades": 20})
