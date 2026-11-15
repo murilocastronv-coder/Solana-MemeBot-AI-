@@ -75,7 +75,7 @@ BT_CAPITAL = E("DEV_BT_CAPITAL", 60)
 BT_DAYS = E("DEV_BT_DAYS", 365)                    # owner: 1 year
 BT_DEVS = int(E("DEV_BT_DEVS", 300))               # devs downloaded per click (the next click continues)
 BT_TARGET = int(E("DEV_BT_TARGET", 10_000))        # owner: test with 10,000 devs (reached over several clicks)
-BT_MAX_S = E("DEV_BT_MAX_MINUTES", 15) * 60        # one click never runs longer than this
+BT_MAX_S = E("DEV_BT_MAX_MINUTES", 4) * 60        # one click never runs longer than this
 
 _LOCK = threading.RLock()
 LAST = {"at": 0, "why": "", "tokens": 0, "devs": 0}
@@ -879,8 +879,6 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
     text += "\n\n" + periods_text(d, now)
     try:
         import dev_follow
-        if rpc is not None:
-            dev_follow.fill(max_s=FOLLOW_FILL_S)
         text += "\n\n" + dev_follow.report(now)
     except Exception as exc:
         text += "\n\n🎯 Backtest de quem copia falhou: " + type(exc).__name__
