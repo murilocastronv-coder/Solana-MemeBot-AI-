@@ -142,6 +142,7 @@ def btc_keyboard():
   [{"text":"🧪 Testar compra no fundo (6 meses)","callback_data":"btc_dip"}],
   [{"text":"₿ Robô compra no fundo: status","callback_data":"fd_status"}],
   [{"text":"🟢 Ligar robô (real)","callback_data":"fd_on"},{"text":"🔴 Desligar robô","callback_data":"fd_off"}],
+  [{"text":str(n)+"x","callback_data":"fd_lev"+str(n)} for n in (1,2,3,4,5)],
   [{"text":"$"+str(n),"callback_data":"fd_usd"+str(n)} for n in (20,50,100,200)],
   [{"text":"✏️ Outro valor","callback_data":"fd_usdask"},{"text":"💰 Vender tudo agora","callback_data":"fd_sell"}],
   [{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💸 Retirar","callback_data":"wd_start"},
@@ -444,17 +445,22 @@ def handle(update):
   send(chat,"✏️ Quantos US$ por compra no robô compra no fundo? Mande só o número (ex.: 30 ou 75). Entre US$ 10 e US$ 1000.");return
  if action.startswith("bl_"):   # RSI2 robot removed (owner, Nov 15): only the buy-the-bottom robot operates
   send(chat,"O robô RSI2 foi removido. Agora só opera o ₿ Robô compra no fundo.",keyboard());return
- if action in ("fd_status","fd_on","fd_off","fd_sell","fd_sell_ok") or action.startswith("fd_usd"):   # real money, spot BTC
+ if action in ("fd_status","fd_on","fd_off","fd_sell","fd_sell_ok") or action.startswith(("fd_usd","fd_lev")):   # real money, spot BTC
   import btc_dip_live as fd
   try:
    pre=""
    if action=="fd_on":
     fd.set_enabled(True)
-    pre=("🟢 ROBÔ COMPRA NO FUNDO LIGADO (dinheiro real): compra US$ "+format(float(fd._load()["usd"]),"g")+
+    pre=("🟢 ROBÔ COMPRA NO FUNDO LIGADO (dinheiro real, "+str(fd.cycle_lev(fd._load()))+"x): compra US$ "+format(float(fd._load()["usd"]),"g")+
      " de BTC quando cair 15% do topo dos últimos 30 dias (ou desde a última venda), de novo a cada −15% (máx. 3), "
      "vende tudo com +7% acima da média. Se o BTC já estiver 15% abaixo do topo, compra no próximo minuto.\n\n")
    elif action=="fd_off":
     fd.set_enabled(False);pre="🔴 Robô desligado: não compra mais. O BTC já comprado continua com a venda em +7% acima da média.\n\n"
+   elif action.startswith("fd_lev"):
+    lev=fd.set_lev(int(action[6:]));d=fd._load()
+    pre=("⚙️ Alavancagem: "+str(lev)+"x"+(" = BTC à vista (sem juros, sem liquidação)" if lev==1 else
+     " = LONG na Jupiter Perps (juros por hora; pode ser liquidado)")+
+     (" — vale a partir do próximo ciclo; o aberto continua em "+str(fd.cycle_lev(d))+"x" if d["buys"] else "")+"\n\n")
    elif action.startswith("fd_usd"):
     usd=fd.set_usd(action[6:]);pre="💵 Valor por compra: US$ "+format(usd,"g")+"\n\n"
    elif action=="fd_sell":

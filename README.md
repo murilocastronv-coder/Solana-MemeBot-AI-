@@ -194,7 +194,9 @@ conferência (perto de 50% = sorte). Não envia ordens; o resultado fica em `btc
 Compra BTC de verdade (WBTC na Solana, via Jupiter, com o SOL da carteira do bot), **sem alavancagem**:
 1ª compra quando o BTC cai 15% do topo (maior preço desde a última venda; no começo, o maior dos últimos
 30 dias), compra de novo a cada −15% abaixo da anterior (máx. 3), vende tudo de volta para SOL com +7%
-acima do preço médio. Valor por compra no menu ($20/50/100/200, ✏️ Outro valor ou `/valor 75`). Começa
+acima do preço médio. Valor por compra no menu ($20/50/100/200, ✏️ Outro valor ou `/valor 75`). Alavancagem no menu de **1x a 5x**:
+1x = BTC à vista; 2x–5x = LONG na Jupiter Perps (as compras somam na mesma posição, juros por hora,
+pode ser liquidado; a liquidação é detectada na rede e avisada). A alavancagem vale por ciclo. Começa
 desligado; **💰 Vender tudo agora** vende na hora (com confirmação). O robô RSI2 4h foi removido (uma
 posição que ele ainda tivesse continua com as saídas até fechar).
 - **📥 Depositar SOL** · **💰 Ver saldo** · **💸 Saque manual** · **🔑 Exportar carteira**.

@@ -7,7 +7,11 @@ import btc_dip_live as fd
 
 
 def buyer(price):
-    return lambda usd: {"btc_raw": int(usd / price * 1e8), "usd": usd, "price": price, "signature": "S"}
+    def buy(usd, lev, p):
+        if lev > 1:
+            return {"usd": usd, "size": usd * lev, "price": price, "signature": "S"}
+        return {"btc_raw": int(usd / price * 1e8), "usd": usd, "price": price, "signature": "S"}
+    return buy
 
 
 class Base(unittest.TestCase):
@@ -21,7 +25,8 @@ class Base(unittest.TestCase):
     def tick(self, price, **kw):
         kw.setdefault("buyer", buyer(price))
         kw.setdefault("top_fn", lambda: 100000.0)
-        kw.setdefault("seller", lambda raw: {"usd": raw / 1e8 * price, "signature": "S2"})
+        kw.setdefault("seller", lambda d, p: {"usd": fd.invested(d) + fd.open_pnl(d, price), "signature": "S2"})
+        kw.setdefault("size_fn", lambda: 1000.0)
         return fd.cycle(lambda c, t: self.msgs.append(t), "1", price=price, now=kw.pop("now", 1000), **kw)
 
 
@@ -60,7 +65,7 @@ class DipLiveTests(Base):
 
     def test_failed_buy_waits_15_min(self):
         fd.set_enabled(True)
-        def boom(usd):
+        def boom(usd, lev, p):
             raise RuntimeError("SOL insuficiente")
         self.assertEqual(self.tick(80000, buyer=boom), "buy_failed")
         self.assertEqual(self.tick(80000, now=1060), "")
@@ -81,6 +86,37 @@ class DipLiveTests(Base):
         self.tick(80000)
         self.assertEqual(fd._load()["buys"][0]["usd"], 75.5)
 
+    def test_leveraged_cycle_and_liquidation_price(self):
+        fd.set_lev(5)
+        fd.set_enabled(True)
+        self.assertEqual(self.tick(85000), "bought")
+        self.assertIn("LONG 5x", self.msgs[-1])
+        d = fd._load()
+        self.assertEqual(fd.position_size(d), 500)
+        self.assertAlmostEqual(fd.liq_price(d), 85000 * (1 - 0.9 / 5), delta=1)
+        fd.set_lev(1)                                         # applies from the next cycle
+        self.assertEqual(fd.cycle_lev(fd._load()), 5)
+        self.assertEqual(self.tick(72250, now=1000 + 600), "bought")
+        self.assertEqual(fd._load()["buys"][1]["lev"], 5)
+        avg = fd.avg_price(fd._load())
+        self.assertEqual(self.tick(avg * 1.071, now=1000 + 1200), "sold")
+        self.assertGreater(fd._load()["history"][-1]["pnl_usd"], 5 * 200 * 0.06)
+        self.assertEqual(fd.cycle_lev(fd._load()), 1)
+
+    def test_liquidation_detected_on_chain(self):
+        fd.set_lev(3)
+        fd.set_enabled(True)
+        self.tick(85000)
+        self.assertEqual(self.tick(60000, now=1000 + 600, size_fn=lambda: 0.0), "liquidated")
+        d = fd._load()
+        self.assertEqual(d["buys"], [])
+        self.assertEqual(d["history"][-1]["pnl_usd"], -100)
+        self.assertIn("LIQUIDADO", self.msgs[-1])
+
+    def test_leverage_limited_to_5(self):
+        with self.assertRaises(ValueError):
+            fd.set_lev(10)
+
     def test_status(self):
         self.assertIn("DESLIGADO", fd.status_text())
 
@@ -100,6 +136,8 @@ class TelegramTests(Base):
         self.assertIn("LIGADO", self.press("fd_on")[0])
         self.assertTrue(fd._load()["enabled"])
         self.assertIn("US$ 50", self.press("fd_usd50")[0])
+        self.assertIn("LONG", self.press("fd_lev5")[0])
+        self.assertEqual(fd._load()["lev"], 5)
         self.press("fd_usdask")
         self.press(text="40")
         self.assertEqual(float(fd._load()["usd"]), 40)
