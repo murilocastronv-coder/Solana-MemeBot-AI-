@@ -1895,6 +1895,23 @@ def reset_found_wallets_once():
     return removed
 
 
+def drop_reference_once():
+    """Owner (Nov 15): stop copying the reference wallet (DNMU…); the search finds new ones. The reference
+    stays only as the measuring stick of the search. With an open copy it stays just to sell with it."""
+    import wallet_twin
+    ref = wallet_twin.REFERENCE
+    with _LOCK:
+        d = _load()
+        if d.get("drop_reference_v1") or not ref:
+            return False
+        d["drop_reference_v1"] = True
+        _save(d)
+    unfollow(ref)
+    mark_owner_removed(ref)
+    _event("parei de copiar a carteira de referência " + ref[:6] + "…: a busca coloca carteiras novas")
+    return True
+
+
 def ensure_reference():
     """The reference wallet (COPY_REFERENCE_WALLET) is always copied unless the owner removed it."""
     import wallet_twin
@@ -2137,6 +2154,7 @@ def cycle(send=None, chat=None):
         LAST_ERROR["text"] = "só a carteira de referência: " + type(exc).__name__
     try:
         reset_found_wallets_once()
+        drop_reference_once()
         ensure_reference()
     except Exception as exc:
         LAST_ERROR["text"] = "carteira de referência: " + type(exc).__name__
@@ -2315,7 +2333,9 @@ def status_text():
     if twin_mode():
         import wallet_twin
         ref = wallet_twin.REFERENCE
-        lines[3] = ("⭐ Carteira de referência: " + ref[:6] + "…" + ref[-4:] + " (copia tudo, mesma %) — estilo: " +
+        copied = ref in d["wallets"] and not d["wallets"][ref].get("leaving")
+        lines[3] = ("⭐ Carteira de referência: " + ref[:6] + "…" + ref[-4:] +
+                    (" (copia tudo, mesma %)" if copied else " (NÃO é copiada: só serve de medida para a busca)") + " — estilo: " +
                     wallet_twin.describe(wallet_twin.reference_style()) +
                     ("\n🎯 Caçando carteiras SNIPER: compram a moeda com até " + format(wallet_twin.SNIPE_MAX_AGE_MIN, ".0f") +
                      " min de vida, seguram " + format(wallet_twin.SNIPE_HOLD_MIN, ".0f") + "–" +
