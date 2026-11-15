@@ -155,6 +155,8 @@ def keyboard():
   [{"text":"▶️ Ligar sniper","callback_data":"sn_on"},{"text":"⏸️ Pausar sniper","callback_data":"sn_off"}],
   [{"text":"🧪 Backtest sniper 8 meses","callback_data":"sn_bt"},{"text":"⏹️ Cancelar","callback_data":"sn_btx"}],
   [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
+  [{"text":"🕵️ Buscar DEVs 7d","callback_data":"hunt7"},{"text":"30d","callback_data":"hunt30"},{"text":"90d","callback_data":"hunt90"}],
+  [{"text":"📋 DEVs encontrados","callback_data":"hunt_list"},{"text":"⏹️ Parar busca","callback_data":"hunt_x"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
   [{"text":"✅ Usar estratégia vencedora","callback_data":"dv_apply"},{"text":"↩️ Regra original (80%)","callback_data":"dv_orig"}],
@@ -317,6 +319,26 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
+ if action in ("hunt7","hunt30","hunt90","hunt_list","hunt_x","/devs"):
+  import dev_hunter
+  try:
+   if action=="hunt_x":dev_hunter.cancel();send(chat,"⏹️ Busca de DEVs parada (o que já achou fica na fila).",keyboard());return
+   if action.startswith("hunt") and action[4:].isdigit():
+    days=int(action[4:])
+    why=dev_hunter.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,days,300,send=send,chat=chat)
+    send(chat,("🕵️ Buscando criadores de moedas dos últimos "+str(days)+" dias (até 300 carteiras novas). Elas entram "
+     "na fila de análise com os critérios: acerto ≥ 80%, ≥ 20 operações, ≥ 10 tokens, lucro, PF ≥ 2, sem rug, mesma carteira.") if not why else "⛔ "+why,keyboard());return
+   r=dev_hunter.results();j=dev_hunter.job()
+   lines=["🕵️ DEV HUNTER — busca: "+str(j.get("status","nunca rodou"))+" · "+str(j.get("progress",0))+"% · "+str(j.get("stage","")),
+    "Achadas "+str(r["found"])+" · analisadas "+str(r["analysed"])+" · ✅ aprovadas "+str(r["approved"])+" · ❌ rejeitadas "+str(r["rejected"])+" · na fila "+str(r["queue"])]
+   if r["reasons"]:lines.append("Motivos: "+" · ".join(k+" "+str(v) for k,v in r["reasons"].items()))
+   for x in dev_hunter.table("lucro",10):
+    ci=x.get("ci") or [0,0]
+    lines.append(("🏅 " if x["watch"] else "• ")+str(x["tier"])+" `"+x["dev"]+"` acerto "+format(x["win"]*100,".0f")+"% ("+
+     format(ci[0]*100,".0f")+"–"+format(ci[1]*100,".0f")+"%) · "+str(x["trades"])+" ops · PF "+format(x["pf"] or 0,".1f")+" · US$ "+format(x["pnl"] or 0,"+,.0f"))
+   for part in split_message("\n".join(lines)):send(chat,part,keyboard())
+  except Exception as exc:send(chat,"⛔ DEV Hunter: "+str(exc)[:200],keyboard())
+  return
  if action in ("sn_status","sn_on","sn_off","sn_bt","sn_btx","/sniper"):
   import snipe_bot,snipe_backtest
   try:
@@ -1198,6 +1220,8 @@ def loop():
   copy_only_once()         # only the copy trade (owner): BTC robot and signals off
   dev_mode_once()          # real copy trade off (owner, Nov 15)
   dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
+  try:__import__("dev_hunter").mark_interrupted()
+  except Exception:logging.exception("hunter state")
   try:__import__("snipe_backtest").mark_interrupted()
   except Exception:logging.exception("snipe backtest state")
   try:__import__("dev_bot").retier_once()
@@ -1244,7 +1268,7 @@ def panel():
  if not dashboard.authorized(request.authorization):
   return Response("Senha do painel",status=401,headers={"WWW-Authenticate":'Basic realm="Painel do bot"',"Cache-Control":"no-store"})
  msg=dashboard.ACTIONS.get(request.args.get("ok",""),"")
- return Response(dashboard.page(msg),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
+ return Response(dashboard.page(msg,request.args.get("ordem","lucro")),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
   "X-Content-Type-Options":"nosniff","Referrer-Policy":"same-origin"})
 def web_action(action,form=None):
  """On/off switches of the web panel (same effect as the Telegram buttons)."""
@@ -1265,6 +1289,13 @@ def web_action(action,form=None):
     rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=ct._sol_usd(),send=send,chat=chat)
    if why:raise ValueError(why)
   elif action=="dv_btx":dev_backtest.cancel()
+  elif action=="hunt":
+   import dev_hunter
+   f=form or {}
+   why=dev_hunter.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,int(f.get("dias") or 30),
+    min(2000,max(10,int(f.get("max") or 300))),float(f.get("acerto") or 80)/100,int(f.get("ops") or 20),send=send,chat=chat)
+   if why:raise ValueError(why)
+  elif action=="hunt_x":__import__("dev_hunter").cancel()
   elif action=="dv_on":dev_bot.set_enabled(True)
   elif action=="dv_off":dev_bot.set_enabled(False)
   elif action=="dv_stop":dev_bot.emergency_stop(send,chat)
