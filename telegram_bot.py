@@ -1071,8 +1071,20 @@ def dev_loop():
   try:
    chat=active_chat()
    if not os.getenv("SOLANA_RPC_URL"):continue
-   dev_bot.cycle(send,chat,rpc=dex_rpc(),sol_usd=__import__("copy_trader")._sol_usd())
+   dev_bot.cycle(send,chat,rpc=DEV_RPC.setdefault("rpc",dex_rpc()),sol_usd=__import__("copy_trader")._sol_usd(),do_audit=False)
   except Exception as exc:logging.exception("devbot cycle failed: %s",type(exc).__name__)
+DEV_RPC={}
+def dev_audit_loop():
+ """Rates the devs in line all the time, apart from the buy/sell watcher (finds approved devs faster)."""
+ import dev_bot
+ time.sleep(30)
+ while True:
+  n=0
+  try:
+   if os.getenv("SOLANA_RPC_URL") and dev_bot.enabled():
+    n=dev_bot.audit_devs(DEV_RPC.setdefault("rpc",dex_rpc()),__import__("copy_trader")._sol_usd())
+  except Exception as exc:logging.exception("devbot audit failed: %s",type(exc).__name__)
+  time.sleep(2 if n else 20)
 def dev_real_once():
  """Owner (Nov 15, later): the DEV robot trades real money. Once."""
  try:
@@ -1136,6 +1148,7 @@ def loop():
   dev_mode_once()          # real copy trade off (owner, Nov 15)
   dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
   threading.Thread(target=dev_loop,daemon=True).start()
+  threading.Thread(target=dev_audit_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=rocket_loop,daemon=True).start()
