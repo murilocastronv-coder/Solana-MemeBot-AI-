@@ -53,6 +53,12 @@ RUG_LOSS = 0.80
 MAX_DEV_SHARE = E("DEV_MAX_HOLD_SHARE", 0.35)
 # anti-scam: the dev moves this share (or more) of its coins to another wallet without selling -> exit + block
 TRANSFER_EXIT = E("DEV_TRANSFER_EXIT", 0.25)
+MAX_RUNUP_DEV = E("DEV_MAX_RUNUP_SINCE_DEV", 0.15)   # no buy if the price rose 15%+ since the dev's buy
+DAILY_LOSS_USD = E("DEV_DAILY_LOSS_USD", 0)        # 0 = no daily loss limit (owner's choice); e.g. 15 stops buys for the day
+BT_PERIODS = (7, 30, 90, 180)
+BT_PERIOD_CAPITAL = E("DEV_BT_PERIOD_CAPITAL", 500)
+CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 5_000)      # coins still on the pump.fun curve (no pool yet)
+CURVE_MIN_VOL_5M = E("DEV_CURVE_MIN_VOLUME_5M", 1_000)
 # owner (Nov 15): only pump.fun coins (launch curve, PumpSwap or a pump.fun mint)
 PUMP_ONLY = os.getenv("DEV_PUMP_ONLY", "true").strip().lower() != "false"
 BT_CAPITAL = E("DEV_BT_CAPITAL", 60)
@@ -296,8 +302,11 @@ def _track(d, prices=None):
         d["max_dd"] = max(float(d.get("max_dd") or 0), (d["equity_peak"] - eq) / d["equity_peak"])
 
 
-def sim_buy(p, dev, reason, now=None, send=None, chat=None):
+def sim_buy(p, dev, reason, now=None, send=None, chat=None, lag=None):
     now = now or time.time()
+    if DAILY_LOSS_USD > 0 and metrics(now=now)["pnl_day"] <= -DAILY_LOSS_USD:
+        note("limite de perda do dia (US$ " + format(DAILY_LOSS_USD, "g") + ") atingido: sem compras até amanhã")
+        return False
     mint = p["baseToken"]["address"]
     price = float(p.get("priceUsd") or 0)
     usd = buy_usd()
@@ -330,7 +339,7 @@ def sim_buy(p, dev, reason, now=None, send=None, chat=None):
         d["positions"][mint] = {"symbol": (p.get("baseToken") or {}).get("symbol") or mint[:6], "dev": dev,
                                 "entry": price, "last": price, "peak": 1.0, "qty": usd * (1 - COST) / price,
                                 "cost": usd + NET_FEE_USD, "at": now, "tp1": False, "reason": reason,
-                                "realized": 0.0, "real": is_real}
+                                "realized": 0.0, "real": is_real, "lag_s": lag}
         _track(d)
         _save(d)
     note("COMPROU (" + ("REAL" if is_real else "simulação") + ") " + d["positions"][mint]["symbol"] + " US$ " + format(usd, "g") + " a " +
@@ -354,7 +363,7 @@ def _sell(d, mint, frac, price, why, now):
     d["positions"].pop(mint)
     h = {"mint": mint, "symbol": pos["symbol"], "dev": pos["dev"], "entry": pos["entry"], "exit": price,
          "cost": pos["cost"], "proceeds": round(pos["realized"], 4), "pnl": round(pos["realized"] - pos["cost"], 4),
-         "opened": pos["at"], "closed": now, "why_in": pos["reason"], "why_out": why}
+         "opened": pos["at"], "closed": now, "why_in": pos["reason"], "why_out": why, "lag_s": pos.get("lag_s")}
     d["history"] = d["history"][-999:] + [h]
     return h
 
@@ -428,16 +437,124 @@ def buy_reason(p, info):
         return "DEV não aprovado (" + (info or {}).get("tier", "sem análise") + ")"
     if float(info.get("score") or 0) < MIN_SCORE:
         return "DEV SCORE baixo"
-    if liq < MIN_LIQ:
-        return "liquidez US$ " + format(liq, ",.0f") + " < US$ " + format(MIN_LIQ, ",.0f")
-    if vol5 < MIN_VOL_5M:
-        return "volume 5 min US$ " + format(vol5, ",.0f") + " < US$ " + format(MIN_VOL_5M, ",.0f")
+    if p.get("dexId") == "pumpfun":
+        # still on the bonding curve: no pool liquidity yet - judge by market cap and activity instead
+        mcap = float(p.get("marketCap") or p.get("fdv") or 0)
+        if mcap < CURVE_MIN_MCAP:
+            return "curva da pump.fun: market cap US$ " + format(mcap, ",.0f") + " < US$ " + format(CURVE_MIN_MCAP, ",.0f")
+        if vol5 < CURVE_MIN_VOL_5M:
+            return "curva da pump.fun: volume 5 min US$ " + format(vol5, ",.0f") + " < US$ " + format(CURVE_MIN_VOL_5M, ",.0f")
+    else:
+        if liq < MIN_LIQ:
+            return "liquidez US$ " + format(liq, ",.0f") + " < US$ " + format(MIN_LIQ, ",.0f")
+        if vol5 < MIN_VOL_5M:
+            return "volume 5 min US$ " + format(vol5, ",.0f") + " < US$ " + format(MIN_VOL_5M, ",.0f")
     if up5 > MAX_RUNUP_5M:
         return "já subiu " + format(up5, ".0f") + "% em 5 min (entrada atrasada)"
     return ""
 
 
 # ---------------------------------------------------------------- 24/7 cycle
+def dev_moves(tx, dev):
+    """Every coin the dev's balance changed in this tx: [{mint, kind, frac, held, sol, tokens}]."""
+    meta = (tx or {}).get("meta") or {}
+    if meta.get("err"):
+        return []
+    mints = {b.get("mint") for b in (meta.get("preTokenBalances") or []) + (meta.get("postTokenBalances") or [])
+             if b.get("owner") == dev and b.get("mint")}
+    out = []
+    for m in mints:
+        kind, frac, held = dev_move(tx, m, dev, after=True)
+        if not kind:
+            continue
+        dec = 0
+        pre = post = 0.0
+        for side, rows in (("pre", meta.get("preTokenBalances") or []), ("post", meta.get("postTokenBalances") or [])):
+            for b in rows:
+                if b.get("owner") == dev and b.get("mint") == m:
+                    ui = b.get("uiTokenAmount") or {}
+                    dec = int(ui.get("decimals") or 0)
+                    v = int(ui.get("amount") or 0) / (10 ** dec)
+                    if side == "pre":
+                        pre += v
+                    else:
+                        post += v
+        import wallet_copy
+        _, sol = wallet_copy._tx_deltas(tx)
+        out.append({"mint": m, "kind": kind, "frac": frac, "held": held, "sol": int(sol.get(dev, 0)),
+                    "tokens": abs(post - pre)})
+    return out
+
+
+def handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send=None, chat=None, safety=None, dev_sells=None):
+    """React to one dev move: copy a buy (filters), mirror a sell, exit on a hidden transfer."""
+    mint, kind, frac = mv["mint"], mv["kind"], mv["frac"]
+    dev_sells = dev_sells if dev_sells is not None else {}
+    held_pos = mint in _load()["positions"]
+    sym = ((by_mint.get(mint) or {}).get("baseToken") or {}).get("symbol") or mint[:6]
+    if kind == "buy":
+        if held_pos:
+            return
+        p = by_mint.get(mint) or _pair_of(mint)
+        why = "sem dados da DexScreener (moeda nova demais)" if p is None else buy_reason(p, info)
+        dev_price = (abs(mv["sol"]) / 1e9 * float(sol_usd or 0) / mv["tokens"]) if mv["tokens"] and sol_usd else None
+        if not why and dev_price:
+            now_price = float(p.get("priceUsd") or 0)
+            run = now_price / dev_price - 1 if dev_price > 0 else 0
+            if run > MAX_RUNUP_DEV:
+                why = ("preço já subiu " + format(run * 100, ".0f") + "% desde a compra do DEV (máx. " +
+                       format(MAX_RUNUP_DEV * 100, ".0f") + "%)")
+        if not why:
+            share = dev_share(rpc, mint, mv["held"])
+            if share is None:
+                why = "não consegui medir quanto o DEV tem da moeda"
+            elif share > MAX_DEV_SHARE:
+                why = "DEV tem " + format(share * 100, ".0f") + "% da moeda (máx. " + format(MAX_DEV_SHARE * 100, ".0f") + "%)"
+        if not why:
+            r = (safety or sg.safety_reason)(mint)
+            why = ("anti-golpe: " + r) if r else ""
+        lag = now - float((tx or {}).get("blockTime") or now)
+        if why:
+            note("DEV " + dev[:6] + "… comprou " + sym + " — NÃO copiei: " + why)
+            return
+        sim_buy(p, dev, "DEV " + info["tier"] + " (acerto " + format(info["win"] * 100, ".0f") + "%, score " +
+                format(info["score"], ".0f") + ") comprou · " + format(lag, ".0f") + " s depois do DEV", now, send, chat, lag=lag)
+    elif kind == "sell":
+        dev_sells[mint] = max(dev_sells.get(mint, 0), frac)
+        note("DEV " + dev[:6] + "… vendeu " + format(frac * 100, ".0f") + "% de " + sym)
+    elif kind == "transfer" and frac >= TRANSFER_EXIT:
+        dev_sells[mint] = 1.0
+        note("🚨 DEV " + dev[:6] + "… moveu " + format(frac * 100, ".0f") + "% dos tokens de " + sym +
+             " para outra carteira (pode ser golpe): vendo tudo e bloqueando o DEV")
+        with _LOCK:
+            dd = _load()
+            dd["devs"].setdefault(dev, {}).update(tier="BLOQUEADO", why="transferiu tokens escondido (suspeita de golpe)",
+                                                  rated=now + 30 * 86400)
+            _save(dd)
+        if send and chat and held_pos:
+            send(chat, "🚨 DEV BOT: o DEV de " + sym + " moveu " + format(frac * 100, ".0f") +
+                 "% dos tokens para outra carteira sem vender — possível golpe. Vendendo tudo e bloqueando esse DEV.")
+
+
+def _pair_of(mint):
+    try:
+        rows = sg._get(sg.DEX + "/tokens/v1/solana/" + mint) or []
+        rows = [r for r in rows if isinstance(r, dict)]
+        return max(rows, key=lambda r: float((r.get("liquidity") or {}).get("usd") or 0)) if rows else None
+    except Exception:
+        return None
+
+
+def emergency_stop(send=None, chat=None, now=None):
+    """Owner's panic button: robot paused (no buys) and every open position sold now."""
+    set_enabled(False)
+    d = _load()
+    prices = {m: p["last"] for m, p in d["positions"].items()}
+    out = exits(prices, now, send, chat, {m: 1.0 for m in d["positions"]})
+    note("🛑 PARADA DE EMERGÊNCIA: robô pausado, " + str(len(out)) + " posição(ões) vendida(s)")
+    return len(out)
+
+
 def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
     """Rate the devs waiting in line (never rated first). A wallet with too few transactions to have
     MIN trades is dismissed with one cheap call instead of a full history read. Returns devs rated."""
@@ -512,75 +629,36 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
     # 2) rate devs (oldest rating first) - the 24/7 loop does this in its own thread (audit_devs)
     if do_audit:
         audit_devs(rpc, sol_usd, now, analyze)
-    # 3) approved devs: read their new transactions on the tokens they created
+    # 3) approved devs: read ALL their new transactions (new launches / first buys on any pump.fun coin,
+    #    sells and hidden transfers of coins we hold)
     d = _load()
     dev_sells = {}
-    for mint, t in list(d["tokens"].items()):
-        dev = t.get("dev")
-        info = d["devs"].get(dev or "", {})
-        if not dev or not approved(info) or now - t["seen"] > WATCH_S:
+    for dev, info in list(d["devs"].items()):
+        if not approved(info):
             continue
         try:
-            opts = {"limit": 20}
-            if t.get("last_sig"):
-                opts["until"] = t["last_sig"]
+            opts = {"limit": 25}
+            if info.get("last_sig"):
+                opts["until"] = info["last_sig"]
             sigs = rpc("getSignaturesForAddress", [dev, opts]) or []
         except Exception:
             continue
         if sigs:
             with _LOCK:
                 dd = _load()
-                if mint in dd["tokens"]:
-                    dd["tokens"][mint]["last_sig"] = sigs[0]["signature"]
-                    _save(dd)
-        if not t.get("last_sig"):
+                dd["devs"].setdefault(dev, {})["last_sig"] = sigs[0]["signature"]
+                _save(dd)
+        if not info.get("last_sig"):
             continue                                 # first read: only remember where we are
         for s in reversed(sigs):
             if s.get("err"):
                 continue
             try:
-                kind, frac, held = dev_move(get_tx(rpc, s["signature"]), mint, dev, after=True)
+                tx = get_tx(rpc, s["signature"])
             except Exception:
                 continue
-            if kind == "buy":
-                p = by_mint.get(mint)
-                why = "sem dados da DexScreener" if p is None else buy_reason(p, info)
-                if not why:
-                    share = dev_share(rpc, mint, held)
-                    if share is None:
-                        why = "não consegui medir quanto o DEV tem da moeda"
-                    elif share > MAX_DEV_SHARE:
-                        why = "DEV tem " + format(share * 100, ".0f") + "% da moeda (máx. " + format(MAX_DEV_SHARE * 100, ".0f") + "%)"
-                if not why:
-                    r = (safety or sg.safety_reason)(mint)
-                    why = ("anti-golpe: " + r) if r else ""
-                if why:
-                    note("DEV " + dev[:6] + "… comprou " + str(t.get("symbol")) + " — NÃO copiei: " + why)
-                else:
-                    sim_buy(p, dev, "DEV " + info["tier"] + " (acerto " + format(info["win"] * 100, ".0f") +
-                            "%, score " + format(info["score"], ".0f") + ") comprou o próprio token", now, send, chat)
-            elif kind == "sell":
-                dev_sells[mint] = max(dev_sells.get(mint, 0), frac)
-                note("DEV " + dev[:6] + "… vendeu " + format(frac * 100, ".0f") + "% de " + str(t.get("symbol")))
-                if frac < 0.25 and send and chat and mint in _load()["positions"]:
-                    send(chat, "⚠️ DEV BOT: o DEV vendeu " + format(frac * 100, ".0f") + "% de " + str(t.get("symbol")) +
-                         " — reavaliando (mantém stop −" + format(STOP_LOSS * 100, ".0f") + "%)")
-            elif kind == "transfer" and frac >= TRANSFER_EXIT:
-                # dev moved a big part of its coins to another wallet without selling: classic way to hide a
-                # dump (rug) -> leave the coin now and stop trusting this dev
-                dev_sells[mint] = 1.0
-                note("🚨 DEV " + dev[:6] + "… moveu " + format(frac * 100, ".0f") + "% dos tokens de " + str(t.get("symbol")) +
-                     " para outra carteira (pode ser golpe): vendo tudo e bloqueando o DEV")
-                with _LOCK:
-                    dd = _load()
-                    dd["devs"].setdefault(dev, {}).update(tier="BLOQUEADO", why="transferiu tokens escondido (suspeita de golpe)",
-                                                          rated=now + 30 * 86400)
-                    _save(dd)
-                if send and chat and mint in _load()["positions"]:
-                    send(chat, "🚨 DEV BOT: o DEV de " + str(t.get("symbol")) + " moveu " + format(frac * 100, ".0f") +
-                         "% dos tokens para outra carteira sem vender — possível golpe. Vendendo tudo e bloqueando esse DEV.")
-            elif kind == "transfer":
-                note("⚠️ DEV " + dev[:6] + "… moveu tokens de " + str(t.get("symbol")) + " sem venda (transferência)")
+            for mv in dev_moves(tx, dev):
+                handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send, chat, safety, dev_sells)
     # 4) exits with live prices
     d = _load()
     if d["positions"]:
@@ -630,7 +708,12 @@ def metrics(d=None, now=None):
             "worst": round(min((x["pnl"] for x in h), default=0.0), 2)}
 
 
-def backtest(dev_histories, start=500.0, usd=5.0, delay_cost=0.03, train_share=0.7):
+STRATEGIES = (("A: todos os DEVs", None), ("B: acerto ≥ 70%", 0.70), ("C: acerto ≥ 80%", 0.80),
+              ("D: acerto ≥ 90%", 0.90))
+PERIOD_STRATEGIES = (("A: acerto ≥ 70%", 0.70), ("B: acerto ≥ 80%", 0.80), ("C: acerto ≥ 90%", 0.90))
+
+
+def backtest(dev_histories, start=500.0, usd=5.0, delay_cost=0.03, train_share=0.7, strategies=STRATEGIES):
     """Approximate follower backtest from the devs' REAL closed trades (dev_histories: {dev: [positions]}).
     The follower enters each dev trade with the dev's result minus delay, swap costs and slippage.
     Selection uses only trades the dev had CLOSED before each entry (no future data). Chronological split:
@@ -641,8 +724,7 @@ def backtest(dev_histories, start=500.0, usd=5.0, delay_cost=0.03, train_share=0
         return None
     cut = events[int(len(events) * train_share)][0] if len(events) > 3 else events[-1][0]
     out = {}
-    for name, need in (("A: todos os DEVs", None), ("B: acerto ≥ 70%", 0.70), ("C: acerto ≥ 80%", 0.80),
-                       ("D: acerto ≥ 90%", 0.90)):
+    for name, need in strategies:
         res = {}
         for part, lo, hi in (("treino", -1, cut), ("teste", cut, float("inf"))):
             cash, peak, dd, n, wins, gw, gl, worst, fees = start, start, 0.0, 0, 0, 0.0, 0.0, 0.0, 0.0
@@ -736,6 +818,7 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
     text += ("\n👥 DEVs: " + str(len(d["devs"])) + " descobertos · " + str(got) + " baixados (meta " + format(BT_TARGET, ",d") +
              ") · " + str(len(hist)) + " com operações na pump.fun no período · " + str(left) + " na fila" +
              (" — toque de novo para baixar mais" if left else "") + ".")
+    text += "\n\n" + periods_text(d, now)
     with _LOCK:
         dd = _load()
         dd["backtest"] = text
@@ -743,6 +826,63 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
     lines = text.split("\n")
     note("backtest: " + (lines[-2] if len(lines) > 1 else lines[0])[:150])
     return text
+
+
+def periods_text(d=None, now=None, capital=None):
+    """Owner's spec: 7 / 30 / 90 / 180 days with US$ 500, strategies 70% / 80% / 90% / 80% + independent buyers.
+    Whole period (no train/test split) - a short window is too small to split. Honest about missing data."""
+    d = d or _load()
+    now = now or time.time()
+    capital = float(capital or BT_PERIOD_CAPITAL)
+    usd = max(1.0, buy_usd())
+    lines = ["📆 BACKTEST POR PERÍODO (US$ " + format(capital, "g") + " · US$ " + format(usd, "g") + " por operação · " +
+             "período inteiro, sem separar treino/teste):"]
+    for days in BT_PERIODS:
+        since = now - days * 86400
+        hist = {k: [h for h in v["hist"] if (h.get("closed") or 0) and (h.get("opened") or 0) >= since
+                    and (not PUMP_ONLY or pump_trade(h))]
+                for k, v in d["devs"].items() if v.get("hist")}
+        # the DEV's rating uses its full past (also before the window) - only entries inside the window count
+        full = {k: [h for h in v["hist"] if not PUMP_ONLY or pump_trade(h)] for k, v in d["devs"].items() if v.get("hist")}
+        lines.append("— " + str(days) + " dias:")
+        for name, need in PERIOD_STRATEGIES:
+            r = _window(full, hist, capital, usd, need)
+            lines.append("  • " + name + ": " + (
+                "sem operações" if not r["trades"] else
+                "final US$ " + format(r["final"], ",.2f") + " (" + format(r["final"] - capital, "+.2f") + ") · " +
+                str(r["trades"]) + " ops · acerto " + format(r["win"] * 100, ".0f") + "% · DD " +
+                format(r["max_dd"] * 100, ".0f") + "%"))
+        lines.append("  • D: acerto ≥ 80% + compradores independentes: NÃO CALCULADO — o histórico baixado não traz "
+                     "quem mais comprou cada moeda (precisaria ler todas as compras de cada moeda).")
+    lines.append("⚠️ Faltam dados para otimizar stop/alvo: o histórico tem só entrada e saída de cada operação do DEV, "
+                 "não o caminho do preço. Por isso o robô fica com a sua regra: sai só quando o DEV sai.")
+    return "\n".join(lines)
+
+
+def _window(full, hist, capital, usd, need, delay_cost=0.03):
+    events = sorted(((p["opened"], dev, p) for dev, ps in hist.items() for p in ps), key=lambda t: t[0])
+    cash, peak, dd, n, wins = capital, capital, 0.0, 0, 0
+    for t, dev, p in events:
+        prior = [q for q in full[dev] if q.get("closed") and q["closed"] < t]
+        if len(prior) < 20 or sum(1 for q in prior if float(q.get("pnl_usd") or 0) > 0) / len(prior) < need:
+            continue
+        if cash < usd:
+            break
+        pnl = usd * (float(p.get("result_pct") or 0) - delay_cost - 2 * COST) - 2 * NET_FEE_USD
+        cash += pnl
+        n += 1
+        wins += pnl > 0
+        peak = max(peak, cash)
+        dd = max(dd, (peak - cash) / peak if peak else 0)
+    return {"final": round(cash, 2), "trades": n, "win": wins / n if n else 0.0, "max_dd": dd}
+
+
+def lag_line(d=None):
+    xs = [x["lag_s"] for x in ((d or _load())["history"] + list((d or _load())["positions"].values())) if x.get("lag_s") is not None]
+    if not xs:
+        return "⏱️ Atraso DEV → bot: ainda sem compras copiadas"
+    return ("⏱️ Atraso DEV → bot: média " + format(sum(xs) / len(xs), ".0f") + " s · pior " + format(max(xs), ".0f") +
+            " s (" + str(len(xs)) + " compras)")
 
 
 def backtest_text(res, devs_n, capital=500.0, usd=5.0):
@@ -783,12 +923,17 @@ def status_text():
              "📦 Abertas " + str(m["open"]) + "/" + str(MAX_OPEN) + " · " + str(m["trades"]) + " operações · acerto " +
              format(m["win"] * 100, ".0f") + "% · PF " + ("—" if m["pf"] is None else format(m["pf"], ".2f")) +
              " · drawdown máx " + format(m["max_dd"] * 100, ".1f") + "% · taxas US$ " + format(m["fees"], ".2f"),
-             "🔎 Tokens vigiados: " + str(len(d["tokens"])) + " · DEVs analisados: " +
+             "🔎 Tokens vigiados: " + str(len(d["tokens"])) + " · DEVs aprovados vigiados em qualquer moeda nova · DEVs analisados: " +
              str(sum(1 for v in devs.values() if v.get("rated"))) + " · aprovados: " + str(len(ok)),
              "⚙️ US$ " + format(buy_usd(), "g") + " por compra · score ≥ " + format(MIN_SCORE, ".0f") + " · liquidez ≥ US$ " +
              format(MIN_LIQ / 1000, ".0f") + " mil · volume 5 min ≥ US$ " + format(MIN_VOL_5M / 1000, ".0f") +
              " mil · " + ("vende só quando o DEV vende (a mesma parte), sem stop e sem alvo" if MIRROR_DEV and STOP_LOSS <= 0
                           else "stop −" + format(STOP_LOSS * 100, ".0f") + "% · TP +" + format(TP1 * 100, ".0f") + "%")]
+    lines.append("🎯 Filtros de entrada: preço no máximo +" + format(MAX_RUNUP_DEV * 100, ".0f") +
+                 "% acima da compra do DEV · moeda na curva da pump.fun: market cap ≥ US$ " + format(CURVE_MIN_MCAP, ",.0f") +
+                 " e volume 5 min ≥ US$ " + format(CURVE_MIN_VOL_5M, ",.0f") + " (sem exigir liquidez) · impacto de preço ≤ 1% · " +
+                 ("limite de perda do dia US$ " + format(DAILY_LOSS_USD, "g") if DAILY_LOSS_USD > 0 else "sem limite de perda diário"))
+    lines.append(lag_line(d))
     for k, v in sorted(ok, key=lambda kv: -kv[1].get("score", 0))[:5]:
         lines.append("🏅 " + v["tier"] + " `" + k + "` acerto " + format(v["win"] * 100, ".0f") + "% · " + str(v["trades"]) +
                      " ops · PF " + format(v["pf"], ".1f") + " · US$ " + format(v["pnl"], "+,.0f"))

@@ -156,7 +156,8 @@ def keyboard():
   [{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
   [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
-  [{"text":"🧪 Backtest 1 ano (US$ 60)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
+  [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
+  [{"text":"🧪 Backtest (1 ano + 7/30/90/180 dias)","callback_data":"dv_bt"},{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
   [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -315,12 +316,13 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
- if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim") or action.startswith("dv_usd"):
+ if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim","dv_stop") or action.startswith("dv_usd"):
   import dev_bot
   try:
    pre=""
    if action=="dv_on":dev_bot.set_enabled(True);pre="▶️ Robô DEV rodando (simulação).\n\n"
    elif action=="dv_off":dev_bot.set_enabled(False);pre="⏸️ Robô DEV pausado: não compra; as posições simuladas continuam com stop.\n\n"
+   elif action=="dv_stop":pre="🛑 PARADA DE EMERGÊNCIA: robô DEV pausado e "+str(dev_bot.emergency_stop(send,chat))+" posição(ões) vendida(s) agora.\n\n"
    elif action=="dv_close":dev_bot.close_all();pre="🧹 Posições simuladas do robô DEV encerradas.\n\n"
    elif action=="dv_real":
     live_engine.start();dev_bot.set_real(True)
