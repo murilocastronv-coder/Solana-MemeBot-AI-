@@ -50,6 +50,27 @@ ORPHAN_EXIT = {"stop_loss": os.getenv("COPY_ORPHAN_STOP_LOSS", "0.40"),
 SNIPER_EXIT = {"stop_loss": SNIPER_STOP_LOSS, "arm": "1.25", "drop": "0.12"}
 
 
+# Owner's choice (Nov 14), copy positions that follow a wallet:
+# - once the coin reached +COPY_BE_ARM, the stop goes to the entry (never turns into a loss);
+# - at +100% sell 25% of what is left, then 25% more at every further +50% (+150%, +200%, ...).
+COPY_BE_ARM = float(os.getenv("COPY_BE_ARM", "0.25"))
+COPY_TP_FIRST = float(os.getenv("COPY_TP_FIRST", "2.0"))
+COPY_TP_STEP = float(os.getenv("COPY_TP_STEP", "0.5"))
+COPY_TP_PART = float(os.getenv("COPY_TP_PART", "0.25"))
+
+
+def copy_wallet_guard(position, ratio, peak):
+    """Ladder / breakeven signal for a copy position, or None."""
+    done = int(position.get("copy_tp_done") or 0)
+    nxt = COPY_TP_FIRST + COPY_TP_STEP * done
+    if COPY_TP_PART > 0 and ratio >= nxt:
+        return {"action": "sell_part", "fraction": COPY_TP_PART, "reason": "copy_ladder", "level": nxt,
+                "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
+    if COPY_BE_ARM > 0 and peak >= 1 + COPY_BE_ARM and ratio <= 1.0:
+        return {"action": "sell", "reason": "copy_breakeven", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
+    return None
+
+
 def copy_trail_enabled():
     return os.getenv("COPY_TRAIL_ENABLED", "true").strip().lower() != "false"
 
@@ -123,11 +144,14 @@ def position_signal(position, cost, proceeds):
             and os.getenv("COPY_EXIT_MODE", "wallet").strip().lower() == "wallet"):
         # Copy trade: sells when the copied wallet sells (copy_trader) AND, once in profit,
         # a trailing stop locks the gain (no fixed stop loss unless COPY_WALLET_STOP_LOSS is set).
+        ratio = float(proceeds) / float(cost) if cost else 0.0
+        peak = max(ratio, float(position.get("peak_ratio") or 0))
+        guard = copy_wallet_guard(position, ratio, peak)
+        if guard:
+            return guard
         if copy_trail_enabled():
             return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **copy_wallet_exit())
-        ratio = float(proceeds) / float(cost) if cost else 0.0
-        return {"action": "hold", "reason": "follow_wallet", "change_pct": (ratio - 1) * 100,
-                "peak_ratio": max(ratio, float(position.get("peak_ratio") or 0))}
+        return {"action": "hold", "reason": "follow_wallet", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") in ("copy", "clone"):
         # Copy trade: target +50% / stop -15% (selling with the copied wallet is done by copy_trader).
         # A cloned wallet carries its own measured TP / SL / max hold on the position.
@@ -206,7 +230,7 @@ def _jupiter_healthy():
 
 def sell_signals():
     """Positions to exit: TP/SL/time stop ("sell") or dead tokens ("write_off")."""
-    return [(m, p, s) for m, p, s in _evaluate() if s["action"] in ("sell", "write_off")]
+    return [(m, p, s) for m, p, s in _evaluate() if s["action"] in ("sell", "sell_part", "write_off")]
 
 def monitor(send, chat):
     """Alert-only mode, used while real trading is not active."""
