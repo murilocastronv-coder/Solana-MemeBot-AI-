@@ -157,7 +157,8 @@ def buy_buttons(mint):
     """One tap buys the signal's coin with real money (owner's rules: SL -50%, stop at entry after +50%,
     25% at +100% and every +50%)."""
     return [[{"text": "💵 Comprar US$ " + format(v, "g"), "callback_data": "sb:" + format(v, "g") + ":" + mint}
-             for v in SIGNAL_BUY_USD[:3]]]
+             for v in SIGNAL_BUY_USD[:3]],
+            [{"text": "✏️ Escolher o valor", "callback_data": "sbx:" + mint}]]
 
 
 def manual_buy(mint, usd, send, chat):
