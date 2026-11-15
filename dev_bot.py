@@ -587,6 +587,31 @@ def emergency_stop(send=None, chat=None, now=None):
     return len(out)
 
 
+DEV_FIRST_TX = int(E("DEV_FIRST_TX", 100))
+BT_TX = int(E("DEV_BT_TX", 300))
+DEV_CALLS_PER_HOUR = int(E("DEV_HISTORY_CALLS_PER_HOUR", 100))   # Helius history calls (~100 credits each)
+_CALLS = []
+
+
+def _budget_ok(now=None):
+    now = now or time.time()
+    _CALLS[:] = [t for t in _CALLS if now - t < 3600]
+    return len(_CALLS) < DEV_CALLS_PER_HOUR
+
+
+def _spend(n=1, now=None):
+    _CALLS.extend([now or time.time()] * n)
+
+
+def _clear_reject(st):
+    """Stage-1 result bad enough that 200 more transactions would not change the verdict."""
+    if st.get("trades", 0) < 5:
+        return True
+    if st.get("trades", 0) >= 10 and (st.get("win", 0) < 0.6 or st.get("pnl", 0) <= 0):
+        return True
+    return st.get("rugs", 0) >= 3
+
+
 def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
     """Rate the devs waiting in line (never rated first). A wallet with too few transactions to have
     MIN trades is dismissed with one cheap call instead of a full history read. Returns devs rated."""
@@ -606,10 +631,19 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
         except Exception:
             pass
         if stats is None:
+            if not _budget_ok():
+                break                                  # credit budget for this hour used: continue later
             try:
                 import wallet_profile
-                _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX, mcaps=False)
+                fn = analyze or wallet_profile.analyze
+                # stage 1: the latest DEV_FIRST_TX transactions (1 Helius call). Clear rejects stop here.
+                _spend()
+                _, closed, _ = fn(dev, rpc, sol_usd, max_tx=DEV_FIRST_TX, mcaps=False)
                 stats = rate_dev(closed, now)
+                if not _clear_reject(stats) and DEV_AUDIT_TX > DEV_FIRST_TX:
+                    _spend(2)
+                    _, closed, _ = fn(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX, mcaps=False)
+                    stats = rate_dev(closed, now)
                 stats["hist"] = _hist(closed)[-300:]
                 stats["hist_v2"] = True
             except Exception as exc:
@@ -844,7 +878,10 @@ def run_backtest(rpc=None, sol_usd=None, analyze=None, capital=None, days=None, 
             if stats is None:
                 try:
                     import wallet_profile
-                    _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=max(DEV_AUDIT_TX, 1000), mcaps=False)
+                    if not _budget_ok():
+                        break                           # Helius credit budget for this hour used
+                    _spend(BT_TX // 100)
+                    _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=BT_TX, mcaps=False)
                     stats = rate_dev(closed, now)
                     stats["hist"] = _hist(closed)[-1000:]
                 except Exception as exc:
