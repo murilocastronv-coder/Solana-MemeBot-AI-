@@ -37,9 +37,10 @@ TRAIL = E("DEV_TRAIL", 0.08)
 MAX_HOLD_S = E("DEV_MAX_HOLD_HOURS", 0) * 3600
 COST = E("DEV_COST_PER_SIDE", 0.02)               # swap fee + slippage per side (estimated)
 NET_FEE_USD = E("DEV_NETWORK_FEE_USD", 0.01)
-CYCLE_S = E("DEV_CYCLE_SECONDS", 60)
-NEW_TOKENS_PER_CYCLE = int(E("DEV_NEW_TOKENS_PER_CYCLE", 6))
-DEV_AUDITS_PER_CYCLE = int(E("DEV_AUDITS_PER_CYCLE", 1))
+CYCLE_S = E("DEV_CYCLE_SECONDS", 30)
+NEW_TOKENS_PER_CYCLE = int(E("DEV_NEW_TOKENS_PER_CYCLE", 12))
+DEV_AUDITS_PER_CYCLE = int(E("DEV_AUDITS_PER_CYCLE", 5))
+QUICK_SIGS = int(E("DEV_QUICK_MIN_TX", 40))     # fewer transactions than this can't hold 20 buy+sell trades
 DEV_AUDIT_TX = int(E("DEV_AUDIT_TX", 300))
 DEV_REAUDIT_S = E("DEV_REAUDIT_HOURS", 12) * 3600
 WATCH_S = E("DEV_WATCH_HOURS", 24) * 3600
@@ -435,8 +436,44 @@ def buy_reason(p, info):
 
 
 # ---------------------------------------------------------------- 24/7 cycle
+def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None):
+    """Rate the devs waiting in line (never rated first). A wallet with too few transactions to have
+    MIN trades is dismissed with one cheap call instead of a full history read. Returns devs rated."""
+    now = now or time.time()
+    d = _load()
+    queue = [(k, v) for k, v in sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
+             if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S][:limit or DEV_AUDITS_PER_CYCLE]
+    done = 0
+    for dev, info in queue:
+        stats = None
+        try:
+            sigs = rpc("getSignaturesForAddress", [dev, {"limit": QUICK_SIGS}]) or []
+            if len(sigs) < QUICK_SIGS:
+                stats = {"tier": "MONITORADO", "why": "carteira com pouco histórico (" + str(len(sigs)) + " transações)",
+                         "trades": 0, "hist": []}
+        except Exception:
+            pass
+        if stats is None:
+            try:
+                import wallet_profile
+                _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX)
+                stats = rate_dev(closed, now)
+                stats["hist"] = _hist(closed)[-300:]
+            except Exception as exc:
+                stats = {"tier": "ERRO", "why": type(exc).__name__}
+        with _LOCK:
+            dd = _load()
+            dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now)
+            _save(dd)
+        done += 1
+        note("DEV " + dev[:6] + "… " + stats.get("tier", "?") + (" — " + stats["why"] if stats.get("why") else "") +
+             (" · acerto " + format(stats["win"] * 100, ".0f") + "% · " + str(stats["trades"]) + " ops · PF " +
+              format(stats["pf"], ".1f") + " · score " + format(stats["score"], ".0f") if "win" in stats else ""))
+    return done
+
+
 def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol_usd=None, safety=None,
-          analyze=None, prices_fn=None):
+          analyze=None, prices_fn=None, do_audit=True):
     """One pass: new tokens -> their dev; rate devs; watch approved devs' buys / sells; exits."""
     now = now or time.time()
     d = _load()
@@ -470,26 +507,9 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
                     dd["devs"][dev]["tokens_seen"] = (dd["devs"][dev]["tokens_seen"] + [mint])[-20:]
             dd["tokens"] = {m: t for m, t in dd["tokens"].items() if now - t["seen"] < 3 * WATCH_S}
             _save(dd)
-    # 2) rate devs (oldest rating first)
-    d = _load()
-    queue = sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
-    for dev, info in queue[:DEV_AUDITS_PER_CYCLE]:
-        if now - float(info.get("rated") or 0) < DEV_REAUDIT_S:
-            continue
-        try:
-            import wallet_profile
-            _, closed, _ = (analyze or wallet_profile.analyze)(dev, rpc, sol_usd, max_tx=DEV_AUDIT_TX)
-            stats = rate_dev(closed, now)
-            stats["hist"] = _hist(closed)[-300:]
-        except Exception as exc:
-            stats = {"tier": "ERRO", "why": type(exc).__name__}
-        with _LOCK:
-            dd = _load()
-            dd["devs"].setdefault(dev, {"tokens_seen": []}).update(stats, rated=now)
-            _save(dd)
-        note("DEV " + dev[:6] + "… " + stats.get("tier", "?") + (" — " + stats["why"] if stats.get("why") else "") +
-             (" · acerto " + format(stats["win"] * 100, ".0f") + "% · " + str(stats["trades"]) + " ops · PF " +
-              format(stats["pf"], ".1f") + " · score " + format(stats["score"], ".0f") if "win" in stats else ""))
+    # 2) rate devs (oldest rating first) - the 24/7 loop does this in its own thread (audit_devs)
+    if do_audit:
+        audit_devs(rpc, sol_usd, now, analyze)
     # 3) approved devs: read their new transactions on the tokens they created
     d = _load()
     dev_sells = {}

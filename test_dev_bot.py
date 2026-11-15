@@ -107,6 +107,8 @@ class DevCycleTest(unittest.TestCase):
                 return {"value": supply}
             if params[0] == "TOK":
                 return [{"signature": "create"}]
+            if params[1].get("limit") == db.QUICK_SIGS:
+                return [{"signature": "h" + str(i)} for i in range(db.QUICK_SIGS)]
             calls["n"] += 1
             return [{"signature": "old"}] if calls["n"] == 1 else [{"signature": "buy"}]
 
@@ -185,3 +187,16 @@ class MirrorDevTest(unittest.TestCase):
             self.assertAlmostEqual(db._load()["positions"]["TOK"]["qty"], q * 0.7)
             db.exits({"TOK": 3.0}, NOW + 240, dev_sells={"TOK": 1.0})   # dev sold everything -> everything
             self.assertNotIn("TOK", db._load()["positions"])
+
+
+
+class QuickDismissTest(unittest.TestCase):
+    def test_wallet_with_few_transactions_is_dismissed_cheaply(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            d["devs"] = {DEV: {"tokens_seen": []}}
+            db._save(d)
+            analyze = mock.Mock()
+            self.assertEqual(db.audit_devs(lambda m, p: [{"signature": "x"}] * 5, 200, NOW, analyze), 1)
+            analyze.assert_not_called()
+            self.assertIn("pouco histórico", db._load()["devs"][DEV]["why"])
