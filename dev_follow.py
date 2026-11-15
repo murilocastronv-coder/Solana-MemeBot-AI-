@@ -137,8 +137,13 @@ def fill(max_s=600, fetch=None, now=None):
             time.sleep(30)
             continue
         except Exception as exc:
-            logging.info("devbot follow: %s %s", h["mint"][:8], type(exc).__name__)
-            res = None
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            logging.info("devbot follow: %s %s %s", h["mint"][:8], type(exc).__name__, code)
+            if code in (400, 404):
+                res = None                       # GeckoTerminal has no price history for this coin / period
+            else:
+                time.sleep(60 if code == 429 else 5)   # limit or temporary failure: try again later, not "no data"
+                continue
         results[(dev, i)] = res
         done += 1
         if len(results) >= 25:
