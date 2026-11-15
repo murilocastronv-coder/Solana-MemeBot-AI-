@@ -47,6 +47,10 @@ MAX_TOP_COIN_SHARE = E("DEV_MAX_TOP_COIN_SHARE", 0.60)     # profit from one coi
 RUG_LOSS = 0.80
 # owner (Nov 15): the dev can hold at most 35% of the coin's supply (more = it can crash the price)
 MAX_DEV_SHARE = E("DEV_MAX_HOLD_SHARE", 0.35)
+# anti-scam: the dev moves this share (or more) of its coins to another wallet without selling -> exit + block
+TRANSFER_EXIT = E("DEV_TRANSFER_EXIT", 0.25)
+# owner (Nov 15): only pump.fun coins (launch curve, PumpSwap or a pump.fun mint)
+PUMP_ONLY = os.getenv("DEV_PUMP_ONLY", "true").strip().lower() != "false"
 BT_CAPITAL = E("DEV_BT_CAPITAL", 60)
 BT_DAYS = E("DEV_BT_DAYS", 60)
 BT_DEVS = int(E("DEV_BT_DEVS", 40))
@@ -408,6 +412,8 @@ def buy_reason(p, info):
     liq = float((p.get("liquidity") or {}).get("usd") or 0)
     vol5 = float((p.get("volume") or {}).get("m5") or 0)
     up5 = float((p.get("priceChange") or {}).get("m5") or 0)
+    if PUMP_ONLY and not sg.is_pump(p):
+        return "não é moeda da pump.fun"
     if not approved(info):
         return "DEV não aprovado (" + (info or {}).get("tier", "sem análise") + ")"
     if float(info.get("score") or 0) < MIN_SCORE:
@@ -434,7 +440,8 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
     pairs = sg.candidate_pairs() if pairs is None else pairs
     by_mint = {(p.get("baseToken") or {}).get("address"): p for p in pairs}
     # 1) new tokens (born in the last WATCH_S) -> creator
-    fresh = [p for p in pairs if p.get("pairCreatedAt") and now - float(p["pairCreatedAt"]) / 1000 < WATCH_S]
+    fresh = [p for p in pairs if p.get("pairCreatedAt") and now - float(p["pairCreatedAt"]) / 1000 < WATCH_S
+             and (not PUMP_ONLY or sg.is_pump(p))]
     found = 0
     for p in fresh:
         mint = p["baseToken"]["address"]
@@ -530,6 +537,20 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
                 if frac < 0.25 and send and chat and mint in _load()["positions"]:
                     send(chat, "⚠️ DEV BOT: o DEV vendeu " + format(frac * 100, ".0f") + "% de " + str(t.get("symbol")) +
                          " — reavaliando (mantém stop −" + format(STOP_LOSS * 100, ".0f") + "%)")
+            elif kind == "transfer" and frac >= TRANSFER_EXIT:
+                # dev moved a big part of its coins to another wallet without selling: classic way to hide a
+                # dump (rug) -> leave the coin now and stop trusting this dev
+                dev_sells[mint] = 1.0
+                note("🚨 DEV " + dev[:6] + "… moveu " + format(frac * 100, ".0f") + "% dos tokens de " + str(t.get("symbol")) +
+                     " para outra carteira (pode ser golpe): vendo tudo e bloqueando o DEV")
+                with _LOCK:
+                    dd = _load()
+                    dd["devs"].setdefault(dev, {}).update(tier="BLOQUEADO", why="transferiu tokens escondido (suspeita de golpe)",
+                                                          rated=now + 30 * 86400)
+                    _save(dd)
+                if send and chat and mint in _load()["positions"]:
+                    send(chat, "🚨 DEV BOT: o DEV de " + str(t.get("symbol")) + " moveu " + format(frac * 100, ".0f") +
+                         "% dos tokens para outra carteira sem vender — possível golpe. Vendendo tudo e bloqueando esse DEV.")
             elif kind == "transfer":
                 note("⚠️ DEV " + dev[:6] + "… moveu tokens de " + str(t.get("symbol")) + " sem venda (transferência)")
     # 4) exits with live prices
@@ -696,7 +717,8 @@ def status_text():
     ok = [(k, v) for k, v in devs.items() if approved(v)]
     lines = ["🧑‍💻 ROBÔ DEV — " + ("🟢 RODANDO" if d.get("enabled") else "⏸️ PAUSADO") +
              (" (💵 DINHEIRO REAL)" if d.get("real") else " (SIMULAÇÃO, sem dinheiro real)"),
-             "🛡️ Só copia se o DEV tiver no máximo " + format(MAX_DEV_SHARE * 100, ".0f") + "% da moeda",
+             "🛡️ Só moedas da pump.fun · só copia se o DEV tiver no máximo " + format(MAX_DEV_SHARE * 100, ".0f") +
+             "% da moeda · DEV que esconde tokens em outra carteira é bloqueado e o bot vende tudo",
              "💼 Saldo simulado US$ " + format(m["equity"], ",.2f") + " (início US$ " + format(m["start"], ",.0f") + ") · hoje " +
              format(m["pnl_day"], "+.2f") + " · total " + format(m["pnl_total"], "+.2f"),
              "📦 Abertas " + str(m["open"]) + "/" + str(MAX_OPEN) + " · " + str(m["trades"]) + " operações · acerto " +
