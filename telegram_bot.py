@@ -159,7 +159,7 @@ def keyboard():
   [{"text":"📈 BACKTEST FUNDING (Drift, US$ 60)","callback_data":"fr_bt"}],
   [{"text":"🌊 BACKTEST LIQUIDEZ SOL/USDC (US$ 60)","callback_data":"lp_bt"}],
   [{"text":"🏊 Pools: status","callback_data":"pl_status"},{"text":"▶️ Pools: ligar (simulação)","callback_data":"pl_on"}],
-  [{"text":"⏸️ Pools: desligar","callback_data":"pl_off"}]]
+  [{"text":"💵 Pools: LIGAR REAL","callback_data":"pl_real"},{"text":"⏸️ Pools: desligar","callback_data":"pl_off"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -375,11 +375,12 @@ def handle(update):
    send(chat,pre+liq_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
   return
- if action in ("pl_status","pl_on","pl_off"):
+ if action in ("pl_status","pl_on","pl_off","pl_real"):
   import pool_bot
   pre=""
-  if action=="pl_on":pool_bot.set_enabled(True);pre="▶️ Robô de pools ligado em SIMULAÇÃO: procura as pools seguras que mais rendem por dia, fica no máximo 3 dias e troca sozinho. Dinheiro de mentira, dados reais.\n\n"
-  elif action=="pl_off":pool_bot.set_enabled(False);pre="⏸️ Robô de pools desligado.\n\n"
+  if action=="pl_real":pool_bot.set_real(True);pre="💵 Robô de pools ligado com DINHEIRO REAL: até US$ "+format(pool_bot.CAPITAL,"g")+" do USDC da carteira, pools que pagam de 15% a 60% ao dia, 2 dias em cada uma, sai antes se a moeda cair 15% ou o rendimento cair pela metade. Precisa de ~0,1 SOL na carteira (aluguel da posição, volta na saída). Toda entrada e saída é simulada antes.\n\n"
+  elif action=="pl_on":pool_bot.set_enabled(True);pre="▶️ Robô de pools ligado em SIMULAÇÃO: procura as pools seguras que mais rendem por dia, fica no máximo 3 dias e troca sozinho. Dinheiro de mentira, dados reais.\n\n"
+  elif action=="pl_off":pool_bot.set_enabled(False);pool_bot.set_real(False);pool_bot.set_enabled(False);pre="⏸️ Robô de pools desligado.\n\n"
   send(chat,pre+pool_bot.status_text(),keyboard());return
  if action=="lp_bt":
   import lp_bt
