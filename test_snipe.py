@@ -118,3 +118,30 @@ class LaunchFeedTest(Tmp):
         self.assertEqual(sb._load()["auth_last"], "s1")
         rows = sb.watched_pairs(NOW, fetch=lambda url: [pair(age_min=10, mint="News1pump")])
         self.assertEqual([p["baseToken"]["address"] for p in rows], ["News1pump"])   # s2 is too young (1 min)
+
+
+class LaunchTestTest(Tmp):
+    def test_replay_entry_delays_and_mirror_exit(self):
+        import dev_bot as db
+        import launch_test as lt
+        with mock.patch.object(db, "_path", return_value=pathlib.Path(self.tmp.name) / "d.json"):
+            d = db._load()
+            d["devs"] = {"DEVX": {"tier": "ELITE", "win": 0.9, "trades": 30, "launch_mints": [MINT],
+                                  "hist": [{"mint": MINT, "opened": NOW, "closed": NOW + 600, "sells": [[NOW + 600, 1.0]]}]}}
+            db._save(d)
+            self.assertEqual(len(lt.candidates()), 1)
+
+            def rpc(method, params):
+                addr, opt = params
+                gte = opt["filters"]["blockTime"]["gte"]
+                if gte >= NOW + 600:                       # price after the dev sold: 2x the launch price
+                    return {"data": [swap_tx(NOW + 601, MINT, 1000, -int(0.002 * 1e9))]}
+                # launch: price 0.001 at +3 s, 0.0015 at +12 s, 0.003 at +40 s (per 1000 tokens, in SOL)
+                return {"data": [swap_tx(NOW + 3, MINT, 1000, -int(0.001 * 1e9)),
+                                 swap_tx(NOW + 12, MINT, 1000, -int(0.0015 * 1e9)),
+                                 swap_tx(NOW + 40, MINT, 1000, -int(0.003 * 1e9))]}
+            r = lt.replay(rpc, MINT, NOW, [[NOW + 600, 1.0]], 150)
+            self.assertGreater(r[2], 0.5)          # in at 0.001, out at 0.002: about +100% minus costs
+            self.assertLess(r[30], 0)              # in at 0.003, out at 0.002: loss
+            txt = lt.text([("DEVX", MINT, r)], 1)
+            self.assertIn("Entrando 2 s depois", txt)
