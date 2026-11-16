@@ -378,3 +378,26 @@ class DevFundsTest(unittest.TestCase):
             self.assertEqual(n, 1)                                   # only the funded wallet goes to the queue
             self.assertEqual(d["devs"]["W0"]["tier"], "MONITORADO")
             self.assertEqual(d["devs"]["W1"]["tier"], "NA FILA")
+
+
+class DevFollowFundsTest(unittest.TestCase):
+    def test_sol_out_and_link_fresh_wallet(self):
+        tx = {"meta": {"preBalances": [5_000_000_000, 0], "postBalances": [1_000_000_000, 3_999_995_000],
+                       "preTokenBalances": [], "postTokenBalances": []},
+              "transaction": {"message": {"accountKeys": [DEV, "NEWWALLET"]}}}
+        self.assertEqual(db.sol_out(tx, DEV)[0], "NEWWALLET")
+        trade = dict(tx, meta=dict(tx["meta"], postTokenBalances=[{"owner": DEV, "mint": "T"}]))
+        self.assertIsNone(db.sol_out(trade, DEV))
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            d = db._load()
+            d["devs"] = {DEV: {"tier": "ELITE", "win": 0.9, "trades": 40, "pf": 3, "score": 80, "pnl": 100}}
+            db._save(d)
+            sent = []
+            self.assertTrue(db.link_wallet(DEV, "NEWWALLET", 4.0, lambda m, p: [{"signature": "s"}], NOW,
+                                           lambda c, m: sent.append(m), 1))
+            new = db._load()["devs"]["NEWWALLET"]
+            self.assertEqual((new["tier"], new["linked_from"]), ("ELITE", DEV))
+            self.assertTrue(db.approved(new))
+            self.assertIn("carteira nova", sent[-1])
+            busy = lambda m, p: [{"signature": str(i)} for i in range(db.LINK_MAX_SIGS)]
+            self.assertFalse(db.link_wallet(DEV, "EXCHANGE", 4.0, busy, NOW))   # old / exchange wallet: not followed
