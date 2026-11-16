@@ -17,7 +17,7 @@ import signals as sg
 
 E = sg._f
 USD = E("GRAD_USD", 10)
-MAX_OPEN = int(E("GRAD_MAX_OPEN", 2))
+MAX_OPEN = int(E("GRAD_MAX_OPEN", 4))          # owner (Nov 16): up to 4 at a time
 DAILY_LOSS = E("GRAD_DAILY_LOSS_USD", 20)
 DELAY_S = E("GRAD_DELAY_S", 30)
 MAX_LATE_S = E("GRAD_MAX_LATE_S", 150)          # never buy a graduation older than this
@@ -25,6 +25,10 @@ STOP = E("GRAD_STOP", 0.25)
 ARM = E("GRAD_ARM", 0.50)
 DROP = E("GRAD_DROP", 0.20)
 HOLD_MIN = E("GRAD_HOLD_MIN", 240)
+# owner (Nov 16): a coin whose pool was drained (the big holders sold everything) is sold at once
+MIN_ENTRY_LIQ = E("GRAD_MIN_ENTRY_LIQ_USD", 8_000)     # do not buy a pool already this thin
+EXIT_LIQ = E("GRAD_EXIT_LIQ_USD", 5_000)               # sell when the pool falls under this...
+EXIT_LIQ_DROP = E("GRAD_EXIT_LIQ_DROP", 0.60)           # ...or lost this share of the liquidity it had at the buy
 WATCH_H = E("GRAD_WATCH_H", 2)
 CHECK_S = E("GRAD_CHECK_S", 15)
 KEY = "grad_bot"
@@ -162,6 +166,10 @@ def cycle(send=None, chat=None, rpc=None, now=None, buy=None, fetch=None, comple
                 note("graduou " + m[:8])
         except Exception as exc:
             logging.info("grad check: %s", type(exc).__name__)
+    try:
+        check_liquidity(now, fetch)                    # also when the robot is off: open positions still protected
+    except Exception as exc:
+        logging.info("grad liquidity: %s", type(exc).__name__)
     if not enabled():
         _save()
         return None
@@ -182,6 +190,12 @@ def cycle(send=None, chat=None, rpc=None, now=None, buy=None, fetch=None, comple
             p = None
         if not p:
             continue                                  # PumpSwap pair not listed yet: try next cycle
+        liq = float((p.get("liquidity") or {}).get("usd") or 0)
+        if liq < MIN_ENTRY_LIQ:
+            with _LOCK:
+                _load().setdefault("seen", {})[mint] = now
+            note("pulei " + ((p.get("baseToken") or {}).get("symbol") or mint[:6]) + ": liquidez US$ " + format(liq, ",.0f"))
+            continue
         with _LOCK:
             d = _load()
             d.setdefault("seen", {})[mint] = now
@@ -192,8 +206,49 @@ def cycle(send=None, chat=None, rpc=None, now=None, buy=None, fetch=None, comple
              format(float(p.get("marketCap") or 0), ",.0f"))
         if ok:
             bought = mint
+            with _LOCK:
+                _load().setdefault("entry_liq", {})[mint] = liq
     _save()
     return bought
+
+
+def check_liquidity(now=None, fetch=None, open_mints=None, mark=None):
+    """Open positions whose pool was drained get a forced sale (exit monitor sells them). Returns those mints."""
+    mints = list(open_mints if open_mints is not None else _open())
+    if not mints:
+        return []
+    d = _load()
+    entry = d.get("entry_liq") or {}
+    out = []
+    for i in range(0, len(mints), 30):
+        rows = (fetch or sg._get)(sg.DEX + "/tokens/v1/solana/" + ",".join(mints[i:i + 30])) or []
+        liq = {}
+        for p in rows if isinstance(rows, list) else []:
+            m = (p.get("baseToken") or {}).get("address")
+            if m in mints and str(p.get("dexId") or "").lower() != "pumpfun":
+                liq[m] = max(liq.get(m, 0.0), float((p.get("liquidity") or {}).get("usd") or 0))
+        for m in mints[i:i + 30]:
+            if m not in liq:
+                continue                               # no data this time: never sell on missing data
+            low = liq[m] < EXIT_LIQ
+            drained = entry.get(m, 0) > 0 and liq[m] <= entry[m] * (1 - EXIT_LIQ_DROP)
+            if low or drained:
+                out.append(m)
+                (mark or _mark_exit)(m, "liquidez US$ " + format(liq[m], ",.0f") +
+                                     (" (era US$ " + format(entry[m], ",.0f") + ")" if entry.get(m) else ""))
+    with _LOCK:
+        open_set = set(mints)
+        d["entry_liq"] = {m: v for m, v in entry.items() if m in open_set or m in (d.get("seen") or {})}
+    return out
+
+
+def _mark_exit(mint, why):
+    import live_trade_state
+    p = live_trade_state._load()["positions"].get(mint) or {}
+    if p.get("liq_exit"):
+        return
+    live_trade_state.set_position_fields(mint, liq_exit=True)
+    note("vendendo " + str(p.get("symbol") or mint[:6]) + " por falta de liquidez: " + why)
 
 
 def _buy_real(p, mint, sym, send, chat):
@@ -223,6 +278,8 @@ def status_text():
              " USD · abertas " + str(len(_open())) + "/" + str(MAX_OPEN),
              "👀 Vigiando " + str(len(d.get("watch") or {})) + " lançamentos das últimas " + format(WATCH_H, "g") +
              " h · graduaram na última hora: " + str(len(d.get("grads") or {})),
+             "💧 Não compra pool com menos de US$ " + format(MIN_ENTRY_LIQ / 1000, "g") + " mil; vende na hora se a liquidez cair abaixo de US$ " +
+             format(EXIT_LIQ / 1000, "g") + " mil ou perder " + format(EXIT_LIQ_DROP * 100, ".0f") + "% da que tinha na compra",
              "⚠️ No backtest, a parte de conferência (30% finais) ainda não confirmou lucro."]
     for x in (d.get("log") or [])[-5:]:
         lines.append("• " + x)

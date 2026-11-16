@@ -165,6 +165,8 @@ def position_signal(position, cost, proceeds):
         peak = max(ratio, float(position.get("peak_ratio") or 0))
         held = time.time() - float(position.get("opened_at") or time.time())
         action, reason = grad_bot.exit_signal(ratio, peak, held)
+        if position.get("liq_exit"):
+            action, reason = "sell", "liquidity_drained"     # owner: pool drained, get out now
         if action == "hold" and peak >= 1 + grad_bot.ARM:
             reason = "trailing"                      # owner gets the "STOP MÓVEL ATIVADO" message once
         return {"action": action, "reason": reason or "grad_hold", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}

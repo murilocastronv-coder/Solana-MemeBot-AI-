@@ -324,3 +324,28 @@ class GradBotTest(Tmp):
         self.assertEqual(gbot.exit_signal(1.1, 1.2, 10)[0], "hold")
         self.assertEqual(gbot.exit_signal(1.1, 1.2, 241 * 60)[1], "time_stop")
         gbot._MEM.clear()
+
+
+class GradLiquidityTest(Tmp):
+    def test_drained_pool_is_sold_and_thin_pool_skipped(self):
+        import grad_bot as gbot
+        gbot._MEM.clear()
+        d = gbot._load()
+        d["entry_liq"] = {"M1": 30000, "M2": 30000}
+        rows = [{"dexId": "pumpswap", "baseToken": {"address": "M1"}, "liquidity": {"usd": 9000}},   # lost 70%
+                {"dexId": "pumpswap", "baseToken": {"address": "M2"}, "liquidity": {"usd": 25000}},
+                {"dexId": "pumpswap", "baseToken": {"address": "M3"}, "liquidity": {"usd": 3000}}]   # under 5k
+        marked = []
+        out = gbot.check_liquidity(NOW, fetch=lambda u: rows, open_mints=["M1", "M2", "M3", "M4"],
+                                   mark=lambda m, why: marked.append(m))
+        self.assertEqual(sorted(out), ["M1", "M3"])
+        gbot._MEM.clear()
+        gbot._load()["enabled"] = True
+        gbot.add_launches({"Thin": NOW - 600})
+        bought = []
+        thin = lambda u: [{"dexId": "pumpswap", "baseToken": {"address": "Thin"}, "liquidity": {"usd": 2000}}]
+        gbot.cycle(rpc=object(), now=NOW, buy=lambda *a: bought.append(1), fetch=thin, completed=lambda r, ms: {m: True for m in ms})
+        gbot.cycle(rpc=object(), now=NOW + 35, buy=lambda *a: bought.append(1), fetch=thin, completed=lambda r, ms: {})
+        self.assertEqual(bought, [])
+        self.assertEqual(gbot.MAX_OPEN, 4)
+        gbot._MEM.clear()
