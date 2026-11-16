@@ -1,5 +1,5 @@
 """Telegram bot: memecoin copy trading on Solana (automatic wallet discovery, simulation or real money)."""
-import os,time,logging,threading,requests,re,secrets,html
+import os,time,logging,threading,requests,re,secrets,html,json
 from flask import Flask,Response,request
 from live_preflight import live_status, risk_settings
 import live_trade_state as trade_state
@@ -77,6 +77,16 @@ def should_send(text,now=None,chat=None):
   if len(SENT_AT)>2000:
    for k in sorted(SENT_AT,key=SENT_AT.get)[:1000]:SENT_AT.pop(k,None)
  return True
+def send_photo(chat,png,caption,keyboard=None):
+ """A picture with a caption (memecoin proposal logo). Falls back to text when the upload fails."""
+ if not TOKEN:return {}
+ data={"chat_id":str(chat),"caption":(caption or "")[:1000]}
+ if keyboard:data["reply_markup"]=json.dumps({"inline_keyboard":keyboard})
+ try:
+  r=_tg_session().post(BASE+"/sendPhoto",data=data,files={"photo":("logo.png",png,"image/png")},timeout=(10,30))
+  if r.ok:return r.json()
+ except requests.RequestException:pass
+ return send(chat,caption,keyboard)
 def send(chat,text,keyboard=None):
  try:
   import dashboard
@@ -156,6 +166,8 @@ def keyboard():
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"📋 Carteiras copiadas","callback_data":"copy_wallets"},{"text":"📦 Posições","callback_data":"copy_positions"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
+  [{"text":"🤖 Memecoin: nova proposta","callback_data":"mc_new"},{"text":"🤖 Memecoin: status","callback_data":"mc_status"}],
+  [{"text":"🔁 Propostas automáticas","callback_data":"mc_auto"},{"text":"⏸️ Só quando eu pedir","callback_data":"mc_manual"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -373,6 +385,22 @@ def handle(update):
    elif action=="lq_off":liq_bot.set_enabled(False);pre="⏸️ Robô de liquidação desligado.\n\n"
    send(chat,pre+liq_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
+  return
+ if action in ("mc_new","mc_status","mc_auto","mc_manual") or action.startswith(("mc_ok_","mc_no_")):
+  import memecoin_ai as mc
+  try:
+   if action=="mc_new":
+    send(chat,"🤖 Lendo as tendências e criando uma proposta original…")
+    send_meme_proposal(chat);return
+   if action.startswith(("mc_ok_","mc_no_")):
+    p=mc.decide(action[6:],action.startswith("mc_ok_"),__import__("copy_trader")._sol_usd())
+    if not p:send(chat,"⛔ Proposta não encontrada ou já decidida.",keyboard());return
+    send(chat,(("✅ APROVADA (SIMULAÇÃO): "+p["name"]+" ($"+p["symbol"]+") registrada como lançamento simulado. Nada foi criado na blockchain; "
+     "o lançamento real na Pump.fun só será ligado quando você decidir.") if p["status"]=="approved" else "❌ Proposta "+p["name"]+" rejeitada."),keyboard());return
+   if action=="mc_auto":mc.set_auto(True)
+   if action=="mc_manual":mc.set_auto(False)
+   send(chat,mc.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Memecoin: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
   return
  if action in ("pl_status","pl_on","pl_off","pl_real"):
   import pool_bot
@@ -1289,6 +1317,25 @@ def pool_loop():
    if pool_bot.enabled():pool_bot.cycle(send,active_chat())
   except Exception as exc:logging.warning("pool cycle failed: %s: %s",type(exc).__name__,str(exc)[:150])
   time.sleep(pool_bot.CYCLE_S)
+def send_meme_proposal(chat):
+ import memecoin_ai as mc
+ p,why=mc.propose()
+ if not p:send(chat,"⛔ Sem proposta agora: "+why,keyboard());return False
+ send_photo(chat,mc.logo_png(p["name"]),mc.proposal_text(p),
+  [[{"text":"✅ APROVAR (simulação)","callback_data":"mc_ok_"+p["id"]},{"text":"❌ REJEITAR","callback_data":"mc_no_"+p["id"]}]])
+ return True
+def meme_loop():
+ """Owner (Nov 16): automatic memecoin proposals for approval (simulation)."""
+ import memecoin_ai as mc
+ time.sleep(90)
+ while True:
+  try:
+   d=mc._load()
+   if d.get("auto") and time.time()-d.get("last_auto",0)>=mc.AUTO_EVERY_S and active_chat():
+    d["last_auto"]=time.time();mc._save()
+    send_meme_proposal(active_chat())
+  except Exception as exc:logging.warning("meme loop: %s: %s",type(exc).__name__,str(exc)[:150])
+  time.sleep(300)
 def copy_only_v2_once():
  """Owner (Nov 16, evening): remove every robot (liquidation, pools, graduados, DEV, sniper, signals) and run only
  the copy trade with real money. Done once; afterwards the owner's buttons decide."""
@@ -1415,6 +1462,7 @@ def loop():
   except Exception:logging.exception("copy buy worker failed to start")
   threading.Thread(target=audit_loop,daemon=True).start()
   threading.Thread(target=wallet_discovery_loop,daemon=True).start()
+  threading.Thread(target=meme_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
