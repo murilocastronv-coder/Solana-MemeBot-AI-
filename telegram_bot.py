@@ -155,6 +155,7 @@ def keyboard():
   [{"text":"▶️ Ligar sniper","callback_data":"sn_on"},{"text":"⏸️ Pausar sniper","callback_data":"sn_off"}],
   [{"text":"🧪 Backtest sniper 2 meses","callback_data":"sn_bt"},{"text":"⏹️ Cancelar","callback_data":"sn_btx"}],
   [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
+  [{"text":"🚀 Testar compra no lançamento","callback_data":"lt_run"}],
   [{"text":"🕵️ Buscar DEVs 7d","callback_data":"hunt7"},{"text":"30d","callback_data":"hunt30"},{"text":"90d","callback_data":"hunt90"}],
   [{"text":"📋 DEVs encontrados","callback_data":"hunt_list"},{"text":"⏹️ Parar busca","callback_data":"hunt_x"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
@@ -319,6 +320,11 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
+ if action=="lt_run":
+  import launch_test
+  why=launch_test.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
+  send(chat,("🚀 Testando com lançamentos REAIS dos DEVs bons: compra 2, 10 e 30 s depois do DEV e vende junto com ele. "
+   "O resultado chega aqui em até ~5 min.") if not why else "⛔ "+why,keyboard());return
  if action in ("hunt7","hunt30","hunt90","hunt_list","hunt_x","/devs"):
   import dev_hunter
   try:
