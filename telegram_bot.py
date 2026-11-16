@@ -464,9 +464,9 @@ def handle(update):
    "1h30, 2h, 3h e 4h e testa as 40 combinações. Relatório em ~3 min; toque de novo se vier PARCIAL.") if not why else "⛔ "+why,keyboard());return
  if action in ("pro_dl","pro_cmp","pro_opt","pro_sim","pro_x"):
   why=pro_action(action,chat)
-  send(chat,"⛔ "+why if why else {"pro_dl":"🔬 BACKTEST PRO 180 DIAS iniciado: baixa os lançamentos reais que faltam (várias horas, continua de onde parou), "
-   "depois otimiza 3 perfis com milhares de combinações (dias 1–90), valida (91–120), testa fora da amostra (121–150 e 151–180) e roda os testes "
-   "de robustez. Te aviso no fim. Progresso no painel web, aba 🎯 Sniper.","pro_cmp":"🔬 Comparando idades e perfis com os dados já baixados…",
+  send(chat,"⛔ "+why if why else {"pro_dl":"🔬 BACKTEST PRO 180 DIAS: baixa ~1,5 min de lançamentos reais e analisa TUDO o que já foi baixado (inclui os testes antigos): "
+   "3 perfis, ~600 combinações cada (dias 1–90), validação (91–120), testes fora da amostra (121–150 e 151–180), robustez e mínimo de 200 operações. "
+   "Relatório em ~3 min. Cada toque baixa mais e deixa o teste mais completo.","pro_cmp":"🔬 Comparando idades e perfis com os dados já baixados…",
    "pro_opt":"🔬 Otimizando parâmetros com os dados já baixados…","pro_x":"⏹️ Backtest PRO interrompido (o que já baixou fica salvo; toque de novo para continuar).",
    "pro_sim":"🧪 Melhor estratégia VALIDADA aplicada ao sniper em SIMULAÇÃO (dinheiro de mentira). A conta real não muda."}[action],keyboard());return
  if action in ("sn_bt180","sn_paper","sn_stop"):
