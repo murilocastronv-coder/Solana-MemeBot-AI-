@@ -155,7 +155,8 @@ def keyboard():
  return [[{"text":"💧 Liquidação: status","callback_data":"lq_status"}],
   [{"text":"💵 Liquidação: LIGAR REAL","callback_data":"lq_real"},{"text":"👀 Só observar","callback_data":"lq_obs"}],
   [{"text":"⏸️ Liquidação: desligar","callback_data":"lq_off"}],
-  [{"text":"💧 BACKTEST LIQUIDAÇÃO (mercados menores, 50/60 USD)","callback_data":"lq_bt"}]]
+  [{"text":"💧 BACKTEST LIQUIDAÇÃO (mercados menores, 50/60 USD)","callback_data":"lq_bt"}],
+  [{"text":"📈 BACKTEST FUNDING (Drift, US$ 60)","callback_data":"fr_bt"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -371,6 +372,12 @@ def handle(update):
    send(chat,pre+liq_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
   return
+ if action=="fr_bt":
+  import funding_bt
+  why=funding_bt.start(send,chat)
+  send(chat,("📈 Backtest da ARBITRAGEM DE FUNDING na Drift com US$ 60: compra a moeda + short do mesmo tamanho (o preço se anula), "
+   "ganha/paga a taxa de cada hora. SOL, BTC, ETH, JUP e HYPE, dados reais dos últimos meses. O relatório chega em 1–3 min.")
+   if not why else "⛔ "+why,keyboard());return
  if action=="lq_bt":
   import liq_backtest,snipe_backtest
   why=liq_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,send,chat)
