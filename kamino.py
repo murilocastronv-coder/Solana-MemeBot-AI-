@@ -149,24 +149,29 @@ def scope_slice(data, first):
 
 
 def ltv_now(ob, reserves):
-    """Debt / liquidation limit with TODAY's reserve prices (>= 1.0 means it can be liquidated), or None.
-    Scales the obligation's own refreshed numbers by how much its collateral and debt moved since then, so the
-    elevation-group thresholds and borrow factors stay exactly Kamino's."""
+    """Debt / liquidation limit with LIVE prices (>= 1.0 means it can be liquidated), or None.
+    Each position's own refreshed value is moved by how much its price changed since the reserve's last refresh
+    (live oracle price / reserve price), so Kamino's exchange rates, elevation-group thresholds and borrow factors are
+    kept exactly; only the price move is estimated. Kamino's exact number (liq_bot.exact_ltv) decides in the end."""
     if not ob["has_debt"] or ob["unhealthy"] <= 0 or ob["deposited"] <= 0 or ob["debt"] <= 0:
         return None
+
+    def move(r):
+        ref = r.get("price_ref") or r["price"]
+        return (r["price"] / ref) if ref > 0 else 1.0
     dep = debt = 0.0
     for d in ob["deposits"]:
         r = reserves.get(d["reserve"])
         if not r:
             return None
-        dep += d["amount"] * r["rate"] * r["price"] / 10 ** r["decimals"]
+        dep += d["value"] * move(r)
     for b in ob["borrows"]:
         r = reserves.get(b["reserve"])
         if not r:
             return None
-        debt += b["amount"] * r["price"] / 10 ** r["decimals"]
-    if dep <= 0:
-        return None
+        debt += b["value"] * move(r)
+    if dep <= 0 or debt <= 0:
+        return ob["bf_debt"] / ob["unhealthy"]
     return (ob["bf_debt"] * debt / ob["debt"]) / (ob["unhealthy"] * dep / ob["deposited"])
 
 
