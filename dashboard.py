@@ -40,7 +40,8 @@ def csrf_ok(token):
     return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
 
 
-ACTIONS = {"ls_run": "Backtest DEV Launch Sniper (5 meses) iniciado — o resultado chega no Telegram", "hunt": "Busca de DEVs lucrativos iniciada", "hunt_x": "Busca de DEVs parada", "dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
+ACTIONS = {"sn_bt180": "Backtest do sniper (180 dias) iniciado — o relatório chega no Telegram", "sn_paper": "Sniper ligado em SIMULAÇÃO",
+           "sn_stop": "Sniper parado", "ls_run": "Backtest DEV Launch Sniper (5 meses) iniciado — o resultado chega no Telegram", "hunt": "Busca de DEVs lucrativos iniciada", "hunt_x": "Busca de DEVs parada", "dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
            "dv_bt365": "Backtest DEV de 12 meses iniciado", "dv_btc": "Backtest DEV do período escolhido iniciado",
            "dv_btx": "Backtest DEV cancelado", "dv_on": "Robô DEV rodando", "dv_off": "Robô DEV pausado",
            "dv_stop": "PARADA DE EMERGÊNCIA: robô DEV pausado e posições vendidas",
@@ -318,7 +319,7 @@ TABS_JS = """
 </script>
 """
 
-TAB_LIST = (("t-devs", "🕵️ DEVs"), ("t-bt", "🧪 Backtest"), ("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
+TAB_LIST = (("t-snipe", "🎯 Sniper"), ("t-devs", "🕵️ DEVs"), ("t-bt", "🧪 Backtest"), ("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
             ("t-bots", "🤖 Robôs"), ("t-avisos", "🔔 Avisos"))
 
 
@@ -379,6 +380,49 @@ def devs_tab(order="lucro"):
     return "".join(out)
 
 
+def sniper_tab():
+    """Sniper 10-60 min: state, buttons, simulated positions/history, decisions log, last backtest report."""
+    import snipe_backtest as sbt
+    import snipe_bot as sb
+    d = sb._load()
+    on = sb.running()
+    sim = d.get("paper", True)
+    out = ["<div class='card'><h2>🎯 Sniper 10–60 min</h2><div>",
+           "<span class='pill ok'>ATIVO</span>" if on else "<span class='pill bad'>PARADO</span>", " ",
+           "<span class='pill'>SIMULAÇÃO</span>" if sim else "<span class='pill ok'>REAL</span>",
+           "</div><div style='margin-top:8px'>", _button("sn_bt180", "▶ INICIAR BACKTEST — 180 DIAS", "big"), "</div>",
+           "<div style='margin-top:8px'>", _button("sn_paper", "🧪 INICIAR SNIPER (simulação)"), _button("sn_stop", "⏹️ Parar", "stop"),
+           "</div><div class='mut'>O modo REAL só liga pelo Telegram (✅ Sniper REAL), e só se o backtest achar um grupo com lucro "
+           "fora da amostra.</div><pre>", _e(sb.status_text()), "</pre></div>"]
+    j = sbt.job()
+    if j:
+        prog = int(j.get("progress") or 0)
+        out += ["<div class='card'><h2>🧪 Backtest</h2>", _e(j.get("status", "")), " · ", _e(j.get("stage", "")),
+                "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div></div>"]
+    pos = d.get("paper_pos") or {}
+    if sim and pos:
+        out.append("<div class='card'><h2>📦 Posições simuladas</h2><div class='tw'><table><tr><th>Moeda</th><th>Nota</th><th>Topo</th><th>Aberta há</th></tr>")
+        for m, x in pos.items():
+            out += ["<tr><td><a href='https://dexscreener.com/solana/", _e(m), "' target='_blank'>", _e(x.get("sym")), "</a></td><td>",
+                    format(float(x.get("score") or 0), ".0f"), "</td><td>", format((x.get("peak", 1) - 1) * 100, "+.0f"), "%</td><td>",
+                    _ago(x.get("t")), "</td></tr>"]
+        out.append("</table></div></div>")
+    hist = (d.get("paper_hist") or [])[-30:][::-1] if sim else []
+    if hist:
+        out.append("<div class='card'><h2>🧾 Vendas (simulação)</h2><div class='tw'><table><tr><th>Moeda</th><th>Resultado</th><th>Líquido</th><th>Saída</th></tr>")
+        for h in hist:
+            out += ["<tr><td>", _e(h.get("sym")), "</td><td>", format(h["result_pct"], "+.1f"), "%</td><td>", _usd(h["pnl_usd"], True),
+                    "</td><td>", _e(h.get("exit")), "</td></tr>"]
+        out.append("</table></div></div>")
+    log = (d.get("log") or [])[-25:][::-1]
+    if log:
+        out += ["<div class='card'><h2>📝 Decisões (compradas e rejeitadas com motivo)</h2><pre>", _e("\n".join(log)), "</pre></div>"]
+    rs = sbt.runs()
+    if rs:
+        out += ["<div class='card'><h2>📊 Último backtest</h2><pre>", _e(rs[-1].get("text", "")), "</pre></div>"]
+    return "".join(out)
+
+
 def backtest_tab():
     """Owner's spec: big EXECUTAR BACKTEST — 5 MESES button, period choice, progress, cancel, history, CSV."""
     import dev_backtest as dbt
@@ -425,6 +469,9 @@ def page(msg="", order="lucro"):
     if msg:
         out += ["<div class='card' style='border-color:var(--acc)'>✅ ", _e(msg), "</div>"]
     out.append("<nav class='tabs'>" + "".join("<button type='button' data-t='" + t + "'>" + label + "</button>" for t, label in TAB_LIST) + "</nav>")
+
+    # ---- Sniper
+    out += ["<section class='tab' id='t-snipe'>", _safe(sniper_tab), "</section>"]
 
     # ---- DEV Hunter
     out += ["<section class='tab' id='t-devs'>", _safe(lambda: devs_tab(order)), "</section>"]
