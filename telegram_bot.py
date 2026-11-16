@@ -318,7 +318,7 @@ def handle(update):
   if action=="st_x":dst.cancel();send(chat,"⏹️ Parando o teste (o que já calculou fica salvo).",keyboard());return
   why=dst.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
   send(chat,("🧪 Testando a estratégia DEV nos últimos 3 meses com preços REAIS: DEV aprovado compra → o bot compra 5/10/30 s "
-   "depois → vende junto com o DEV. Leva até ~8 min; cada toque continua de onde parou.") if not why else "⛔ "+why,keyboard());return
+   "depois → vende junto com o DEV. O resultado chega em até ~3 min; cada toque continua de onde parou.") if not why else "⛔ "+why,keyboard());return
  if action=="lt_run":
   import launch_test
   why=launch_test.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)

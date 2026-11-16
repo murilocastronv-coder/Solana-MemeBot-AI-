@@ -32,7 +32,7 @@ DELAY_S = sg._f("SNIPE_BT_DELAY_S", 20)
 COST = sg._f("SNIPE_BT_COST_PER_SIDE", 0.03)                  # swap fee + slippage on young coins
 NET_FEE = sg._f("SNIPE_BT_NET_FEE_USD", 0.02)
 CAPITAL = sg._f("SNIPE_BT_CAPITAL", 500)
-CALLS_PER_HOUR = int(sg._f("SNIPE_BT_CALLS_PER_HOUR", 1500))   # Helius budget (~100 credits per call)
+CALLS_PER_HOUR = int(sg._f("SNIPE_BT_CALLS_PER_HOUR", 3000))   # Helius budget (~100 credits per call)
 JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 3) * 60     # owner (Nov 16): answer in ~3 min; the next tap continues
 SUPPLY = 1_000_000_000
 MIN_TRADE_USD = sg._f("SNIPE_BT_MIN_TRADE_USD", 2)
@@ -41,6 +41,7 @@ GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 
 _STOP = threading.Event()
 _RUNNING = threading.Lock()
 _CALLS = []
+DEADLINE = [0.0]          # set by a job with a hard time limit (owner: answer in 3 minutes)
 
 
 # ---------------------------------------------------------------- storage
@@ -108,7 +109,11 @@ def history_call(rpc, address, gte=None, lte=None, order="asc", limit=100):
     while not _budget_ok():
         if _STOP.is_set():
             return []
-        time.sleep(20)
+        if DEADLINE[0] and time.time() > DEADLINE[0] - 5:
+            raise TimeoutError("tempo do teste esgotado")   # a job with a time limit never waits for the budget
+        time.sleep(5)
+    if DEADLINE[0] and time.time() > DEADLINE[0]:
+        raise TimeoutError("tempo do teste esgotado")
     _CALLS.append(time.time())
     flt = {"status": "succeeded"}
     bt = {}

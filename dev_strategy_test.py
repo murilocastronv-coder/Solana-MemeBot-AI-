@@ -27,7 +27,7 @@ DELAYS = (5, 10, 30)
 LIVE_DELAY = 10
 MAX_RUNUP = db.MAX_RUNUP_DEV
 MIN_MCAP = db.CURVE_MIN_MCAP
-MAX_S = db.E("DEV_STRAT_TEST_MINUTES", 8) * 60
+MAX_S = db.E("DEV_STRAT_TEST_MINUTES", 3) * 60     # owner (Nov 16): an answer in 3 minutes, every tap continues
 CAPITAL = db.E("DEV_STRAT_TEST_CAPITAL", 500)
 _RUNNING = threading.Lock()
 _STOP = threading.Event()
@@ -70,8 +70,9 @@ def replay(rpc, dev, h, sol_usd):
     """{delay: [return, exit_time] | 'motivo'} for one dev trade."""
     opened = float(h["opened"])
     sells = h.get("sells") or [[h["closed"], 1.0]]
-    first = lt._trades(rpc, h["mint"], int(opened) - 2, opened + max(DELAYS) + 5, sol_usd)
-    sale = [lt._trades(rpc, h["mint"], int(t), int(t) + max(DELAYS) + 5, sol_usd, pages=2) for t, _ in sells[:4]]
+    first = lt._trades(rpc, h["mint"], int(opened) - 2, opened + max(DELAYS) + 5, sol_usd, pages=2)
+    sells = sells[:1] if len(sells) == 1 else [sells[0], sells[-1]]      # first and last sale: 2 reads, not 8
+    sale = [lt._trades(rpc, h["mint"], int(t), int(t) + max(DELAYS) + 5, sol_usd, pages=1) for t, _ in sells]
     dev_px = float(h.get("entry_usd") or 0)
     out = {}
     for delay in DELAYS:
@@ -86,18 +87,19 @@ def replay(rpc, dev, h, sol_usd):
             out[str(delay)] = "preço já +" + format(MAX_RUNUP * 100, ".0f") + "% acima do DEV"
             continue
         left, got = 1.0, 0.0
-        for i, ((t_sale, frac), trades) in enumerate(zip(sells[:4], sale)):
+        for i, ((t_sale, frac), trades) in enumerate(zip(sells, sale)):
             px = lt._median3([p for t, p, who in trades if t >= t_sale + delay and who != dev])
             part = left if i == len(sale) - 1 else left * min(float(frac), 1.0)
             got += part * ((px or 0.0) / entry)
             left -= part
-        out[str(delay)] = [round(got * (1 - sbt.COST) ** 2 - 1, 4), float(sells[min(len(sells), 4) - 1][0]) + delay]
+        out[str(delay)] = [round(got * (1 - sbt.COST) ** 2 - 1, 4), float(sells[-1][0]) + delay]
     return out
 
 
 def download(rpc, sol_usd, evs, should_stop=None, on_progress=None, max_s=None):
     c = _cache()
     began = time.time()
+    sbt.DEADLINE[0] = began + (max_s or MAX_S)
     todo = [(t, dev, h) for t, dev, h in evs if (dev + h["mint"] + str(int(t))) not in c]
     # spread over the whole period (not only the newest weeks) when the time is short
     step = max(1, len(todo) // 200)
@@ -107,6 +109,8 @@ def download(rpc, sol_usd, evs, should_stop=None, on_progress=None, max_s=None):
             break
         try:
             c[dev + h["mint"] + str(int(t))] = replay(rpc, dev, h, sol_usd)
+        except TimeoutError:
+            break
         except Exception as exc:
             logging.warning("dev strategy test %s: %s: %s", h["mint"][:8], type(exc).__name__, str(exc)[:120])
             continue
@@ -114,6 +118,7 @@ def download(rpc, sol_usd, evs, should_stop=None, on_progress=None, max_s=None):
             sbt._put("dev_strat_cache", c)
         if on_progress:
             on_progress(i + 1, len(order))
+    sbt.DEADLINE[0] = 0.0
     sbt._put("dev_strat_cache", c)
     return c
 
