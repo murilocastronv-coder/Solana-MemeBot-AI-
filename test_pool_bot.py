@@ -56,3 +56,23 @@ class CooldownTest(unittest.TestCase):
         fetch = lambda url: [{"baseToken": {"address": "AAA"}, "priceUsd": "1", "liquidity": {"usd": 1e6}, "pairCreatedAt": 1}]
         self.assertIsNone(pb.cycle(now=1_800_000_100, get=lambda u: api, fetch=fetch, safety=lambda m: ""))
         pb._MEM.clear()
+
+
+class GeckoPoolsTest(unittest.TestCase):
+    def test_fee_from_chain_and_yield(self):
+        import base64
+        import struct
+        page = {"data": [{"attributes": {"address": "So11111111111111111111111111111111111111112", "name": "AAA / SOL",
+                                         "reserve_in_usd": "1000000", "volume_usd": {"h24": "40000000"}},
+                          "relationships": {"base_token": {"data": {"id": "solana_AAA"}}, "quote_token": {"data": {"id": "solana_" + SOL}}}}]}
+        d = bytearray(84)
+        struct.pack_into("<H", d, 8, 10000)          # base factor
+        struct.pack_into("<H", d, 32, 500)           # protocol share 5%
+        d[34] = 0
+        struct.pack_into("<H", d, 80, 25)            # bin step -> base fee 0.25%
+        calls = []
+        fetch = lambda url: calls.append(url) or (page if "page=1&" in url else {"data": []})
+        rpc = lambda m, a: {"value": [{"data": [base64.b64encode(bytes(d)).decode(), "base64"]}]}
+        rows = pb._gecko_pools(fetch=fetch, rpc=rpc)
+        self.assertAlmostEqual(rows[0]["fees_24h"], 40e6 * 0.0025 * 0.95)
+        self.assertEqual(rows[0]["mint_y"], SOL)
