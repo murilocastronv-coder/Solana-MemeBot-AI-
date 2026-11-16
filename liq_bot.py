@@ -30,7 +30,7 @@ E = sg._f
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 SOL = "So11111111111111111111111111111111111111112"
-DEBTS = (USDC, USDT, SOL)                              # debt the bot can repay (owner: USDC, USDT and SOL)
+DEBTS = (USDC, USDT, SOL)                              # preferred debts (owner later: ANY token, bought on Jupiter)
 LIQ_USD = E("LIQ_USD", 50)
 DAILY_LOSS = E("LIQ_DAILY_LOSS_USD", 10)
 SCAN_S = E("LIQ_SCAN_S", 120)
@@ -304,10 +304,10 @@ def top_up(rpc, owner, send=None, chat=None):
 def plan(ob, reserves, usdc_raw):
     """(dict with repay, withdraw, amount, min_receive, usd) or (None, why). Prefers USDC debt (no swap)."""
     debts = [(b, reserves.get(b["reserve"])) for b in ob["borrows"]]
-    debts = [(b, r) for b, r in debts if r and r["mint"] in DEBTS and r["price"] > 0]
+    debts = [(b, r) for b, r in debts if r and r["price"] > 0]
     if not debts:
-        return None, "dívida não é em USDC, USDT nem SOL"
-    b, repay = max(debts, key=lambda x: (x[1]["mint"] == USDC, x[0]["value"]))
+        return None, "dívida sem preço"
+    b, repay = max(debts, key=lambda x: (x[1]["mint"] == USDC, x[1]["mint"] in DEBTS, x[0]["value"]))
     cols = [(d, reserves.get(d["reserve"])) for d in ob["deposits"]]
     cols = [(d, r) for d, r in cols if r and r["price"] > 0
             and (ob["elevation"] > 0 or r.get("threshold_pct", 1) > 0)]   # threshold 0 = Kamino refuses (error 6087)
@@ -332,12 +332,23 @@ def acquire(rpc, me, p):
     mint = p["repay"]["mint"]
     if mint == USDC:
         return p["amount"]
-    have = sol_lamports(rpc, me) - int(SOL_RESERVE * 1e9) if mint == SOL else token_balance(rpc, me, mint)
+    tp = p["repay"]["token_program"]
+    have = sol_lamports(rpc, me) - int(SOL_RESERVE * 1e9) if mint == SOL else token_balance(rpc, me, mint, tp)
     if have >= p["amount"]:
         return p["amount"]
-    r = _jupiter_swap(USDC, mint, int(p["usd"] * 1.004 * 1e6), me)
+    usdc_in = int(p["usd"] * 1.004 * 1e6)
+    if mint not in DEBTS:                                   # any other token: check the round trip on Jupiter first
+        import jupiter_v2_executor as jx
+        out = int(jx.order(USDC, mint, usdc_in)["outAmount"])
+        back = int(jx.order(mint, USDC, out)["outAmount"])
+        loss = 1 - back / usdc_in
+        if loss > p["withdraw"]["min_bonus_bps"] / 1e4 * 0.5:
+            note("dívida em " + p["repay"]["name"] + ": ida e volta na Jupiter perde " + format(loss * 100, ".1f") +
+                 "% (bônus " + format(p["withdraw"]["min_bonus_bps"] / 100, ".1f") + "%) — não compensa")
+            return 0
+    r = _jupiter_swap(USDC, mint, usdc_in, me)
     note("troquei US$ " + format(r["total_input_amount"] / 1e6, ".2f") + " USDC por " + p["repay"]["name"] + " para pagar a dívida")
-    have = sol_lamports(rpc, me) - int(SOL_RESERVE * 1e9) if mint == SOL else token_balance(rpc, me, mint)
+    have = sol_lamports(rpc, me) - int(SOL_RESERVE * 1e9) if mint == SOL else token_balance(rpc, me, mint, tp)
     return max(0, min(p["amount"], have))
 
 
@@ -495,14 +506,7 @@ def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None)
         return None
     signer = signer or __import__("rent_reclaim").bot_signer()
     me = str(signer.pubkey())
-    usdc_before = token_balance(rpc, me, USDC)
-    p, why = plan(ob, reserves, usdc_before)
-    if not p:
-        stat("puladas")
-        _note_once(ob["address"] + why, "liquidável (LTV ~" + format(min(ltv, 9.99) * 100, ".0f") + "%) mas pulei: " + why +
-                   " · " + ob["address"][:6], now)
-        return None
-    try:                                                      # Kamino's own number before any swap or send
+    try:                                                      # Kamino's own number before anything else
         exact, why = exact_ltv(rpc, signer.pubkey(), ob, reserves)
     except Exception as exc:
         exact, why = None, type(exc).__name__
@@ -511,6 +515,13 @@ def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None)
         _TRIED[ob["address"]] = now + 120
         if exact is None:
             _note_once("exact" + ob["address"], "não consegui a conta exata do Kamino para " + ob["address"][:6] + ": " + why, now)
+        return None
+    usdc_before = token_balance(rpc, me, USDC)
+    p, why = plan(ob, reserves, usdc_before)
+    if not p:
+        stat("puladas")
+        _note_once(ob["address"] + why, "liquidável (Kamino: LTV " + format(min(exact, 9.99) * 100, ".0f") + "%) mas pulei: " + why +
+                   " · " + ob["address"][:6], now)
         return None
     stat("oportunidades")
     repay, withdraw = p["repay"], p["withdraw"]
