@@ -569,7 +569,7 @@ def handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send=None, chat=N
         if not why:
             r = (safety or sg.safety_reason)(mint)
             why = ("anti-golpe: " + r) if r else ""
-        lag = now - float((tx or {}).get("blockTime") or now)
+        lag = max(0.0, time.time() - float((tx or {}).get("blockTime") or time.time()))   # real detection delay
         if why:
             note("DEV " + dev[:6] + "… comprou " + sym + " — NÃO copiei: " + why)
             _signal(info, send, chat, "📡 SINAL DEV " + str(info.get("tier")) + " `" + dev + "` comprou " + sym +

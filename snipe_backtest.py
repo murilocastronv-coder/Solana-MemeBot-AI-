@@ -35,6 +35,7 @@ CAPITAL = sg._f("SNIPE_BT_CAPITAL", 500)
 CALLS_PER_HOUR = int(sg._f("SNIPE_BT_CALLS_PER_HOUR", 1500))   # Helius budget (~100 credits per call)
 JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 3) * 60     # owner (Nov 16): answer in ~3 min; the next tap continues
 SUPPLY = 1_000_000_000
+MIN_TRADE_USD = sg._f("SNIPE_BT_MIN_TRADE_USD", 2)
 GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60))
 GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 45))
 _STOP = threading.Event()
@@ -166,6 +167,8 @@ def trade_of(tx, mint, sol_usd):
     if not tok or not pb or not qb:
         return None
     sol = (qb[0] - pb[0] + int(meta.get("fee") or 0)) / 1e9
+    if abs(sol) * sol_usd < MIN_TRADE_USD:
+        return None                                   # dust: a tiny amount + account rent gives absurd prices
     if tok > 0 and sol < 0:
         usd = -sol * sol_usd
         return int(tx.get("blockTime") or 0), usd / tok, usd, "buy"
