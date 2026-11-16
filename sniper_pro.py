@@ -210,7 +210,11 @@ def sample_params(rnd, prof, bucket=None):
 
 
 def score_of(s, min_trades):
-    if s["trades"] < min_trades or (s["pf"] is not None and s["pf"] < 1.0):
+    """Ranking: enough operations first (a setting that almost never trades is luck, not a strategy), then
+    profit factor >= 1, then profit minus half the drawdown."""
+    if s["trades"] < min_trades:
+        return -2e9 + s["trades"]
+    if s["pf"] is not None and s["pf"] < 1.0:
         return -1e9 + s["pnl"]
     return s["pnl"] - 0.5 * s["dd"]
 
@@ -228,7 +232,7 @@ def optimise(c, end, prof, n=None, rnd=None, bucket=None, should_stop=None):
     best, best_val = None, None
     for _, p in tried[:TOP_K]:
         v = simulate(c, *w["val"], p)
-        if best is None or score_of(v, 5) > score_of(best_val, 5):
+        if best is None or score_of(v, MIN_OPS // 6) > score_of(best_val, MIN_OPS // 6):
             best, best_val = p, v
     if best is None:
         return None
