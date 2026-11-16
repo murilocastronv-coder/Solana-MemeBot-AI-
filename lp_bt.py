@@ -29,9 +29,22 @@ MAX_MULT = 4.0
 RANGES = (0.05, 0.10, 0.20, 0.40)
 HL = "https://api.hyperliquid.xyz/info"
 DEX_SEARCH = "https://api.dexscreener.com/latest/dex/search?q=SOL%20USDC"
+DEX_TOKEN = "https://api.dexscreener.com/token-pairs/v1/solana/So11111111111111111111111111111111111111112"
 SOL = "So11111111111111111111111111111111111111112"
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 _RUNNING = threading.Lock()
+
+
+def _send_parts(send, chat, text, limit=3500):
+    """Telegram refuses messages over ~4096 characters: send line blocks."""
+    cur = ""
+    for line in text.split("\n"):
+        if cur and len(cur) + len(line) + 1 > limit:
+            send(chat, cur)
+            cur = ""
+        cur += ("\n" if cur else "") + line
+    if cur:
+        send(chat, cur)
 
 
 # ---------------------------------------------------------------- data
@@ -46,22 +59,31 @@ def candles(days=DAYS, now=None, post=None):
 def pool_fee_apr(get=None):
     """(fee APR of the average LP, description) from the biggest SOL/USDC concentrated pools on DexScreener."""
     get = get or (lambda u: requests.get(u, timeout=15).json())
-    pairs = (get(DEX_SEARCH) or {}).get("pairs") or []
-    good = []
+    pairs = []
+    for url in (DEX_TOKEN, DEX_SEARCH):
+        try:
+            got = get(url)
+        except Exception as exc:
+            logging.info("lp pools %s: %s", url[-30:], type(exc).__name__)
+            continue
+        pairs += got if isinstance(got, list) else ((got or {}).get("pairs") or [])
+    good, seen = [], set()
     for p in pairs:
         if p.get("chainId") != "solana":
             continue
         mints = {(p.get("baseToken") or {}).get("address"), (p.get("quoteToken") or {}).get("address")}
         if mints != {SOL, USDC}:
             continue
-        if str(p.get("dexId")) not in ("orca", "meteora", "raydium"):
+        if str(p.get("dexId")) not in ("orca", "meteora", "raydium") or p.get("pairAddress") in seen:
             continue
+        seen.add(p.get("pairAddress"))
         liq = float((p.get("liquidity") or {}).get("usd") or 0)
         vol = float((p.get("volume") or {}).get("h24") or 0)
-        if liq > 100_000 and vol > 0:
+        if liq > 50_000 and vol > 0:
             good.append((liq, vol, p.get("dexId")))
     if not good:
-        return None, "sem dados de pool"
+        logging.warning("lp pools: %d pairs read, none SOL/USDC on orca/meteora/raydium", len(pairs))
+        return None, "sem dados de pool (" + str(len(pairs)) + " pares lidos)"
     good.sort(reverse=True)
     top = good[:5]
     liq = sum(x[0] for x in top)
@@ -167,7 +189,7 @@ def start(send=None, chat=None, post=None, get=None):
                 logging.info("lp pools: %s", type(exc).__name__)
                 apr, desc = None, "pools não responderam"
             if send and chat:
-                send(chat, report(path, apr, desc))
+                _send_parts(send, chat, report(path, apr, desc))
         except Exception as exc:
             logging.exception("lp backtest failed")
             if send and chat:
