@@ -128,9 +128,57 @@ def _fetch_pools(url):
     return out
 
 
+def _gecko_pools(pages=5, fetch=None, rpc=None):
+    """Meteora DLMM pools from GeckoTerminal (Meteora retired its public pair list, Nov 2026) + each pool's fee read
+    from its own on-chain LbPair account: base fee = base_factor x bin_step x 10 x 10^power / 1e9 (Meteora's formula),
+    LP share = 1 - protocol share. 24 h fees ~ volume x base fee x LP share (the variable fee is ignored: conservative)."""
+    import base64 as b64
+    import struct as st
+    fetch = fetch or sg._get
+    raw = []
+    for page in range(1, pages + 1):
+        data = fetch(sg.GECKO + "/networks/solana/dexes/meteora/pools?page=" + str(page) + "&sort=h24_volume_usd_desc") or {}
+        rows = data.get("data") or []
+        if not rows:
+            break
+        for r in rows:
+            a = r.get("attributes") or {}
+            rel = r.get("relationships") or {}
+            mint = lambda k: str((((rel.get(k) or {}).get("data") or {}).get("id") or "")).replace("solana_", "")
+            raw.append({"address": a.get("address"), "name": a.get("name") or "?", "mint_x": mint("base_token"),
+                        "mint_y": mint("quote_token"), "liquidity": a.get("reserve_in_usd"),
+                        "trade_volume_24h": ((a.get("volume_usd") or {}).get("h24"))})
+    if not raw:
+        raise RuntimeError("GeckoTerminal não respondeu com as pools da Meteora")
+    rpc = rpc or __import__("snipe_backtest").fast_rpc(rps=5)
+    keys = [r["address"] for r in raw if r.get("address")]
+    fees = {}
+    for i in range(0, len(keys), 100):
+        got = (rpc("getMultipleAccounts", [keys[i:i + 100], {"encoding": "base64", "dataSlice": {"offset": 0, "length": 84}}]) or {}).get("value") or []
+        for k, acc in zip(keys[i:i + 100], got):
+            if not acc:
+                continue
+            d = b64.b64decode(acc["data"][0])
+            if len(d) < 84:
+                continue
+            base_factor, power, share = st.unpack_from("<H", d, 8)[0], d[34], st.unpack_from("<H", d, 32)[0]
+            bin_step = st.unpack_from("<H", d, 80)[0]
+            fees[k] = base_factor * bin_step * 10 * (10 ** power) / 1e9 * (1 - share / 10000)
+    out = []
+    for r in raw:
+        f = fees.get(r["address"])
+        if f:
+            r["fees_24h"] = float(r.get("trade_volume_24h") or 0) * f
+            out.append(r)
+    return out
+
+
 def pools(get=None):
     """[{address, name, coin, quote, liq, vol, fees24, day_yield}] - Meteora DLMM pools against SOL/USDC/USDT."""
-    rows = (get or _fetch_pools)(METEORA) or []
+    if get is None:
+        rows = _gecko_pools()
+    else:
+        rows = get(METEORA) or []
     if isinstance(rows, dict):
         rows = rows.get("pairs") or rows.get("data") or []
     out = []
