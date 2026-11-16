@@ -34,7 +34,7 @@ _STOP = threading.Event()
 
 
 def _cache():
-    return sbt._get("dev_strat_cache", {})
+    return sbt._get("dev_strat_cache_v2", {})
 
 
 def _qualifies(prior, min_win=None, min_trades=20):
@@ -80,9 +80,6 @@ def replay(rpc, dev, h, sol_usd):
         if not entry:
             out[str(delay)] = "sem preço na entrada"
             continue
-        if entry * sbt.SUPPLY < MIN_MCAP:
-            out[str(delay)] = "moeda abaixo de US$ " + format(MIN_MCAP, ",.0f")
-            continue
         if dev_px and entry > dev_px * (1 + MAX_RUNUP):
             out[str(delay)] = "preço já +" + format(MAX_RUNUP * 100, ".0f") + "% acima do DEV"
             continue
@@ -92,7 +89,7 @@ def replay(rpc, dev, h, sol_usd):
             part = left if i == len(sale) - 1 else left * min(float(frac), 1.0)
             got += part * ((px or 0.0) / entry)
             left -= part
-        out[str(delay)] = [round(got * (1 - sbt.COST) ** 2 - 1, 4), float(sells[-1][0]) + delay]
+        out[str(delay)] = [round(got * (1 - sbt.COST) ** 2 - 1, 4), float(sells[-1][0]) + delay, entry]   # entry: filters applied later
     return out
 
 
@@ -115,11 +112,11 @@ def download(rpc, sol_usd, evs, should_stop=None, on_progress=None, max_s=None):
             logging.warning("dev strategy test %s: %s: %s", h["mint"][:8], type(exc).__name__, str(exc)[:120])
             continue
         if i % 20 == 19:
-            sbt._put("dev_strat_cache", c)
+            sbt._put("dev_strat_cache_v2", c)
         if on_progress:
             on_progress(i + 1, len(order))
     sbt.DEADLINE[0] = 0.0
-    sbt._put("dev_strat_cache", c)
+    sbt._put("dev_strat_cache_v2", c)
     return c
 
 
@@ -133,6 +130,10 @@ def simulate(evs, c, delay, usd=None, max_open=None):
             continue                                     # not replayed yet
         if isinstance(r, str):
             rejected[r] = rejected.get(r, 0) + 1
+            continue
+        if len(r) > 2 and r[2] * sbt.SUPPLY < db.CURVE_MIN_MCAP:      # minimum applied now: changing it needs no new download
+            k = "moeda abaixo de US$ " + format(db.CURVE_MIN_MCAP, ",.0f")
+            rejected[k] = rejected.get(k, 0) + 1
             continue
         open_until = [x for x in open_until if x > t]
         if len(open_until) >= max_open:
@@ -161,7 +162,7 @@ def text(evs, devs_ok, c, now):
     L = ["🧪 TESTE DA ESTRATÉGIA DEV — últimos " + format(DAYS, ".0f") + " dias (dados REAIS da blockchain)",
          "Regra: DEV aprovado pelo histórico ANTERIOR (acerto ≥ " + format(db.TIERS[-1][1] * 100, ".0f") + "%, ≥ 20 ops, PF ≥ 2, lucro, ≥ " +
          str(db.MIN_TOKENS) + " moedas) compra → o bot compra X s depois se o preço não passou de +" + format(MAX_RUNUP * 100, ".0f") +
-         "% e a moeda vale ≥ US$ " + format(MIN_MCAP, ",.0f") + " · vende junto com o DEV · US$ " + format(usd, "g") +
+         "% e a moeda vale ≥ US$ " + format(db.CURVE_MIN_MCAP, ",.0f") + " · vende junto com o DEV · US$ " + format(usd, "g") +
          " por compra · máx. " + str(db.MAX_OPEN) + " abertas · custos " + format(sbt.COST * 100, ".0f") + "% por lado",
          "📊 Compras de DEVs aprovados no período: " + str(len(evs)) + " (" + str(len(devs_ok)) + " DEVs) · refeitas com preço real: " + str(done)]
     for delay in DELAYS:
