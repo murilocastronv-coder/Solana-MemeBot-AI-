@@ -1,5 +1,5 @@
 """Web panel of the bot: follow everything in the browser instead of Telegram, and turn the copy
-trade / Sniper on and off. The bot runs on the server: closing the page changes nothing.
+trade on and off. The bot runs on the server: closing the page changes nothing.
 
 Protected by a password: set DASHBOARD_PASSWORD (12+ characters) in Render > Environment.
 Open https://<service>.onrender.com/painel ; the browser asks user (anything) and password.
@@ -40,14 +40,7 @@ def csrf_ok(token):
     return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
 
 
-ACTIONS = {"pro_dl": "Backtest PRO 180 dias iniciado", "pro_cmp": "Comparação de estratégias iniciada", "pro_opt": "Otimização iniciada",
-           "pro_sim": "Melhor estratégia validada aplicada à SIMULAÇÃO", "pro_x": "Backtest PRO interrompido", "sn_bt180": "Backtest do sniper (180 dias) iniciado — o relatório chega no Telegram", "sn_paper": "Sniper ligado em SIMULAÇÃO",
-           "sn_stop": "Sniper parado", "ls_run": "Backtest DEV Launch Sniper (5 meses) iniciado — o resultado chega no Telegram", "hunt": "Busca de DEVs lucrativos iniciada", "hunt_x": "Busca de DEVs parada", "dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
-           "dv_bt365": "Backtest DEV de 12 meses iniciado", "dv_btc": "Backtest DEV do período escolhido iniciado",
-           "dv_btx": "Backtest DEV cancelado", "dv_on": "Robô DEV rodando", "dv_off": "Robô DEV pausado",
-           "dv_stop": "PARADA DE EMERGÊNCIA: robô DEV pausado e posições vendidas",
-           "copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado",
-           "rks_on": "Sinais do Sniper ligados", "rks_off": "Sinais do Sniper desligados"}
+ACTIONS = {"copy_real": "Copy trade REAL ligado", "copy_off": "Copy trade desligado"}
 
 
 def _e(x):
@@ -163,11 +156,6 @@ def _button(action, label, style=""):
 
 
 def controls(s):
-    try:
-        import rocket_bot
-        rks_on = rocket_bot.signals_on()
-    except Exception:
-        rks_on = None
     copy_on = isinstance(s, dict) and s.get("copy_real")
     return ("<div class='card'><h2>🎛️ Controles</h2><div class='row'><div><b>👥 Copy trade (real)</b> — " +
             ("<span class='pill ok'>ligado</span>" if copy_on else "<span class='pill bad'>desligado</span>") +
@@ -320,174 +308,12 @@ TABS_JS = """
 </script>
 """
 
-TAB_LIST = (("t-snipe", "🎯 Sniper"), ("t-devs", "🕵️ DEVs"), ("t-bt", "🧪 Backtest"), ("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
+TAB_LIST = (("t-resumo", "🏠 Resumo"), ("t-stop", "🚀 Stop móvel"), ("t-pos", "📦 Posições"), ("t-ops", "🧾 Operações"),
             ("t-bots", "🤖 Robôs"), ("t-avisos", "🔔 Avisos"))
-
-
-def _sparkline(vals, w=320, h=60):
-    if len(vals) < 2:
-        return ""
-    lo, hi = min(vals), max(vals)
-    span = (hi - lo) or 1
-    pts = " ".join(format(i * w / (len(vals) - 1), ".1f") + "," + format(h - (v - lo) / span * (h - 4) - 2, ".1f")
-                   for i, v in enumerate(vals))
-    color = "var(--up)" if vals[-1] >= vals[0] else "var(--down)"
-    return ("<svg viewBox='0 0 " + str(w) + " " + str(h) + "' style='width:100%;max-width:" + str(w) +
-            "px;height:auto'><polyline fill='none' stroke='" + color + "' stroke-width='2' points='" + pts + "'/></svg>")
-
-
-def devs_tab(order="lucro"):
-    """DEV Hunter panel: BUSCAR DEVS LUCRATIVOS (7/30/90 days, max candidates, min hit rate, min trades), progress,
-    results and the sortable table of devs."""
-    import dev_hunter as dh
-    j, r = dh.job(), dh.results()
-    out = ["<div class='card'><h2>🕵️ Buscar DEVs lucrativos</h2><form method='post' action='/painel/acao'>",
-           "<input type='hidden' name='csrf' value='", csrf_token(), "'><input type='hidden' name='acao' value='hunt'>",
-           "Período <select name='dias'><option value='7'>7 dias</option><option value='30' selected>30 dias</option>"
-           "<option value='90'>90 dias</option></select> · máx. candidatos <input name='max' type='number' value='300' "
-           "min='10' max='2000' style='width:80px'> · acerto mín. <input name='acerto' type='number' value='70' min='70' max='100' "
-           "style='width:60px'>% · operações mín. <input name='ops' type='number' value='20' min='20' style='width:60px'>",
-           "<button class='btn big' style='margin-top:10px'>🔎 BUSCAR DEVS LUCRATIVOS</button></form>",
-           _button("hunt_x", "⏹️ Parar busca", "stop")]
-    if j:
-        prog = int(j.get("progress") or 0)
-        out += ["<div style='margin-top:10px'>", _e(j.get("status", "")), " · ", _e(j.get("stage", "")),
-                "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div></div>"]
-    out += ["<div class='grid' style='margin-top:10px'>"]
-    for label, val in (("Achadas", r["found"]), ("Analisadas", r["analysed"]), ("✅ Aprovadas", r["approved"]),
-                       ("❌ Rejeitadas", r["rejected"]), ("Na fila", r["queue"])):
-        out += ["<div class='card kpi' style='margin:0'><div class='l'>", label, "</div><div class='v'>", str(val), "</div></div>"]
-    out.append("</div>")
-    if r["reasons"]:
-        out.append("<div class='mut'>Motivos das rejeições: " + _e(" · ".join(k + " " + str(v) for k, v in r["reasons"].items())) + "</div>")
-    out.append("<div class='mut'>A análise de cada carteira usa os créditos da Helius com limite por hora: centenas de "
-               "carteiras levam algumas horas. Aprovado = acerto ≥ 70%, ≥ 20 ops, ≥ 5 moedas, lucro, PF ≥ 2, sem rug, mesma carteira ≥ 2 dias, com fundo.</div></div>")
-    rows = dh.table(order)
-    out += ["<div class='card'><h2>📋 DEVs</h2>Ordenar: <a href='/painel?ordem=lucro#t-devs'>lucro</a> · "
-            "<a href='/painel?ordem=acerto#t-devs'>acerto</a> · <a href='/painel?ordem=atividade#t-devs'>atividade</a>",
-            "<div class='tw'><table><tr><th>Carteira</th><th>Classe</th><th>Acerto (95%)</th><th>Ops</th><th>Próprias / outras</th>"
-            "<th>Lançou</th><th>Lucro</th><th>PF</th><th>DD</th><th>Última</th><th>Monitorando</th></tr>"]
-    for x in rows:
-        ci = x.get("ci") or [0, 0]
-        own = ("—" if x.get("n_own") is None else (format((x["win_own"] or 0) * 100, ".0f") + "%/" + str(x["n_own"]) + " · " +
-                                                  format((x["win_other"] or 0) * 100, ".0f") + "%/" + str(x["n_other"])))
-        out += ["<tr><td><a href='https://solscan.io/account/", _e(x["dev"]), "' target='_blank'>", _e(x["dev"][:6]), "…</a></td><td>",
-                _e(x["tier"]), "</td><td>", format(x["win"] * 100, ".0f"), "% <span class='mut'>(", format(ci[0] * 100, ".0f"), "–",
-                format(ci[1] * 100, ".0f"), "%)</span></td><td>", str(x["trades"]), "</td><td>", own, "</td><td>",
-                "—" if x["launches"] is None else str(x["launches"]), "</td><td>", _usd(x["pnl"] or 0, True), "</td><td>",
-                format(x["pf"] or 0, ".1f"), "</td><td>", format((x["dd"] or 0) * 100, ".0f"), "%</td><td>",
-                ("há " + _ago(x["last"])) if x["last"] else "—", "</td><td>", "✅" if x["watch"] else "—", "</td></tr>"]
-    out.append("</table></div></div>")
-    return "".join(out)
-
-
-def sniper_tab():
-    """Sniper 10-60 min: state, buttons, simulated positions/history, decisions log, last backtest report."""
-    import snipe_backtest as sbt
-    import snipe_bot as sb
-    d = sb._load()
-    on = sb.running()
-    sim = d.get("paper", True)
-    out = ["<div class='card'><h2>🎯 Sniper 10–60 min</h2><div>",
-           "<span class='pill ok'>ATIVO</span>" if on else "<span class='pill bad'>PARADO</span>", " ",
-           "<span class='pill'>SIMULAÇÃO</span>" if sim else "<span class='pill ok'>REAL</span>",
-           "</div><div style='margin-top:8px'>", _button("sn_bt180", "▶ INICIAR BACKTEST — 180 DIAS", "big"), "</div>",
-           "<div style='margin-top:8px'>", _button("sn_paper", "🧪 INICIAR SNIPER (simulação)"), _button("sn_stop", "⏹️ Parar", "stop"),
-           "</div><div class='mut'>O modo REAL só liga pelo Telegram (✅ Sniper REAL), e só se o backtest achar um grupo com lucro "
-           "fora da amostra.</div><pre>", _e(sb.status_text()), "</pre></div>"]
-    import sniper_pro as sp
-    pj = sp.state()
-    out += ["<div class='card'><h2>🔬 Backtest PRO 180 dias</h2>", _button("pro_dl", "▶ INICIAR BACKTEST 180 DIAS", "big"),
-            "<div style='margin-top:8px'>", _button("pro_cmp", "COMPARAR ESTRATÉGIAS"), _button("pro_opt", "OTIMIZAR PARÂMETROS"),
-            _button("pro_sim", "TESTAR MELHOR ESTRATÉGIA EM SIMULAÇÃO"), _button("pro_x", "⏹️ Interromper", "stop"), "</div>"]
-    if pj:
-        prog = int(pj.get("progress") or 0)
-        out += ["<div style='margin-top:10px'><b>", _e(pj.get("kind", "")), "</b> — ", _e(pj.get("status", "")), " · ", _e(pj.get("stage", "")),
-                "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div><div class='mut'>", str(prog),
-                "% (real, do servidor) · começou há ", _ago(pj.get("started")), "</div></div>"]
-    rep = sp.report()
-    if rep:
-        w = rep.get("winner")
-        best = (rep.get("profiles") or {}).get(w or "B") or {}
-        if best.get("final"):
-            out += ["<div class='mut' style='margin-top:8px'>Curva de patrimônio (histórico, perfil ", _e(w or "B"), ", teste independente):</div>",
-                    _sparkline(best["final"].get("curve") or [])]
-        out += ["<pre>", _e(sp.text(rep)), "</pre>"]
-        tl = (best.get("final") or {}).get("trade_list") or []
-        if tl:
-            out.append("<div class='tw'><table><tr><th>Quando</th><th>Idade</th><th>Resultado</th><th>Líquido</th><th>Saída</th></tr>")
-            for t in tl[-40:][::-1]:
-                out += ["<tr><td>", time.strftime("%d/%m %H:%M", time.gmtime(t["opened"])), "</td><td>", str(t["age"]), " min</td><td>",
-                        format(t["pct"], "+.1f"), "%</td><td>", _usd(t["pnl"], True), "</td><td>", _e(t["exit"]), "</td></tr>"]
-            out.append("</table></div>")
-    out.append("<div class='mut'>Histórico = backtest com dados reais da blockchain; simulação = dinheiro de mentira ao vivo; real = carteira.</div></div>")
-    j = sbt.job()
-    if j:
-        prog = int(j.get("progress") or 0)
-        out += ["<div class='card'><h2>🧪 Backtest</h2>", _e(j.get("status", "")), " · ", _e(j.get("stage", "")),
-                "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div></div>"]
-    pos = d.get("paper_pos") or {}
-    if sim and pos:
-        out.append("<div class='card'><h2>📦 Posições simuladas</h2><div class='tw'><table><tr><th>Moeda</th><th>Nota</th><th>Topo</th><th>Aberta há</th></tr>")
-        for m, x in pos.items():
-            out += ["<tr><td><a href='https://dexscreener.com/solana/", _e(m), "' target='_blank'>", _e(x.get("sym")), "</a></td><td>",
-                    format(float(x.get("score") or 0), ".0f"), "</td><td>", format((x.get("peak", 1) - 1) * 100, "+.0f"), "%</td><td>",
-                    _ago(x.get("t")), "</td></tr>"]
-        out.append("</table></div></div>")
-    hist = (d.get("paper_hist") or [])[-30:][::-1] if sim else []
-    if hist:
-        out.append("<div class='card'><h2>🧾 Vendas (simulação)</h2><div class='tw'><table><tr><th>Moeda</th><th>Resultado</th><th>Líquido</th><th>Saída</th></tr>")
-        for h in hist:
-            out += ["<tr><td>", _e(h.get("sym")), "</td><td>", format(h["result_pct"], "+.1f"), "%</td><td>", _usd(h["pnl_usd"], True),
-                    "</td><td>", _e(h.get("exit")), "</td></tr>"]
-        out.append("</table></div></div>")
-    log = (d.get("log") or [])[-25:][::-1]
-    if log:
-        out += ["<div class='card'><h2>📝 Decisões (compradas e rejeitadas com motivo)</h2><pre>", _e("\n".join(log)), "</pre></div>"]
-    rs = sbt.runs()
-    if rs:
-        out += ["<div class='card'><h2>📊 Último backtest</h2><pre>", _e(rs[-1].get("text", "")), "</pre></div>"]
-    return "".join(out)
-
-
-def backtest_tab():
-    """Owner's spec: big EXECUTAR BACKTEST — 5 MESES button, period choice, progress, cancel, history, CSV."""
-    import dev_backtest as dbt
-    j = dbt.job()
-    rs = dbt.runs()
-    out = ["<div class='card'><h2>🎯 DEV Launch Sniper</h2>", _button("ls_run", "▶ EXECUTAR BACKTEST — 5 MESES (Launch Sniper)", "big"),
-           "<div class='mut'>Dados reais da blockchain; compara 4 variações; o resultado chega no Telegram em até ~3 min "
-           "(cada toque continua de onde parou).</div></div>",
-           "<div class='card'><h2>🧪 Backtest do robô DEV</h2>", _button("dv_bt150", "▶ EXECUTAR BACKTEST — 5 MESES", "big"),
-           "<div style='margin-top:8px'>", _button("dv_bt180", "6 meses"), _button("dv_bt365", "12 meses"),
-           _button("dv_btx", "⏹️ Cancelar", "stop"), "</div>",
-           "<form method='post' action='/painel/acao' style='margin-top:10px'><input type='hidden' name='csrf' value='",
-           csrf_token(), "'><input type='hidden' name='acao' value='dv_btc'>Período escolhido: <input type='date' name='inicio' "
-           "required> até <input type='date' name='fim' required> <button class='btn'>▶ Executar</button></form>"]
-    if j:
-        prog = int(j.get("progress") or 0)
-        out += ["<div style='margin-top:12px'><b>", _e(j.get("label", "")), "</b> — ", _e(j.get("status", "")), " · ",
-                _e(j.get("stage", "")), "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div>",
-                "<div class='mut'>", str(prog), "% · começou há ", _ago(j.get("started")), "</div></div>"]
-    out.append("<div class='mut' style='margin-top:8px'>Roda no servidor: pode fechar a página. O resultado chega também no "
-               "Telegram. Nenhum número é inventado: períodos sem dados aparecem como faltando.</div></div>")
-    for r in rs[::-1]:
-        best = (r.get("summary") or {}).get(r.get("best") or "", {})
-        curve = (best.get("full") or {}).get("curve") or []
-        out += ["<div class='card'><h2>", _e(r.get("label")), " · ", _e(time.strftime("%d/%m %H:%M", time.gmtime(r.get("created") or 0))),
-                "</h2>", _sparkline(curve), "<pre>", _e(r.get("text", "")), "</pre><a href='/painel/backtest.csv?id=",
-                _e(r.get("id")), "'>⬇️ Baixar operações (CSV)</a></div>"]
-    if not rs:
-        out.append("<div class='card mut'>Nenhum backtest salvo ainda.</div>")
-    return "".join(out)
 
 
 def page(msg="", order="lucro"):
     import copy_trader as ct
-    try:
-        import rocket_bot
-    except Exception:
-        rocket_bot = None
     s = _safe(summary, None)
     out = ["<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>",
            "<meta http-equiv='refresh' content='30'><title>Painel do bot</title><style>", CSS, "</style></head><body><main>",
@@ -496,15 +322,6 @@ def page(msg="", order="lucro"):
     if msg:
         out += ["<div class='card' style='border-color:var(--acc)'>✅ ", _e(msg), "</div>"]
     out.append("<nav class='tabs'>" + "".join("<button type='button' data-t='" + t + "'>" + label + "</button>" for t, label in TAB_LIST) + "</nav>")
-
-    # ---- Sniper
-    out += ["<section class='tab' id='t-snipe'>", _safe(sniper_tab), "</section>"]
-
-    # ---- DEV Hunter
-    out += ["<section class='tab' id='t-devs'>", _safe(lambda: devs_tab(order)), "</section>"]
-
-    # ---- Backtest DEV
-    out += ["<section class='tab' id='t-bt'>", _safe(backtest_tab), "</section>"]
 
     # ---- Resumo
     out.append("<section class='tab' id='t-resumo'>")
@@ -573,13 +390,6 @@ def page(msg="", order="lucro"):
     # ---- Robôs
     out.append("<section class='tab' id='t-bots'>")
     out += ["<div class='card'><h2>👥 Copy trade</h2><pre>", _e(_safe(ct.status_text)), "</pre></div>"]
-    try:
-        import dev_bot
-        out += ["<div class='card'><h2>🧑‍💻 Robô DEV (simulação)</h2><pre>", _e(_safe(dev_bot.status_text)), "</pre>",
-                "<h2>🧪 Backtest</h2><pre>", _e(dev_bot._load().get("backtest") or "Ainda não rodado (botão 🧪 Backtest DEVs no Telegram)."),
-                "</pre></div>"]
-    except Exception:
-        pass
     out.append("</section>")
 
     # ---- Avisos

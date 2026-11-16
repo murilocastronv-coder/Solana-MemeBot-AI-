@@ -121,48 +121,5 @@ class DipLiveTests(Base):
         self.assertIn("DESLIGADO", fd.status_text())
 
 
-class TelegramTests(Base):
-    def press(self, data=None, text=None):
-        import telegram_bot as tb
-        out = []
-        upd = ({"callback_query": {"id": "1", "data": data, "message": {"chat": {"id": 1, "type": "private"}}}} if data else
-               {"message": {"chat": {"id": 1, "type": "private"}, "text": text}})
-        with patch.object(tb, "CHAT", "1"), patch.object(tb, "send", side_effect=lambda chat, t, kb=None: out.append(t)), \
-                patch.object(tb, "request_api", return_value={}), patch.object(tb, "run_async", side_effect=lambda fn: fn()):
-            tb.handle(upd)
-        return out
-
-    def test_buttons(self):
-        self.assertIn("LIGADO", self.press("fd_on")[0])
-        self.assertTrue(fd._load()["enabled"])
-        self.assertIn("US$ 50", self.press("fd_usd50")[0])
-        self.assertIn("LONG", self.press("fd_lev5")[0])
-        self.assertEqual(fd._load()["lev"], 5)
-        self.press("fd_usdask")
-        self.press(text="40")
-        self.assertEqual(float(fd._load()["usd"]), 40)
-        self.press(text="/valor 60")
-        self.assertEqual(float(fd._load()["usd"]), 60)
-        self.assertIn("Não há BTC", self.press("fd_sell")[0])
-        self.press("fd_off")
-        self.assertFalse(fd._load()["enabled"])
-
-    def test_manual_sell_needs_confirmation(self):
-        fd._save(dict(fd._load(), buys=[{"btc_raw": 100000, "usd": 100, "price": 100000, "t": 1}]))
-        self.assertIn("Vender TODO", self.press("fd_sell")[0])
-        self.assertEqual(len(fd._load()["buys"]), 1)
-        with patch.object(fd, "_sell_real", return_value={"usd": 95.0, "signature": "X"}), \
-                patch.object(fd, "btc_price", return_value=95000.0):
-            out = self.press("fd_sell_ok")
-        self.assertEqual(fd._load()["buys"], [])
-        self.assertIn("PREJUÍZO", out[-1])
-
-    def test_old_rsi2_buttons_are_removed(self):
-        import btc_live
-        with patch.object(btc_live, "_path", return_value=fd._path().with_name("bl.json")):
-            self.assertIn("removido", self.press("bl_on")[0])
-            self.assertFalse(btc_live._load()["enabled"])
-
-
 if __name__ == "__main__":
     unittest.main()

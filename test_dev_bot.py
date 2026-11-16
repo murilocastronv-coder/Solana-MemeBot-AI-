@@ -323,63 +323,6 @@ class DevPromptCriteriaTest(unittest.TestCase):
             self.assertEqual(db.retier_once(), 0)
 
 
-class DevHunterTest(unittest.TestCase):
-    def test_hunt_queues_new_creators_once_and_reports(self):
-        import dev_hunter as dh
-        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
-            calls = {"n": 0}
-
-            def history(rpc, addr, gte=None, lte=None, order="asc", limit=100):
-                calls["n"] += 1
-                return [{"blockTime": gte, "transaction": {"message": {"accountKeys": ["CREATOR" + str(calls["n"] % 3)]}},
-                         "meta": {"logMessages": ["Instruction: Create"], "postTokenBalances": [{"mint": "X" + str(gte) + "pump"}]}}]
-            n = dh.hunt(object(), 7, 50, now=NOW, history=history)
-            self.assertEqual(n, 3)                         # 3 distinct creators, duplicates skipped
-            d = db._load()
-            self.assertEqual(sum(1 for v in d["devs"].values() if v.get("found_by") == "hunter"), 3)
-            d["devs"]["CREATOR0"].update(tier="MONITORADO", why="sem lucro líquido", win=0.2, trades=30, pnl=-5, pf=0.5)
-            db._save(d)
-            r = dh.results()
-            self.assertEqual((r["found"], r["analysed"], r["rejected"], r["queue"]), (3, 1, 1, 2))
-            self.assertIn("sem lucro líquido", r["reasons"])
-            self.assertEqual(dh.table()[0]["dev"], "CREATOR0")
-
-    def test_wilson_and_split(self):
-        lo, hi = db.wilson(18, 20)
-        self.assertTrue(0.65 < lo < 0.75 and 0.95 < hi <= 1.0)
-        closed = [{"mint": "A", "pnl_usd": 5}, {"mint": "A", "pnl_usd": -1}, {"mint": "B", "pnl_usd": 3}]
-        s = db.split_stats(closed, ["A"])
-        self.assertEqual((s["n_own"], s["win_own"], s["n_other"], s["win_other"]), (2, 0.5, 1, 1.0))
-
-    def test_min_win_control_never_below_70(self):
-        import dev_hunter as dh
-        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
-            self.assertEqual(dh.set_cfg(0.5, 5), {"min_win": 0.7, "min_trades": 20})
-
-
-class DevFundsTest(unittest.TestCase):
-    def test_wallet_without_funds_is_not_approved_nor_analysed(self):
-        import dev_hunter as dh
-        st = db.rate_dev([pos("M" + str(i), 20, 0.5, NOW - i * 20000) for i in range(32)], NOW)
-        st["balance_sol"] = 0.01
-        self.assertIn("sem fundo", db.tier(st)[1])
-        st["balance_sol"] = 3.0
-        self.assertEqual(db.tier(st)[0], "ELITE")
-        self.assertEqual(db.balance_sol(lambda m, p: {"value": 2_500_000_000}, "W"), 2.5)
-        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
-            calls = {"n": 0}
-
-            def history(rpc, addr, gte=None, lte=None, order="asc", limit=100):
-                calls["n"] += 1
-                return [{"blockTime": gte, "transaction": {"message": {"accountKeys": ["W" + str(calls["n"] % 2)]}},
-                         "meta": {"logMessages": ["Instruction: Create"], "postTokenBalances": [{"mint": "X" + str(gte) + "pump"}]}}]
-            n = dh.hunt(object(), 7, 50, now=NOW, history=history, balance=lambda r, w: 0.0 if w == "W0" else 4.0)
-            d = db._load()
-            self.assertEqual(n, 1)                                   # only the funded wallet goes to the queue
-            self.assertEqual(d["devs"]["W0"]["tier"], "MONITORADO")
-            self.assertEqual(d["devs"]["W1"]["tier"], "NA FILA")
-
-
 class DevFollowFundsTest(unittest.TestCase):
     def test_sol_out_and_link_fresh_wallet(self):
         tx = {"meta": {"preBalances": [5_000_000_000, 0], "postBalances": [1_000_000_000, 3_999_995_000],

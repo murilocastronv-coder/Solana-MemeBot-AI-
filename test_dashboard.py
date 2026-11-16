@@ -121,19 +121,3 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class SignalsOnlyTest(unittest.TestCase):
-    @patch("telegram_bot.OWNER_MENU", "full")     # full menu (OWNER_MENU=full)
-    def test_signals_back_but_sniper_never_buys(self):
-        import rocket_bot
-        import telegram_bot as tb
-        with patch.object(rocket_bot, "_path", return_value=__import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "r.json"), \
-                patch("diamond_bot.stop"):
-            tb.remove_robots_once()
-            self.assertTrue(rocket_bot.signals_on())
-            self.assertFalse(rocket_bot.enabled())
-            rocket_bot.set_signals(False)
-            tb.remove_robots_once()                       # runs once: the owner's "off" is kept
-            self.assertFalse(rocket_bot.signals_on())
-        data = [b["callback_data"] for row in tb.keyboard() for b in row]
-        self.assertNotIn("rks_on", data)                # owner (Nov 15): menu with the copy trade only
-        self.assertNotIn("rk_on", data)

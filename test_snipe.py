@@ -121,34 +121,6 @@ class LaunchFeedTest(Tmp):
         self.assertEqual([p["baseToken"]["address"] for p in rows], ["News1pump"])   # s2 is too young (1 min)
 
 
-class LaunchTestTest(Tmp):
-    def test_replay_entry_delays_and_mirror_exit(self):
-        import dev_bot as db
-        import launch_test as lt
-        with mock.patch.object(db, "_path", return_value=pathlib.Path(self.tmp.name) / "d.json"):
-            d = db._load()
-            d["devs"] = {"DEVX": {"tier": "ELITE", "win": 0.9, "trades": 30, "launch_mints": [MINT],
-                                  "hist": [{"mint": MINT, "opened": NOW, "closed": NOW + 600, "sells": [[NOW + 600, 1.0]]}]}}
-            db._save(d)
-            self.assertEqual(len(lt.candidates()), 1)
-
-            def rpc(method, params):
-                addr, opt = params
-                gte = opt["filters"]["blockTime"]["gte"]
-                if gte >= NOW + 600:                       # after the dev sold: the dev's own sale, then 2x for others
-                    return {"data": [swap_tx(NOW + 600, MINT, -1000, int(0.9 * 1e9), payer="DEVX"),
-                                     swap_tx(NOW + 650, MINT, 1000, -int(0.2 * 1e9))]}
-                # launch: price 0.001 at +3 s, 0.0015 at +12 s, 0.003 at +40 s (per 1000 tokens, in SOL)
-                return {"data": [swap_tx(NOW + 3, MINT, 1000, -int(0.1 * 1e9)),
-                                 swap_tx(NOW + 12, MINT, 1000, -int(0.15 * 1e9)),
-                                 swap_tx(NOW + 40, MINT, 1000, -int(0.3 * 1e9))]}
-            r = lt.replay(rpc, MINT, NOW, [[NOW + 600, 1.0]], 150, "DEVX")
-            self.assertGreater(r[2], 0.2)          # median entry 0.15, out at 0.2: about +33% minus costs
-            self.assertLess(r[30], 0)              # in at 0.003, out at 0.002: loss
-            txt = lt.text([("DEVX", MINT, r)], 1)
-            self.assertIn("Entrando 2 s depois", txt)
-
-
 class LiveCreatorsTest(Tmp):
     def test_launch_creators_go_to_dev_queue(self):
         import dev_bot as db
@@ -166,53 +138,6 @@ class LiveCreatorsTest(Tmp):
             db._save(d)
             db.enqueue_creators([], NOW + db.PRUNE_S + 10)
             self.assertNotIn("CREATORZ", db._load()["devs"])       # dismissed fresh wallets are forgotten
-
-
-class DevStrategyTestTest(Tmp):
-    def test_only_devs_approved_by_past_trades_and_real_replay(self):
-        import dev_bot as db
-        import dev_strategy_test as dst
-        with mock.patch.object(db, "_path", return_value=pathlib.Path(self.tmp.name) / "d.json"):
-            hist = [{"mint": "C" + str(i) + "pump", "opened": NOW - (40 - i) * 86400, "closed": NOW - (40 - i) * 86400 + 600,
-                     "result_pct": 0.5, "pnl_usd": 5, "cost_usd": 20, "entry_usd": 0.0001,
-                     "sells": [[NOW - (40 - i) * 86400 + 600, 1.0]]} for i in range(40)]
-            d = db._load()
-            d["devs"] = {"GOODDEV": {"hist": hist}}
-            db._save(d)
-            evs, ok = dst.events(now=NOW, days=90)
-            self.assertEqual(len(evs), 20)                  # the first 20 trades only build the record
-            self.assertEqual(ok, {"GOODDEV"})
-
-            def rpc(method, params):
-                addr, opt = params
-                gte = opt["filters"]["blockTime"]["gte"]
-                opened = max(h["opened"] for h in hist if h["opened"] <= gte + 2)
-                rel = gte - opened                           # seconds after the dev's buy
-                if rel >= 600:                               # after the dev sold: 1.5x
-                    return {"data": [swap_tx(gte + 40 + k, addr, 1_000_000, -int(0.15 * 1e9)) for k in range(3)]}
-                return {"data": [swap_tx(gte + 2 + k * 3, addr, 1_000_000, -int(0.1 * 1e9)) for k in range(20)]}
-            c = dst.download(rpc, 150, evs[:3])
-            s = dst.simulate(evs, c, 10)
-            self.assertEqual(s["trades"], 3)
-            self.assertGreater(s["pnl"], 0)
-            self.assertIn("TESTE DA ESTRATÉGIA DEV", dst.text(evs, ok, c, NOW))
-
-
-class LaunchSniperTestTest(Tmp):
-    def test_variants_on_cached_real_data(self):
-        import launch_sniper_test as lst
-        e = {"opened": NOW, "dev_px": 0.0001, "sales": [[NOW + 120, 1.0]],
-             # first seconds: 4 other buyers, price 0.0001
-             "first": [[NOW + 1, 0.0001, 1]] + [[NOW + 2 + k, 0.0001, 0] for k in range(4)] + [[NOW + 11 + k, 0.0001, 0] for k in range(3)],
-             # path: up to +30% at +60 s, then the dev dumps
-             "path": [[NOW + 11, 0.0001, 0], [NOW + 60, 0.00013, 0], [NOW + 121, 0.00003, 0]],
-             "after": [[[NOW + 121 + k, 0.00003, 0] for k in range(3)]]}
-        tp = lst.trade_result(e, "tpsl", 10)
-        self.assertAlmostEqual(tp[0], 1.2 * (1 - lst.sbt.COST) ** 2 - 1, places=4)     # TP +20% hit before the dump
-        mirror = lst.trade_result(e, "mirror", 10)
-        self.assertLess(mirror[0], -0.5)                                            # sold after the dev's dump
-        no_mom = dict(e, first=[[NOW + 1, 0.0001, 1], [NOW + 12, 0.0001, 0]])
-        self.assertIn("momentum", lst.trade_result(no_mom, "momentum", 10))
 
 
 class SniperWinnerTest(Tmp):
@@ -350,52 +275,6 @@ class GradLiquidityTest(Tmp):
         self.assertEqual(bought, [])
         self.assertEqual(gbot.MAX_OPEN, 4)
         gbot._MEM.clear()
-
-
-class GradCandlesTest(unittest.TestCase):
-    def test_pool_trade_and_filters(self):
-        import grad_candles as gc
-        self.assertEqual(len(gc.pool_of("So11111111111111111111111111111111111111112")), 44)
-        g = 1_800_000_000
-        c = [[g + 60 * k, 1.0, 1.05, 0.95, 1.0, 5000] for k in range(5)]
-        c += [[g + 300, 1.0, 1.1, 0.70, 0.8, 5000]]           # low hits the -25% stop inside the candle
-        e = gc.entry_ok(c, g - 600, 120, gc.MOVES[0], gc.VOLS[0], gc.SPEEDS[0])
-        self.assertEqual(e[0], 2)
-        r = gc.trade(c, e[0], e[1], gc.EXITS[0])
-        self.assertEqual(r[2], "stop")
-        self.assertLess(r[0], -0.25)
-        self.assertIsNone(gc.entry_ok(c, g - 600, 120, gc.MOVES[2], gc.VOLS[0], gc.SPEEDS[0]))   # not up 1.3x
-        self.assertIsNone(gc.entry_ok(c, g - 600, 120, gc.MOVES[0], gc.VOLS[1], gc.SPEEDS[0]))   # vol < 20k
-        up = [[g + 60 * k, 1.0 + 0.2 * k, 1.0 + 0.2 * k + 0.1, 1.0 + 0.2 * k - 0.05, 1.0 + 0.2 * k, 9000] for k in range(30)]
-        up += [[g + 1800, 6.0, 6.0, 3.0, 3.5, 9000]]
-        e = gc.entry_ok(up, g - 600, 60, gc.MOVES[0], gc.VOLS[0], gc.SPEEDS[0])
-        r = gc.trade(up, e[0], e[1], gc.EXITS[0])
-        self.assertEqual(r[2], "stop móvel")
-        self.assertGreater(r[0], 1.0)
-        store = {"M" + str(k): [[g + 3600 * k + 60 * j, 1.0, 1.6, 0.9, 1.5, 30000] for j in range(10)] for k in range(40)}
-        txt, ok, best = gc.report(store, {m: g - 600 for m in store}, 40, final=True)
-        self.assertIn("📌", txt)
-
-
-class LiqBacktestTest(unittest.TestCase):
-    def test_liquidation_parse_and_report(self):
-        import liq_backtest as lb
-        w = "WalletLiquidator1111111111111111111111111111"
-        usdc, sol = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "So11111111111111111111111111111111111111112"
-        tx = {"blockTime": NOW, "transaction": {"message": {"accountKeys": [w]}},
-              "meta": {"err": None, "fee": 5000, "logMessages": ["Program log: Instruction: LiquidateObligationAndRedeemReserveCollateral"],
-                       "preBalances": [10 ** 9], "postBalances": [10 ** 9 - 5000],
-                       "preTokenBalances": [{"owner": w, "mint": usdc, "uiTokenAmount": {"uiAmount": 100}}],
-                       "postTokenBalances": [{"owner": w, "mint": usdc, "uiTokenAmount": {"uiAmount": 0}},
-                                             {"owner": w, "mint": sol, "uiTokenAmount": {"uiAmount": 0.7}}]}}
-        e = lb.liquidation_of(tx)
-        self.assertEqual(e["deltas"], {usdc: -100.0, sol: 0.7})
-        self.assertIsNone(lb.liquidation_of(dict(tx, meta=dict(tx["meta"], logMessages=["Instruction: Deposit"]))))
-        store = {"markets": [("Kamino", "JLP", "M1")], "done": {"M1": 3}, "liqs": {"M1": [e] * 10}, "txs": 300,
-                 "span": {"M1": NOW - 10 * 86400}}
-        fetch = lambda u: [{"baseToken": {"address": sol}, "liquidity": {"usd": 1e7}, "priceUsd": "150"}]
-        txt = lb.report(store, NOW, final=True, fetch=fetch)
-        self.assertIn("Com US$ 50:", txt)
 
 
 class Sniper1060Test(Tmp):

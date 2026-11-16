@@ -61,7 +61,8 @@ class UserWalletTests(unittest.TestCase):
         from solders.keypair import Keypair
         key = re.search(r"\n\n(\w{80,90})\n\n", msgs[0]["text"]).group(1)
         self.assertEqual(str(Keypair.from_base58_string(key).pubkey()), owner_addr)
-        self.assertTrue(msgs[0]["protect_content"])
+        self.assertNotIn("protect_content", msgs[0])                         # copying must work
+        self.assertEqual(msgs[0]["reply_markup"]["inline_keyboard"][0][0]["copy_text"]["text"], key)
         self.assertTrue(any(m == "deleteMessage" for m, _ in api))           # message wiped afterwards
         self.assertFalse(any(key in t for t, _ in sent))                     # never through send()/panel
         self.assertIn("wallet_export", {b.get("callback_data") for row in tb.keyboard() for b in row})

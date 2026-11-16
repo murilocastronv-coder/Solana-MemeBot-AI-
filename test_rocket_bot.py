@@ -242,21 +242,6 @@ class SignalBuyButtonTest(unittest.TestCase):
         self.assertIn(MINT, rows[0][0]["callback_data"])
 
 
-class CustomAmountTest(unittest.TestCase):
-    def test_typed_amount_buys_the_coin(self):
-        import telegram_bot as tb
-        self.assertTrue(tb.AMOUNT_RE.fullmatch("15") and tb.AMOUNT_RE.fullmatch("7,5") and tb.AMOUNT_RE.fullmatch("$20"))
-        self.assertFalse(tb.AMOUNT_RE.fullmatch("/start"))
-        self.assertEqual(rb.buy_buttons(MINT)[1][0]["callback_data"], "sbx:" + MINT)
-        sent, bought = [], []
-        with patch.object(tb, "authorized", return_value=True), patch.object(tb, "send", side_effect=lambda *a, **k: sent.append(a[1])), \
-                patch.object(tb, "run_async", side_effect=lambda fn, *a: fn(*a)), \
-                patch.object(rb, "manual_buy", side_effect=lambda m, usd, s, c: bought.append((m, usd)) or ""):
-            tb.handle({"callback_query": {"id": "1", "data": "sbx:" + MINT, "message": {"chat": {"id": 7, "type": "private"}}}})
-            tb.handle({"message": {"text": "12,5", "chat": {"id": 7, "type": "private"}}})
-        self.assertEqual(bought, [(MINT, 12.5)])
-
-
 class LiquidityLineTest(unittest.TestCase):
     def test_signal_and_buy_show_liquidity(self):
         import live_engine

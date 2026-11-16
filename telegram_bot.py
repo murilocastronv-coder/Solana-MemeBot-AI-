@@ -134,46 +134,12 @@ def split_message(text,limit=3800):
   cur+=("\n" if cur else "")+line
  if cur:parts.append(cur)
  return parts
-REMOVED_ROBOT_ACTIONS={"rk_on","rk_off","/sniper","dm_on","dm_off","dm_status","/diamond"}
-def remove_robots_once():
- """Owner's choice (Nov 14): the Sniper never buys and the Diamond is removed; the copy trade runs and the
- Sniper only sends SIGNALS (owner asked them back). Open real positions keep the exit monitor's stops."""
- try:
-  import rocket_bot,diamond_bot
-  rocket_bot.set_enabled(False);diamond_bot.stop()
-  d=rocket_bot._load()
-  if not d.get("signals_back_v1"):
-   d.update(signals_back_v1=True,signals=True);rocket_bot._save(d)
- except Exception:logging.exception("remove robots failed")
-OWNER_MENU=os.getenv("OWNER_MENU","full").strip().lower()   # owner (Nov 15, later): only the copy trade again; "btc": BTC menu
-def btc_keyboard():
- return [[{"text":"🔬 Testar estratégias BTC","callback_data":"btc_research"}],
-  [{"text":"📊 Último resultado BTC","callback_data":"btc_last"}],
-  [{"text":"🧪 Testar compra no fundo (6 meses)","callback_data":"btc_dip"}],
-  [{"text":"₿ Robô compra no fundo: status","callback_data":"fd_status"}],
-  [{"text":"🟢 Ligar robô (real)","callback_data":"fd_on"},{"text":"🔴 Desligar robô","callback_data":"fd_off"}],
-  [{"text":str(n)+"x","callback_data":"fd_lev"+str(n)} for n in (1,2,3,4,5)],
-  [{"text":"$"+str(n),"callback_data":"fd_usd"+str(n)} for n in (20,50,100,200)],
-  [{"text":"✏️ Outro valor","callback_data":"fd_usdask"},{"text":"💰 Vender tudo agora","callback_data":"fd_sell"}],
-  [{"text":"📥 Depositar","callback_data":"wallet_deposit"},{"text":"💸 Retirar","callback_data":"wd_start"},
-   {"text":"💰 Saldo","callback_data":"wallet_balance"}]]
 def keyboard():
- """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
- if OWNER_MENU=="btc":return btc_keyboard()
- # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
- # owner (Nov 16, evening): ONLY the copy trade with real money; every other robot removed
+ """Owner's menu: only the copy trade and the bot wallet."""
  return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"📋 Carteiras copiadas","callback_data":"copy_wallets"},{"text":"📦 Posições","callback_data":"copy_positions"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
-  [{"text":"🤖 Memecoin: nova proposta","callback_data":"mc_new"},{"text":"🤖 Memecoin: status","callback_data":"mc_status"}],
-  [{"text":"🔁 Propostas automáticas","callback_data":"mc_auto"},{"text":"⏸️ Só quando eu pedir","callback_data":"mc_manual"}],
-  [{"text":"🚀 Memecoin REAL (aprovo cada uma)","callback_data":"mc_real"},{"text":"🧪 Memecoin simulação","callback_data":"mc_sim"}],
-  [{"text":"🔬 Analisar criadores","callback_data":"mc_creators"},{"text":"📈 Padrões dos criadores","callback_data":"mc_patterns"}],
-  [{"text":"🎯 INICIAR BACKTEST — 180 DIAS","callback_data":"sn_bt180"}],
-  [{"text":"🔬 Backtest PRO 180 dias","callback_data":"pro_dl"},{"text":"🧪 Melhor PRO em simulação","callback_data":"pro_sim"}],
-  [{"text":"🧪 INICIAR SNIPER (simulação)","callback_data":"sn_paper"},{"text":"⏹️ Parar sniper","callback_data":"sn_stop"}],
-  [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Sniper REAL (vencedor)","callback_data":"sn_apply"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar chave privada","callback_data":"wallet_export"}]]
@@ -305,286 +271,6 @@ def handle(update):
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
- if action.startswith("bx_"):
-  send(chat,"₿ O robô de BTC foi removido. O bot agora roda só o Sniper.",keyboard());return
- if action.startswith("sbx:"):
-  BUY_AMOUNT[chat]=(action.split(":",1)[1],time.time())
-  send(chat,"✏️ Quantos US$ você quer colocar nessa moeda? Mande só o número (ex.: 15 ou 7.5).\n`"+action.split(":",1)[1]+"`");return
- if not cb and chat in BUY_AMOUNT and time.time()-BUY_AMOUNT[chat][1]<600 and AMOUNT_RE.fullmatch((msg or {}).get("text","").strip()):
-  mint=BUY_AMOUNT.pop(chat)[0]
-  action="sb:"+(msg or {}).get("text","").strip().replace(",",".").lstrip("$")+":"+mint
- if not cb and chat in BTC_USD_ASK and time.time()-BTC_USD_ASK[chat]<600 and AMOUNT_RE.fullmatch((msg or {}).get("text","").strip()):
-  BTC_USD_ASK.pop(chat,None);action="fd_usd"+(msg or {}).get("text","").strip()
- if action=="/valor":
-  parts=(msg or {}).get("text","").split()
-  if len(parts)<2:send(chat,"Mande assim: /valor 75",keyboard());return
-  action="fd_usd"+parts[1]
- if action.startswith("sb:"):
-  import rocket_bot
-  try:
-   _,usd,mint=action.split(":",2);usd=float(usd)
-  except ValueError:send(chat,"Botão inválido.",keyboard());return
-  if usd<1:send(chat,"⛔ O valor mínimo é US$ 1.",keyboard());return
-  send(chat,"⏳ Comprando US$ "+format(usd,"g")+" de `"+mint+"` (anti-golpe e teste de venda antes)…")
-  def run_buy():
-   try:r=rocket_bot.manual_buy(mint,usd,send,chat)
-   except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
-   if r:send(chat,"⛔ Não comprei: "+r,keyboard())
-  run_async(run_buy);return
- if action=="ls_run":
-  import launch_sniper_test as lst
-  why=lst.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-  send(chat,("🎯 Backtest DEV Launch Sniper (5 meses, dados reais): compara vender igual ao DEV, vender tudo na 1ª venda, "
-   "TP +20%/SL −8%/15 min e filtro de momentum. Resultado em até ~3 min; cada toque continua de onde parou.") if not why else "⛔ "+why,keyboard());return
- if action in ("st_run","st_x"):
-  import dev_strategy_test as dst
-  if action=="st_x":dst.cancel();send(chat,"⏹️ Parando o teste (o que já calculou fica salvo).",keyboard());return
-  why=dst.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-  send(chat,("🧪 Testando a estratégia DEV nos últimos 3 meses com preços REAIS: DEV aprovado compra → o bot compra 5/10/30 s "
-   "depois → vende junto com o DEV. O resultado chega em até ~3 min; cada toque continua de onde parou.") if not why else "⛔ "+why,keyboard());return
- if action=="lt_run":
-  import launch_test
-  why=launch_test.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-  send(chat,("🚀 Testando com lançamentos REAIS dos DEVs bons: compra 2, 10 e 30 s depois do DEV e vende junto com ele. "
-   "O resultado chega aqui em até ~5 min.") if not why else "⛔ "+why,keyboard());return
- if action in ("hunt7","hunt30","hunt90","hunt_list","hunt_x","/devs"):
-  import dev_hunter
-  try:
-   if action=="hunt_x":dev_hunter.cancel();send(chat,"⏹️ Busca de DEVs parada (o que já achou fica na fila).",keyboard());return
-   if action.startswith("hunt") and action[4:].isdigit():
-    days=int(action[4:])
-    why=dev_hunter.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,days,300,send=send,chat=chat)
-    send(chat,("🕵️ Buscando criadores de moedas dos últimos "+str(days)+" dias (até 300 carteiras novas). Elas entram "
-     "na fila de análise com os critérios: acerto ≥ 70%, ≥ 20 operações, ≥ 5 moedas, lucro, PF ≥ 2, sem rug, mesma carteira ≥ 2 dias, com fundo.") if not why else "⛔ "+why,keyboard());return
-   r=dev_hunter.results();j=dev_hunter.job()
-   lines=["🕵️ DEV HUNTER — busca: "+str(j.get("status","nunca rodou"))+" · "+str(j.get("progress",0))+"% · "+str(j.get("stage","")),
-    "Achadas "+str(r["found"])+" · analisadas "+str(r["analysed"])+" · ✅ aprovadas "+str(r["approved"])+" · ❌ rejeitadas "+str(r["rejected"])+" · na fila "+str(r["queue"])]
-   if r["reasons"]:lines.append("Motivos: "+" · ".join(k+" "+str(v) for k,v in r["reasons"].items()))
-   for x in dev_hunter.table("lucro",10):
-    ci=x.get("ci") or [0,0]
-    lines.append(("🏅 " if x["watch"] else "• ")+str(x["tier"])+" `"+x["dev"]+"` acerto "+format(x["win"]*100,".0f")+"% ("+
-     format(ci[0]*100,".0f")+"–"+format(ci[1]*100,".0f")+"%) · "+str(x["trades"])+" ops · PF "+format(x["pf"] or 0,".1f")+" · US$ "+format(x["pnl"] or 0,"+,.0f"))
-   for part in split_message("\n".join(lines)):send(chat,part,keyboard())
-  except Exception as exc:send(chat,"⛔ DEV Hunter: "+str(exc)[:200],keyboard())
-  return
- if action in ("gd_on","gd_off","gd_status"):
-  import grad_bot
-  try:
-   pre=""
-   if action=="gd_on":live_engine.start();grad_bot.set_enabled(True);pre="▶️ Robô GRADUADOS ligado com dinheiro real (US$ "+format(grad_bot.USD,"g")+" por compra, máx. "+str(grad_bot.MAX_OPEN)+", para no dia em que perder US$ "+format(grad_bot.DAILY_LOSS,"g")+").\n\n"
-   elif action=="gd_off":grad_bot.set_enabled(False);pre="⏸️ Robô GRADUADOS desligado: não compra mais; as posições abertas continuam com stop e stop móvel.\n\n"
-   send(chat,pre+grad_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Graduados: "+str(exc)[:200],keyboard())
-  return
- if action in ("lq_status","lq_real","lq_obs","lq_off"):
-  import liq_bot
-  try:
-   pre=""
-   if action=="lq_real":
-    import snipe_backtest
-    rpc=snipe_backtest.fast_rpc(rps=5)
-    usdc=liq_bot.top_up(rpc,get_address(),send,chat)
-    liq_bot.set_enabled(True,real=True)
-    pre=("▶️ Robô de LIQUIDAÇÃO ligado com DINHEIRO REAL: até US$ "+format(liq_bot.LIQ_USD,"g")+" (USDC) por liquidação, só envia quando a "
-     "simulação na rede dá certo, para no dia com −US$ "+format(liq_bot.DAILY_LOSS,"g")+". USDC na carteira: US$ "+format(usdc,".2f")+".\n\n")
-   elif action=="lq_obs":liq_bot.set_enabled(True,real=False);pre="👀 Robô de liquidação só OBSERVANDO (não envia nada).\n\n"
-   elif action=="lq_off":liq_bot.set_enabled(False);pre="⏸️ Robô de liquidação desligado.\n\n"
-   send(chat,pre+liq_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
-  return
- if action in ("mc_new","mc_status","mc_auto","mc_manual","mc_real","mc_sim","mc_creators","mc_patterns") or action.startswith(("mc_ok_","mc_no_")):
-  import memecoin_ai as mc
-  try:
-   if action=="mc_new":
-    send(chat,"🤖 Lendo as tendências e criando uma proposta original…")
-    send_meme_proposal(chat);return
-   if action.startswith(("mc_ok_","mc_no_")):
-    px=__import__("copy_trader")._sol_usd()
-    p=mc.decide(action[6:],action.startswith("mc_ok_"),px)
-    if not p:send(chat,"⛔ Proposta não encontrada ou já decidida.",keyboard());return
-    if p["status"]=="launching":
-     send(chat,"🚀 Aprovada: criando "+p["name"]+" ($"+p["symbol"]+") na Pump.fun… (confiro os limites e simulo antes de enviar)")
-     rec,why=mc.launch_real(p["id"],px,__import__("pool_bot")._rpc(),__import__("rent_reclaim").bot_signer())
-     send(chat,mc.launched_text(rec) if rec else "⛔ Lançamento não feito: "+why,keyboard());return
-    send(chat,(("✅ APROVADA (SIMULAÇÃO): "+p["name"]+" ($"+p["symbol"]+") registrada como lançamento simulado. Nada foi criado na blockchain; "
-     "o lançamento real na Pump.fun só será ligado quando você decidir.") if p["status"]=="approved" else "❌ Proposta "+p["name"]+" rejeitada."),keyboard());return
-   if action=="mc_creators":
-    import creator_patterns as cp
-    why=cp.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,send,chat)
-    send(chat,"⛔ "+why if why else "🔬 Analisando ~4 mil lançamentos reais da Pump.fun dos últimos "+format(cp.DAYS,"g")+" dias e as carteiras que tiveram vários resultados… leva uns 5 minutos.",keyboard());return
-   if action=="mc_patterns":send(chat,__import__("creator_patterns").text(__import__("creator_patterns").report()),keyboard());return
-   if action=="mc_real":mc.set_real(True);send(chat,"💵 Criador de memecoins em MODO REAL: cada proposta só vira moeda de verdade quando você aperta APROVAR nela. Custo máx. US$ "+format(mc.BUDGET_PER_LAUNCH,"g")+" por lançamento (criação + compra pública do criador), "+str(mc.MAX_PER_DAY)+" por dia, US$ "+format(mc.DAILY_BUDGET,"g")+" por dia, US$ "+format(mc.RESERVE_USD,"g")+" no total, sempre ficam US$ "+format(mc.KEEP_SOL_USD,"g")+" em SOL. Nunca vende sozinho. Precisa de SOL na carteira (~0,06 SOL por lançamento).")
-   if action=="mc_sim":mc.set_real(False)
-   if action=="mc_auto":mc.set_auto(True)
-   if action=="mc_manual":mc.set_auto(False)
-   send(chat,mc.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Memecoin: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
-  return
- if action in ("pl_status","pl_on","pl_off","pl_real"):
-  import pool_bot
-  pre=""
-  if action=="pl_real":pool_bot.set_real(True);pre="💵 Robô de pools ligado com DINHEIRO REAL: até US$ "+format(pool_bot.CAPITAL,"g")+" do USDC da carteira, pools que pagam de 7% a 60% ao dia, 2 dias em cada uma, sai antes se a moeda cair 15% ou o rendimento cair pela metade. Precisa de ~0,1 SOL na carteira (aluguel da posição, volta na saída). Toda entrada e saída é simulada antes.\n\n"
-  elif action=="pl_on":pool_bot.set_enabled(True);pre="▶️ Robô de pools ligado em SIMULAÇÃO: procura as pools seguras que mais rendem por dia, fica no máximo 3 dias e troca sozinho. Dinheiro de mentira, dados reais.\n\n"
-  elif action=="pl_off":pool_bot.set_enabled(False);pool_bot.set_real(False);pool_bot.set_enabled(False);pre="⏸️ Robô de pools desligado.\n\n"
-  send(chat,pre+pool_bot.status_text(),keyboard());return
- if action=="lp_bt":
-  import lp_bt
-  why=lp_bt.start(send,chat)
-  send(chat,("🌊 Backtest de LIQUIDEZ CONCENTRADA SOL/USDC com US$ 60: faixas ±5/10/20/40%, preço real do SOL dos últimos 90 dias, "
-   "taxa das maiores pools de hoje, recentraliza quando sai da faixa. Relatório em ~1 min.") if not why else "⛔ "+why,keyboard());return
- if action=="fr_bt":
-  import funding_bt
-  why=funding_bt.start(send,chat)
-  send(chat,("📈 Backtest da ARBITRAGEM DE FUNDING na Drift com US$ 60: compra a moeda + short do mesmo tamanho (o preço se anula), "
-   "ganha/paga a taxa de cada hora. SOL, BTC, ETH, JUP e HYPE, dados reais dos últimos meses. O relatório chega em 1–3 min.")
-   if not why else "⛔ "+why,keyboard());return
- if action=="lq_bt":
-  import liq_backtest,snipe_backtest
-  why=liq_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,send,chat)
-  send(chat,("💧 Backtest de LIQUIDAÇÃO: lê os mercados menores de empréstimo (Kamino isolados e pools da Save/Solend), acha cada "
-   "liquidação dos últimos 3 meses, quanto o liquidante pagou e ganhou, quantos bots disputam, e calcula o máximo que US$ 50 e "
-   "US$ 60 teriam ganhado. Primeiro relatório em ~3 min; o final chega sozinho (até ~1 h).") if not why else "⛔ "+why,keyboard());return
- if action=="gr_bt2":
-  import grad_candles
-  why=grad_candles.start(send,chat)
-  send(chat,("🧪 Backtest GRADUADOS v2: baixa as velas de 1 minuto (máxima e mínima) de cada moeda que graduou na amostra e testa "
-   "864 combinações (espera 1/2/5/10 min, subindo ou caindo desde a graduação, volume, rapidez da graduação, 6 saídas), escolhe nos 70% "
-   "e confere nos 30% finais. Primeiro relatório em ~3 min; o download continua sozinho e manda o relatório final (até ~1 h).")
-   if not why else "⛔ "+why,keyboard());return
- if action=="gr_bt":
-  import grad_backtest,snipe_backtest
-  why=grad_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-  send(chat,("🎓 Testando comprar moedas que GRADUARAM na pump.fun (foram para a PumpSwap), 3 meses de dados reais: entrada 30 s, "
-   "2 min ou 10 min depois, 5 tipos de saída, escolha nos 70% e conferência nos 30%. Relatório em ~3 min; toque de novo se vier PARCIAL.")
-   if not why else "⛔ "+why,keyboard());return
- if action=="sn_bt_old":
-  import snipe_backtest
-  why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat,old=True)
-  send(chat,("🎯 Backtest do SNIPER para moedas com 1h30+ de vida (3 meses, dados reais): olha as moedas que sobreviveram com "
-   "1h30, 2h, 3h e 4h e testa as 40 combinações. Relatório em ~3 min; toque de novo se vier PARCIAL.") if not why else "⛔ "+why,keyboard());return
- if action in ("pro_dl","pro_cmp","pro_opt","pro_sim","pro_x"):
-  why=pro_action(action,chat)
-  send(chat,"⛔ "+why if why else {"pro_dl":"🔬 BACKTEST PRO 180 DIAS: baixa ~1,5 min de lançamentos reais e analisa TUDO o que já foi baixado (inclui os testes antigos): "
-   "3 perfis, ~600 combinações cada (dias 1–90), validação (91–120), testes fora da amostra (121–150 e 151–180), robustez e mínimo de 200 operações. "
-   "Relatório em ~3 min. Cada toque baixa mais e deixa o teste mais completo.","pro_cmp":"🔬 Comparando idades e perfis com os dados já baixados…",
-   "pro_opt":"🔬 Otimizando parâmetros com os dados já baixados…","pro_x":"⏹️ Backtest PRO interrompido (o que já baixou fica salvo; toque de novo para continuar).",
-   "pro_sim":"🧪 Melhor estratégia VALIDADA aplicada ao sniper em SIMULAÇÃO (dinheiro de mentira). A conta real não muda."}[action],keyboard());return
- if action in ("sn_bt180","sn_paper","sn_stop"):
-  import snipe_bot,snipe_backtest
-  if action=="sn_bt180":
-   why=snipe_backtest.start_groups(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-   send(chat,("🎯 BACKTEST 180 DIAS iniciado com lançamentos REAIS da Pump.fun (inclui os que morreram): compara os grupos "
-    "10–20, 20–40 e 40–60 min, alvo/stop, nota mínima e filtros por walk-forward. Baixar 180 dias leva várias horas; "
-    "te aviso a cada hora e mando o relatório no fim.") if not why else "⛔ "+why,keyboard());return
-  if action=="sn_paper":
-   w=snipe_backtest._get("snipe_bt_winner",{})
-   if w.get("ok"):snipe_bot._use_cfg({"entry":w["entry"],"exit":w["exit"],"window":w.get("window")})
-   snipe_bot.start_sim()
-   send(chat,"🧪 SNIPER EM SIMULAÇÃO: dinheiro de mentira, preços reais. "+("Usa o ajuste vencedor do backtest. " if w.get("ok") else
-    "Ainda sem vencedor no backtest: usa a regra inicial (US$ 3, alvo +20%, stop −8%, 10–60 min). ")+"Te aviso a cada compra e venda.\n\n"+snipe_bot.status_text(),keyboard());return
-  snipe_bot.stop_all()
-  send(chat,"⏹️ Sniper parado: não compra mais. Posições reais abertas continuam com stop; as simuladas ficam paradas.\n\n"+snipe_bot.status_text(),keyboard());return
- if action=="sn_apply":
-  import snipe_bot
-  r=snipe_bot.apply_winner()
-  if r:
-   live_engine.start()
-   en,ex=r["entry"],r["exit"]
-   send(chat,"✅ SNIPER REAL LIGADO com o grupo e o ajuste que deram lucro fora da amostra: "+__import__("snipe_backtest")._set(en,ex)+
-    " · US$ "+format(snipe_bot.USD,"g")+" por compra · máx. "+str(snipe_bot.MAX_OPEN)+" · para no dia em que perder US$ "+
-    format(snipe_bot.DAILY_LOSS,"g")+" e de vez se perder US$ "+format(snipe_bot.OPERATIONAL_USD,"g")+". Toda compra e venda é confirmada na blockchain.",keyboard())
-  else:send(chat,"⛔ O backtest ainda não achou um ajuste com lucro confiável fora da amostra. Toque em 🎯 BACKTEST SNIPER; o sniper continua desligado.",keyboard())
-  return
- if action in ("sn_status","sn_on","sn_off","sn_bt","sn_btx","/sniper"):
-  import snipe_bot,snipe_backtest
-  try:
-   pre=""
-   if action=="sn_on":live_engine.start();snipe_bot.set_enabled(True);pre="▶️ Sniper 24 h ligado (dinheiro real).\n\n"
-   elif action=="sn_off":snipe_bot.stop_all();pre="⏸️ Sniper desligado: não compra; as posições abertas continuam com stop e stop móvel.\n\n"
-   elif action=="sn_btx":snipe_backtest.cancel();pre="⏹️ Cancelando o backtest do sniper (o que já baixou fica salvo).\n\n"
-   elif action=="sn_bt":
-    why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-    send(chat,("🎯 Backtest do SNIPER (3 meses, lançamentos REAIS da pump.fun): testa 40 combinações de entrada e saída, "
-     "escolhe nos primeiros 70% do tempo e confere nos últimos 30%. O relatório chega em ~3 min; cada toque baixa mais e "
-     "deixa o teste mais completo.") if not why else "⛔ "+why,keyboard());return
-   j=snipe_backtest.job()
-   bt=("\n\n🧪 Backtest: "+str(j.get("status"))+" · "+str(j.get("progress",0))+"% · "+str(j.get("stage",""))) if j else ""
-   send(chat,pre+snipe_bot.status_text()+bt,keyboard())
-  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
-  return
- if action in ("dv_bt150","dv_bt180","dv_bt365"):action,_btdays="dv_bt",int(action[5:])
- else:_btdays=150
- if action in ("dv_status","dv_on","dv_off","dv_bt","dv_close","/dev","dv_real","dv_sim","dv_stop","dv_apply","dv_orig","dv_btx") or action.startswith("dv_usd"):
-  import dev_bot
-  try:
-   pre=""
-   if action=="dv_on":dev_bot.set_enabled(True);pre="▶️ Robô DEV rodando (simulação).\n\n"
-   elif action=="dv_off":dev_bot.set_enabled(False);pre="⏸️ Robô DEV pausado: não compra; as posições simuladas continuam com stop.\n\n"
-   elif action=="dv_stop":pre="🛑 PARADA DE EMERGÊNCIA: robô DEV pausado e "+str(dev_bot.emergency_stop(send,chat))+" posição(ões) vendida(s) agora.\n\n"
-   elif action=="dv_apply":
-    import dev_follow
-    r=dev_follow.apply_winner()
-    pre=("✅ Robô DEV agora usa a estratégia que deu lucro fora da amostra: "+r["rule_name"]+" + "+dev_follow.exit_label(r["exit"])+
-     ". US$ "+format(dev_bot.buy_usd(),"g")+" por compra, máx. "+str(dev_bot.MAX_OPEN)+" abertas.\n\n") if r else \
-     "⛔ Ainda não há estratégia que deu lucro fora da amostra. Toque no 🧪 Backtest; o robô continua com a regra original.\n\n"
-   elif action=="dv_orig":
-    __import__("dev_follow").clear_rule();pre="↩️ Robô DEV de volta à regra original: DEV com acerto ≥ 70%, vende só quando o DEV vende.\n\n"
-   elif action=="dv_close":dev_bot.close_all();pre="🧹 Posições simuladas do robô DEV encerradas.\n\n"
-   elif action=="dv_real":
-    live_engine.start();dev_bot.set_real(True)
-    pre="💵 ROBÔ DEV COM DINHEIRO REAL: cada compra copiada usa US$ "+format(dev_bot.buy_usd(),"g")+" da carteira do bot.\n\n"
-   elif action=="dv_sim":dev_bot.set_real(False);pre="🧪 Robô DEV de volta para a simulação.\n\n"
-   elif action.startswith("dv_usd"):pre="💵 Compra por operação: US$ "+format(dev_bot.set_buy_usd(action[6:]),"g")+"\n\n"
-   elif action=="dv_btx":
-    __import__("dev_backtest").cancel();pre="⏹️ Cancelando o backtest (o histórico já baixado fica salvo).\n\n"
-   elif action=="dv_bt":
-    import dev_backtest
-    why=dev_backtest.start(days=_btdays,label=format(_btdays/30,".0f")+" meses",
-     rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=__import__("copy_trader")._sol_usd(),send=send,chat=chat)
-    send(chat,("🧪 Backtest de "+format(_btdays/30,".0f")+" meses começou no servidor: baixa o histórico dos DEVs (até "+
-     format(dev_backtest.JOB_MAX_S/60,".0f")+" min, continua de onde parou) e simula as estratégias. O resultado chega aqui; "
-     "o progresso aparece no painel web (aba 🧪 Backtest).") if not why else "⛔ "+why,keyboard());return
-   send(chat,pre+dev_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Robô DEV: "+str(exc)[:200],keyboard())
-  return
- if action=="/valor_dev":
-  parts=(msg or {}).get("text","").split()
-  if len(parts)<2:send(chat,"Mande assim: /valor_dev 5",keyboard());return
-  action="dv_usd"+parts[1]
- if action in REMOVED_ROBOT_ACTIONS:
-  send(chat,"🗑️ O Sniper (compras) e o Diamond foram removidos: o bot roda o copy trade e os SINAIS do Sniper. "
-   "Posições que eles deixaram abertas continuam com stop e stop móvel até fechar.",keyboard());return
- if action=="rk_status":
-  import rocket_bot,signal_quality
-  send(chat,"📡 SINAIS DO SNIPER — "+("LIGADOS" if rocket_bot.signals_on() else "DESLIGADOS")+" (só sinais, o bot não compra)\n"+
-   signal_quality.status_text(),keyboard());return
- if action in ("rks_on","rks_off"):
-  import rocket_bot
-  rocket_bot.set_signals(action=="rks_on")
-  send(chat,("📡 SINAIS DO SNIPER LIGADOS: cada moeda que o Sniper escolher chega aqui com o contrato, a entrada, o stop loss "
-   "e os take profits — é só tocar para copiar. Os sinais funcionam mesmo com o Sniper (compra automática) desligado."
-   if action=="rks_on" else "🔕 Sinais do Sniper desligados."),keyboard());return
- if action in ("dm_on","dm_off","dm_status","/diamond"):
-  import diamond_bot
-  try:
-   if action=="dm_on":
-    (None if diamond_bot.paper() else live_engine.start());diamond_bot.start_round();pre=("🧪 " if diamond_bot.paper() else "")+"💎 DIAMOND LIGADO"+(" EM SIMULAÇÃO (sem dinheiro real, preços reais)" if diamond_bot.paper() else "")+": nova rodada de "+format(diamond_bot.ROUND_S/3600,".0f")+" h. Analisa a DEX a cada 1 min e te avisa a cada operação com o motivo.\n\n"
-   elif action=="dm_off":diamond_bot.stop();pre="⏹️ Diamond parado: não compra mais. A posição aberta continua com stop e stop móvel.\n\n"
-   else:pre=""
-   send(chat,pre+diamond_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Diamond: "+str(exc)[:200],keyboard())
-  return
- if action in ("rk_on","rk_off","rk_status","/sniper"):
-  import rocket_bot
-  try:
-   if action=="rk_on":rocket_bot.set_enabled(True);pre=("🧪 SNIPER LIGADO EM SIMULAÇÃO (sem dinheiro real, preços reais): compra de mentira US$ " if __import__("sniper_sim").paper() else "🚀 SNIPER LIGADO (dinheiro real): compra US$ ")+format(rocket_bot.ORDER_USD,".0f")+" nas moedas mais populares da pump.fun com 1 h 20 min a 7 dias de vida que estão explodindo, máx. "+str(rocket_bot.MAX_OPEN)+" abertas.\n\n"
-   elif action=="rk_off":rocket_bot.set_enabled(False);pre="⏹️ Sniper parado: não compra mais. As posições abertas continuam com stop e stop móvel.\n\n"
-   else:pre=""
-   send(chat,pre+rocket_bot.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Sniper: "+str(exc)[:200],keyboard())
-  return
- if action in ("sig_on","sig_off","sig_status","/sinais","sig_auto_on","sig_auto_off","dip_on","dip_off","dip_status","/dip"):
-  send(chat,"🗑️ Sinais e Dip Bot foram removidos.",keyboard());return
  if action in ("unstick","/destravar"):
   send(chat,"🔧 Conferindo as ordens pendentes na blockchain…")
   def run_unstick():
@@ -677,89 +363,8 @@ def handle(update):
    send(chat,pre+status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
   return
- if action=="btc_last":
-  try:
-   import json as _json
-   rep=_json.loads(trade_state._path().with_name("btc_research.json").read_text(encoding="utf-8"))
-   for part in split_message(rep.get("text") or "Sem relatório salvo ainda."):send(chat,part,keyboard())
-  except Exception:send(chat,"Ainda não há resultado. Toque em 🔬 Testar estratégias BTC.",keyboard())
-  return
- if action=="fd_usdask":
-  BTC_USD_ASK[chat]=time.time();WITHDRAW.pop(chat,None)
-  send(chat,"✏️ Quantos US$ por compra no robô compra no fundo? Mande só o número (ex.: 30 ou 75). Entre US$ 10 e US$ 1000.");return
- if action.startswith("bl_"):   # RSI2 robot removed (owner, Nov 15): only the buy-the-bottom robot operates
-  send(chat,"O robô RSI2 foi removido. Agora só opera o ₿ Robô compra no fundo.",keyboard());return
- if action in ("fd_status","fd_on","fd_off","fd_sell","fd_sell_ok") or action.startswith(("fd_usd","fd_lev")):   # real money, spot BTC
-  import btc_dip_live as fd
-  try:
-   pre=""
-   if action=="fd_on":
-    fd.set_enabled(True)
-    pre=("🟢 ROBÔ COMPRA NO FUNDO LIGADO (dinheiro real, "+str(fd.cycle_lev(fd._load()))+"x): compra US$ "+format(float(fd._load()["usd"]),"g")+
-     " de BTC quando cair 15% do topo dos últimos 30 dias (ou desde a última venda), de novo a cada −15% (máx. 3), "
-     "vende tudo com +7% acima da média. Se o BTC já estiver 15% abaixo do topo, compra no próximo minuto.\n\n")
-   elif action=="fd_off":
-    fd.set_enabled(False);pre="🔴 Robô desligado: não compra mais. O BTC já comprado continua com a venda em +7% acima da média.\n\n"
-   elif action.startswith("fd_lev"):
-    lev=fd.set_lev(int(action[6:]));d=fd._load()
-    pre=("⚙️ Alavancagem: "+str(lev)+"x"+(" = BTC à vista (sem juros, sem liquidação)" if lev==1 else
-     " = LONG na Jupiter Perps (juros por hora; pode ser liquidado)")+
-     (" — vale a partir do próximo ciclo; o aberto continua em "+str(fd.cycle_lev(d))+"x" if d["buys"] else "")+"\n\n")
-   elif action.startswith("fd_usd"):
-    usd=fd.set_usd(action[6:]);pre="💵 Valor por compra: US$ "+format(usd,"g")+"\n\n"
-   elif action=="fd_sell":
-    d=fd._load()
-    if not d["buys"]:pre="Não há BTC comprado pelo robô para vender.\n\n"
-    else:
-     send(chat,"Vender TODO o BTC do robô agora, mesmo no prejuízo? (investido US$ "+format(fd.invested(d),".2f")+")",
-      [[{"text":"✅ Sim, vender tudo","callback_data":"fd_sell_ok"},{"text":"❌ Não","callback_data":"fd_status"}]]);return
-   elif action=="fd_sell_ok":
-    def run():
-     try:fd.sell_all(send,chat,fd.btc_price(),why="manual")
-     except Exception as exc:send(chat,"⛔ Venda falhou: "+str(exc)[:200],keyboard())
-    send(chat,"⏳ Vendendo todo o BTC do robô…");run_async(run);return
-   send(chat,pre+fd.status_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Robô compra no fundo: "+str(exc)[:200],keyboard())
-  return
- if action in ("btc_dip","/fundo"):   # owner's "buy the bottom" strategy, backtest only
-  import btc_dip
-  if btc_dip.RESULT["running"]:send(chat,"🧪 O teste já está rodando, o resultado chega aqui.",keyboard());return
-  send(chat,"🧪 Testando a compra no fundo nos últimos 6 meses do BTC (cai 15% → compra, cada −15% compra de novo, "
-   "vende tudo com +7%) em 1x a 5x. Leva 1–3 minutos. Nenhuma ordem é enviada.")
-  def job():
-   btc_dip.RESULT["running"]=True
-   try:
-    btc_dip.RESULT["text"]=btc_dip.run()
-    for part in split_message(btc_dip.RESULT["text"]):send(chat,part,keyboard())
-   except Exception as exc:
-    logging.exception("btc dip test failed")
-    send(chat,"⛔ Teste da compra no fundo falhou: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
-   finally:btc_dip.RESULT["running"]=False
-  run_async(job);return
- if action in ("/pesquisa_btc","/pesquisabtc","btc_research"):   # research only: tests strategies, places no orders
-  send(chat,"🔬 Pesquisa BTC: baixando 1 ano de velas e testando ~2.200 variações de 13 estratégias clássicas "
-   "(Turtle, médias, MACD, Supertrend, RSI2, Bollinger, Keltner, SAR, Ichimoku, Heikin-Ashi, ADX, Larry Williams) "
-   "em 15m, 1h e 4h (escolhe em 8 meses, confere em 4). Leva uns 5–15 minutos. Nenhuma ordem é enviada.")
-  run_async(btc_research_job,chat);return
- if OWNER_MENU=="btc" and action in ("/start","/menu","help"):
-  send(chat,"₿ MODO BTC: testes de estratégias e o robô compra no fundo (dinheiro real, BTC à vista, você liga e escolhe o valor).\n"
-   "Copy trade, Sniper e sinais estão desligados; as posições que já estavam abertas continuam sendo vendidas sozinhas.",keyboard());return
- legacy={"btc_on","/btc_on","btc_off","/btc_off","btc_status","/btc","lev","/alavancagem","strat_trend","strat_dip","strat_dip_ok","strat_scalp","strat_scalp_ok","tf_1h","tf_5m","mode_real","mode_sim","btc_test","/btc_teste","backtest","/backtest","/btc_reset",
-  "live_start","/iniciar","/live_on","live_stop","/parar","/live_off","live_on","live_status","/status_real",
-  "sniper_on","/sniper_on","sniper_off","/sniper_off","pumpfun_on","pumpfun_off","pump_on","/pump_on","pump_off","/pump_off",
-  "sim_on","/sim_on","sim_off","/sim_off","/sim_reset","history","/historico","autostatus","/auto","/autostatus","/auto_on","auto_start","/auto_off","auto_stop",
-  "positions","/posicoes","/simular","/remover","alerts","/alerts","settings","/settings","scan","/scan","latest","/latest",
-  "trade_on","trade_off","trade_status","snipe_on","snipe_off","candle_on","candle_off","launch_on","launch_off",
-  "tsim_on","tsim_off","tsim_status","/tsim","/tsim_reset","tb_real_on","tb_real_off","sn_sim","sn_real","sn_off","sn_status","/sniper",
-  "mm_on","mm_off","mm_status","/mm",
-  "launch_on","launch_off","launch_status","vol_sim","vol_real","vol_off","vol_status","/volume",
-  "btcx_sim","btcx_real","btcx_off","btcx_status","btcx_lev","btcx_test","btcx_bt",
-  "clone_help","/analisar","/clonar","/estrategia","/robo",
-  "mev_on","mev_off","mev_status","/mev","mev_config","mev_amount","mev_min","mev_tip","mev_mode_sim","mev_mode_real","mev_scan","mev_history"}
- if action in legacy or action.startswith(("lev_","brk_","strat_","snp_","cns_")):  # removed controls (BTC, strategy robot, clone, sniper, consensus)
-  send(chat,"Esse controle foi removido. Use o menu abaixo.",keyboard());return
- if action in ("/start","/menu","help"):menu(chat)
- else:menu(chat)
+ if action in ("/start","/menu","help") or not (cb or action.startswith("/") or re.fullmatch(r"[a-z0-9]+_[a-z0-9_]+",action)):menu(chat)
+ else:send(chat,"Esse controle foi removido: o bot agora é só copy trade. Use o menu abaixo.",keyboard())
 def user_copy_action(chat,action):
  """Copy trade of an account that is not the owner (its own wallet, 4% fee per buy and sell)."""
  import user_copy as uc
@@ -852,7 +457,7 @@ def wallet_action(chat,action):
   return
  send(chat,"👛 SUA CARTEIRA DO BOT\n"+address,kb)
 EXPORT_ASK={}
-EXPORT_DELETE_S=60
+EXPORT_DELETE_S=120
 def export_private_key_message(chat):
  """Owner only: send the main wallet's private key once, then delete that message.
  Goes straight to the Telegram API (not send()): never recorded on the panel, logs or dedup cache."""
@@ -861,10 +466,13 @@ def export_private_key_message(chat):
  except Exception as exc:
   logging.warning("private key export failed: %s",type(exc).__name__)
   request_api("sendMessage",chat_id=chat,text="⛔ Não foi possível exportar a chave agora.");return
- text="🔑 CHAVE PRIVADA (base58) — "+address+"\n\n"+secret+"\n\nToque na chave para copiar. Esta mensagem será apagada em "+str(EXPORT_DELETE_S)+" s."
+ text=("🔑 CHAVE PRIVADA (base58) — "+address+"\n\n"+secret+"\n\nToque no botão 📋 Copiar chave (ou segure a chave e copie)."
+  "\nEsta mensagem será apagada em "+str(EXPORT_DELETE_S)+" s.")
  start=text.index(secret)
- r=request_api("sendMessage",chat_id=chat,text=text,protect_content=True,disable_web_page_preview=True,
-  entities=[{"type":"code","offset":len(text[:start].encode("utf-16-le"))//2,"length":len(secret)}])
+ # no protect_content: it would block copying the text. copy_text = one tap copies the key (Telegram 7.11+)
+ r=request_api("sendMessage",chat_id=chat,text=text,disable_web_page_preview=True,
+  entities=[{"type":"code","offset":len(text[:start].encode("utf-16-le"))//2,"length":len(secret)}],
+  reply_markup={"inline_keyboard":[[{"text":"📋 Copiar chave","copy_text":{"text":secret}}]]})
  del secret,text
  mid=((r or {}).get("result") or {}).get("message_id")
  if mid:
@@ -879,7 +487,6 @@ def owner_withdraw(chat,action,text):
  import wallet_withdraw as ww
  kb=keyboard()
  if action in ("/sacar","/retirar","wallet_withdraw","wd_start"):
-  BTC_USD_ASK.pop(chat,None)
   WITHDRAW[chat]={"step":"addr","at":time.time()}
   send(chat,"💸 RETIRAR SOL da carteira do bot\nMande o ENDEREÇO Solana de destino (sua carteira, ex.: Phantom).\n"
    "Para cancelar mande /cancelar.");return
@@ -942,18 +549,6 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
- if OWNER_MENU=="btc":
-  st=trade_state.status()
-  try:
-   import btc_dip_live
-   d=btc_dip_live._load()
-   robot=("\n₿ Robô compra no fundo: "+("🟢 LIGADO" if d["enabled"] else "🔴 desligado")+" · US$ "+format(float(d["usd"]),"g")+" por compra"+
-    (" · "+str(len(d["buys"]))+" compra(s) aberta(s)" if d.get("buys") else ""))
-  except Exception:robot=""
-  send(chat,"🔄 Bot reiniciado — ₿ MODO BTC: pesquisa de estratégias e robô BTC."+robot+
-   ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
-    if st["positions"] else ""),keyboard())
-  return
  send(chat,"🔄 Bot reiniciado (deploy).\n"+status_text(),keyboard())
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
@@ -1009,52 +604,6 @@ def background_loop():
   except Exception:logging.exception("background worker error")
   beat("aguardando")
   time.sleep(1)
-def rocket_loop():
- """Rocket Sniper: every ROCKET_SCAN_SECONDS looks for the hottest new pump.fun coins and buys them."""
- import rocket_bot,signals,sniper_sim
- try:
-  if sniper_sim.to_simulation_once():logging.info("sniper switched to simulation")
- except Exception:logging.exception("sniper simulation switch failed")
- while True:
-  time.sleep(rocket_bot.SCAN_EVERY_S)
-  try:
-   chat=active_chat()
-   if chat:rocket_bot.take_profits(send,chat)
-   if not chat or not (rocket_bot.enabled() or rocket_bot.signals_on()):continue
-   rocket_bot.cycle(send,chat,pairs=signals.candidate_pairs())
-  except Exception as exc:logging.exception("rocket cycle failed: %s",type(exc).__name__)
-def diamond_loop():
- """Diamond: every minute one decision (buy / hold), for the 12 h round. Each decision runs in its own
- thread: one that hangs (a slow API) cannot stop the next minutes, and its stack is logged to find why."""
- import diamond_bot,sys,traceback
- try:
-  if diamond_bot.to_simulation_once():logging.info("diamond switched to simulation")
-  if diamond_bot.to_real_once():
-   logging.info("diamond switched to real money")
-   try:live_engine.start()
-   except Exception:logging.exception("diamond: real engine not started")
-  if diamond_bot.launch_round2():logging.info("diamond round 2 started")
- except Exception:logging.exception("diamond launch failed")
- time.sleep(60)
- worker=[None,0.0];quiet=[0.0]
- def run(chat):
-  try:diamond_bot.cycle(send,chat)
-  except Exception as exc:logging.exception("diamond cycle failed: %s",type(exc).__name__)
- while True:
-  try:
-   chat=active_chat();on=diamond_bot.enabled()
-   t=worker[0]
-   if t is not None and t.is_alive():
-    if time.time()-worker[1]>120:
-     frame=sys._current_frames().get(t.ident)
-     logging.warning("diamond cycle stuck %.0f s at: %s",time.time()-worker[1],
-      " | ".join(x.strip().replace("\n"," ") for x in traceback.format_stack(frame)[-4:]) if frame else "?")
-   elif chat and on:
-    worker[0]=threading.Thread(target=run,args=(chat,),daemon=True);worker[1]=time.time();worker[0].start()
-   elif time.time()-quiet[0]>900:
-    quiet[0]=time.time();logging.info("diamond idle: enabled=%s chat=%s",on,bool(chat))
-  except Exception as exc:logging.exception("diamond loop failed: %s",type(exc).__name__)
-  time.sleep(diamond_bot.CYCLE_S)
 USERS_UPKEEP={"next":0.0}
 COPY_BEAT={"at":0.0,"took":0.0,"error":""}
 def copy_beat_line():
@@ -1086,8 +635,6 @@ def eval_wallet_action(chat,action,text):
    send(chat,text,kb)
   except Exception as exc:send(chat,"⛔ Não consegui analisar: "+type(exc).__name__+": "+str(exc)[:150],keyboard())
  run_async(job)
-BUY_AMOUNT={}     # chat -> (mint, asked_at): the owner is typing how many US$ to buy of a signal's coin
-AMOUNT_RE=re.compile(r"\$?\d{1,6}([.,]\d{1,2})?")
 SOL_ADDRESS=re.compile(r"[1-9A-HJ-NP-Za-km-z]{32,44}")
 def copy_wallet_action(chat,action,text):
  """Owner chooses the wallets to copy: add by address, list, remove."""
@@ -1235,17 +782,6 @@ def audit_loop():
  while True:
   if os.getenv("SOLANA_RPC_URL") and active_chat():audit_job()
   time.sleep(int(os.getenv("COPY_AUDIT_EVERY_HOURS","6"))*3600)
-def btc_research_job(chat):
- try:
-  import btc_research
-  rep=btc_research.search()
-  text=btc_research.report_text(rep)
-  try:btc_research.save(dict(rep,text=text),str(trade_state._path().with_name("btc_research.json")))
-  except Exception:logging.warning("btc research save failed")
-  for part in split_message(text):send(chat,part,keyboard())
- except Exception as exc:
-  logging.exception("btc research failed")
-  send(chat,"⛔ Pesquisa BTC falhou: "+type(exc).__name__+": "+str(exc)[:150])
 def run_async(fn,*args):
  interactive=getattr(CTX,"interactive",False)   # a job the owner asked for answers in full
  def run():
@@ -1253,7 +789,6 @@ def run_async(fn,*args):
   fn(*args)
  threading.Thread(target=run,daemon=True).start()
 BTC_LIVE_ERR={}
-BTC_USD_ASK={}
 def btc_live_loop():
  """RSI2 robot removed (owner, Nov 15): switched off once; only closes a position it may still hold."""
  import btc_live
@@ -1271,228 +806,6 @@ def btc_live_loop():
    btc_live.LAST["why"]="erro: "+msg
    if msg!=BTC_LIVE_ERR.get("last") or time.time()-BTC_LIVE_ERR.get("at",0)>600:
     BTC_LIVE_ERR.update(last=msg,at=time.time());logging.warning("btc live cycle failed: %s",msg)
-BTC_DIP_ERR={}
-def btc_dip_loop():
- """Real-money buy-the-bottom BTC robot: every minute check the price for a buy or the +7% sale."""
- import btc_dip_live
- while True:
-  time.sleep(btc_dip_live.CHECK_EVERY_S)
-  try:
-   chat=active_chat()
-   if chat:btc_dip_live.cycle(send,chat)
-  except Exception as exc:
-   msg=type(exc).__name__+": "+str(exc)[:120]
-   btc_dip_live.LAST["why"]="erro: "+msg
-   if msg!=BTC_DIP_ERR.get("last") or time.time()-BTC_DIP_ERR.get("at",0)>600:
-    BTC_DIP_ERR.update(last=msg,at=time.time());logging.warning("btc dip cycle failed: %s",msg)
-def copy_only_once():
- """Owner (Nov 15): only the copy trade. BTC robot and Sniper signals off, copy trade back on (real money)
- once. A BTC position the robot still holds keeps its automatic +7% sale until it closes."""
- try:
-  import btc_dip_live
-  btc_dip_live.set_enabled(False)
- except Exception:logging.exception("btc robot off failed")
- try:
-  import rocket_bot
-  rocket_bot.set_enabled(False);rocket_bot.set_signals(False)
- except Exception:logging.exception("signals off failed")
- try:
-  import copy_trader
-  d=copy_trader._load()
-  if not d.get("copy_only_v1"):
-   d["copy_only_v1"]=True;copy_trader._save(d)
-   copy_trader.set_mode(True,True)
-   try:live_engine.start()
-   except Exception:logging.exception("copy only: real engine not started")
-   logging.info("copy only: copy trade back on (real money)")
- except Exception:logging.exception("copy only failed")
-def dev_loop():
- """DEV copy trading in simulation, 24/7 (owner, Nov 15)."""
- import dev_bot
- while True:
-  time.sleep(dev_bot.CYCLE_S)
-  try:
-   chat=active_chat()
-   if not os.getenv("SOLANA_RPC_URL"):continue
-   dev_bot.cycle(send,chat,rpc=DEV_RPC.setdefault("rpc",dex_rpc()),sol_usd=__import__("copy_trader")._sol_usd(),do_audit=False,do_watch=False)
-  except Exception as exc:logging.exception("devbot cycle failed: %s",type(exc).__name__)
-def dev_fast_loop():
- """Owner (Nov 16): the approved devs every few seconds (own RPC limiter), so the bot buys early and sells with them."""
- import dev_bot
- rpc=dex_rpc()
- gap=float(os.getenv("DEV_FAST_WATCH_S","5"))
- time.sleep(20)
- while True:
-  try:
-   if os.getenv("SOLANA_RPC_URL"):dev_bot.watch_fast(send,active_chat(),rpc,__import__("copy_trader")._sol_usd())
-  except Exception as exc:logging.exception("devbot fast watch failed: %s",type(exc).__name__)
-  time.sleep(gap)
-DEV_RPC={}
-def dev_audit_loop():
- """Rates the devs in line all the time, apart from the buy/sell watcher (finds approved devs faster)."""
- import dev_bot
- time.sleep(30)
- while True:
-  n=0
-  try:
-   if os.getenv("SOLANA_RPC_URL") and dev_bot.enabled():
-    n=dev_bot.audit_devs(DEV_RPC.setdefault("rpc",dex_rpc()),__import__("copy_trader")._sol_usd(),send=send,chat=active_chat())
-  except Exception as exc:logging.exception("devbot audit failed: %s",type(exc).__name__)
-  time.sleep(2 if n else 20)
-def dev_follow_loop():
- """Replays the devs' trades on real price history (GeckoTerminal) all the time, for the follower backtest."""
- import dev_follow
- time.sleep(120)
- while True:
-  n=0
-  try:
-   if dev_bot_enabled():n=dev_follow.fill(max_s=240)
-  except Exception as exc:logging.exception("devbot follow failed: %s",type(exc).__name__)
-  time.sleep(10 if n else 300)
-def dev_bot_enabled():
- try:return __import__("dev_bot").enabled()
- except Exception:return False
-def snipe_loop():
- """Sniper 24 h (owner, Nov 15): real money, own entry rule; exits by the live exit monitor (mode snipe)."""
- import snipe_bot
- time.sleep(60)
- while True:
-  try:
-   if os.getenv("SOLANA_RPC_URL"):
-    if snipe_bot.running():snipe_bot.cycle(send,active_chat(),rpc=DEV_RPC.setdefault("rpc",dex_rpc()))
-  except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
-  time.sleep(snipe_bot.CYCLE_S)
-def liq_loop():
- """Owner (Nov 16): liquidation robot on Kamino's small markets (liq_bot)."""
- import liq_bot,snipe_backtest
- time.sleep(40)
- rpc=None;topped=0.0
- while True:
-  try:
-   if os.getenv("SOLANA_RPC_URL") and liq_bot.enabled():
-    rpc=rpc or snipe_backtest.fast_rpc(rps=8)
-    if liq_bot.real() and time.time()-topped>1800:
-     topped=time.time()
-     try:liq_bot.top_up(rpc,get_address(),send,active_chat())
-     except Exception as exc:logging.warning("liq top up: %s",type(exc).__name__)
-    liq_bot.cycle(rpc,send,active_chat())
-  except BaseException as exc:            # a panic of the Solana library is a BaseException: never kill the robot
-   if isinstance(exc,(KeyboardInterrupt,SystemExit)):raise
-   logging.exception("liq cycle failed: %s",type(exc).__name__)
-  time.sleep(liq_bot.FAST_S)
-def pool_loop():
- """Owner (Nov 16): pool robot (Meteora), simulation first."""
- import pool_bot
- time.sleep(50)
- while True:
-  try:
-   if pool_bot.enabled():pool_bot.cycle(send,active_chat())
-  except Exception as exc:logging.warning("pool cycle failed: %s: %s",type(exc).__name__,str(exc)[:150])
-  time.sleep(pool_bot.CYCLE_S)
-def send_meme_proposal(chat):
- import memecoin_ai as mc
- p,why=mc.propose()
- if not p:send(chat,"⛔ Sem proposta agora: "+why,keyboard());return False
- send_photo(chat,mc.logo_png(p["name"]),mc.proposal_text(p),
-  [[{"text":"🚀 APROVAR E CRIAR DE VERDADE" if mc.real() else "✅ APROVAR (simulação)","callback_data":"mc_ok_"+p["id"]},{"text":"❌ REJEITAR","callback_data":"mc_no_"+p["id"]}]])
- return True
-def meme_loop():
- """Owner (Nov 16): automatic memecoin proposals for approval (simulation)."""
- import memecoin_ai as mc
- time.sleep(90)
- while True:
-  try:
-   d=mc._load()
-   import creator_patterns as cp
-   if os.getenv("SOLANA_RPC_URL") and time.time()-float(cp.report().get("at") or 0)>3*86400 and not cp._RUN.locked():
-    cp.start(dex_rpc(),lambda c,t:None,None)   # refreshed every 3 days in the background (no message)
-   if d.get("auto") and mc.auto_due(time.time(),d.get("last_auto",0)) and active_chat():
-    d["last_auto"]=time.time();mc._save()
-    send_meme_proposal(active_chat())
-  except Exception as exc:logging.warning("meme loop: %s: %s",type(exc).__name__,str(exc)[:150])
-  time.sleep(300)
-def copy_only_v2_once():
- """Owner (Nov 16, evening): remove every robot (liquidation, pools, graduados, DEV, sniper, signals) and run only
- the copy trade with real money. Done once; afterwards the owner's buttons decide."""
- for step in (lambda:__import__("liq_bot").set_enabled(False),
-              lambda:__import__("pool_bot").set_enabled(False),
-              lambda:__import__("grad_bot").set_enabled(False),
-              lambda:__import__("dev_bot").set_enabled(False),
-              lambda:__import__("snipe_bot").stop_live(),
-              lambda:__import__("rocket_bot").set_enabled(False),
-              lambda:__import__("signals").set_enabled(False),
-              lambda:__import__("signals").set_auto(False)):
-  try:step()
-  except Exception:logging.exception("copy only: step failed")
- try:
-  import copy_trader
-  d=copy_trader._load()
-  if not d.get("copy_v2"):
-   d["copy_v2"]=True;copy_trader._save(d)
-   try:live_engine.start()
-   except Exception:logging.exception("copy only: engine not started")
-   copy_trader.set_mode(True,True)
-   logging.info("copy trade on with real money (owner, Nov 16 evening)")
- except Exception:logging.exception("copy only failed")
-def liq_only_once():
- """Owner (Nov 16, later): the GRADUADOS robot is removed too (open positions keep their exits). Once."""
- try:
-  import grad_bot
-  d=grad_bot._load()
-  if not d.get("off_v1"):
-   d["off_v1"]=True;d["enabled"]=False;grad_bot._save()
- except Exception:logging.exception("liq only failed")
-def grad_only_once():
- """Owner (Nov 16, later): only the GRADUADOS robot. Every other robot stops buying (open positions keep their exits)."""
- for step in (lambda:__import__("copy_trader").set_mode(False),
-              lambda:__import__("rocket_bot").set_enabled(False),
-              lambda:__import__("rocket_bot").set_signals(False),
-              lambda:__import__("signals").set_enabled(False),
-              lambda:__import__("signals").set_auto(False),
-              lambda:__import__("snipe_bot").stop_live(),
-              lambda:__import__("snipe_bot").set_enabled(False),
-              lambda:__import__("dev_bot").set_enabled(False)):
-  try:step()
-  except Exception:logging.exception("grad only: step failed")
- try:
-  import dev_bot
-  d=dev_bot._load();d["real"]=False;dev_bot._save(d)
- except Exception:logging.exception("grad only: dev real off failed")
-def grad_loop():
- """Owner (Nov 16): buys coins that graduate from pump.fun to PumpSwap (real money, grad_bot).
- Also reads the new pump.fun launches (snipe_bot.scan_launches feeds grad_bot.add_launches)."""
- import grad_bot,snipe_backtest,snipe_bot
- time.sleep(30)
- rpc=None
- while True:
-  try:
-   if os.getenv("SOLANA_RPC_URL") and (grad_bot.enabled() or grad_bot._open()):   # off: only manage open positions
-    rpc=rpc or snipe_backtest.fast_rpc(rps=5)
-    snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
-    grad_bot.cycle(send,active_chat(),rpc=rpc)
-  except Exception as exc:logging.exception("grad cycle failed: %s",type(exc).__name__)
-  time.sleep(grad_bot.CHECK_S)
-def dev_real_once():
- """Owner (Nov 15, later): the DEV robot trades real money. Once."""
- try:
-  import dev_bot
-  d=dev_bot._load()
-  if not d.get("real_v1"):
-   d.update(real_v1=True,real=True);dev_bot._save(d)
-   try:live_engine.start()
-   except Exception:logging.exception("dev real: engine not started")
-   logging.info("dev robot: real money on")
- except Exception:logging.exception("dev real failed")
-def dev_mode_once():
- """Owner (Nov 15): the DEV robot runs in simulation; the real-money copy trade is switched off once
- (open copies keep their automatic sells)."""
- try:
-  import copy_trader
-  d=copy_trader._load()
-  if not d.get("dev_mode_v1"):
-   d["dev_mode_v1"]=True;copy_trader._save(d);copy_trader.set_mode(False)
-   logging.info("dev mode: real copy trade off")
- except Exception:logging.exception("dev mode failed")
 def btc_leftover_loop():
  """BTC robot removed: only manage a position it may still hold (automatic sale), then stop."""
  import btc_dip_live
@@ -1503,15 +816,6 @@ def btc_leftover_loop():
    if chat:btc_dip_live.cycle(send,chat)
   except Exception as exc:logging.warning("btc leftover cycle failed: %s",type(exc).__name__)
   time.sleep(btc_dip_live.CHECK_EVERY_S)
-def stop_all_buying():
- """Switch off every automatic buy (copy trade, Sniper, signal auto-buys). Sells keep running."""
- for step in (lambda:__import__("copy_trader").set_mode(False),
-              lambda:__import__("rocket_bot").set_enabled(False),
-              lambda:__import__("rocket_bot").set_signals(False),
-              lambda:__import__("signals").set_enabled(False),
-              lambda:__import__("signals").set_auto(False)):
-  try:step()
-  except Exception:logging.exception("stop buying step failed")
 def loop():
  offset=None
  def notice():
@@ -1520,27 +824,16 @@ def loop():
  # off the polling thread: a slow Telegram must not delay the answer to /start after a deploy
  threading.Thread(target=notice,daemon=True).start()
  threading.Thread(target=background_loop,daemon=True).start()
- if OWNER_MENU=="btc":threading.Thread(target=copy_loop,daemon=True).start()
- remove_robots_once()      # Diamond removed; the Sniper only sends signals (owner, Nov 14)
- if OWNER_MENU=="btc":
-  stop_all_buying()        # BTC mode: no automatic buys; open positions keep their automatic sells
-  threading.Thread(target=btc_live_loop,daemon=True).start()
-  threading.Thread(target=btc_dip_loop,daemon=True).start()
- else:
-  copy_only_v2_once()      # owner (Nov 16, evening): only the copy trade, real money; every other robot off
-  try:__import__("snipe_backtest").mark_interrupted()
-  except Exception:logging.exception("snipe backtest state")
-  threading.Thread(target=copy_loop,daemon=True).start()
-  try:
-   import copy_trader
-   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
-  except Exception:logging.exception("copy buy worker failed to start")
-  threading.Thread(target=audit_loop,daemon=True).start()
-  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
-  threading.Thread(target=meme_loop,daemon=True).start()
-  threading.Thread(target=snipe_loop,daemon=True).start()       # owner (Nov 16): sniper 10-60 min (buys only after INICIAR)
-  threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
-  threading.Thread(target=btc_leftover_loop,daemon=True).start()
+ threading.Thread(target=copy_loop,daemon=True).start()
+ try:
+  import copy_trader
+  copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
+ except Exception:logging.exception("copy buy worker failed to start")
+ threading.Thread(target=audit_loop,daemon=True).start()
+ threading.Thread(target=wallet_discovery_loop,daemon=True).start()
+ # removed BTC robots: only close a position they may still hold, then stop
+ threading.Thread(target=btc_live_loop,daemon=True).start()
+ threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  while True:
   try:
@@ -1555,17 +848,6 @@ def loop():
     logging.warning("Telegram polling conflict: another instance may be polling this token");time.sleep(5)
    else:logging.warning("telegram polling failed: %s",exc);time.sleep(2)
   except Exception:logging.exception("telegram worker error");time.sleep(3)
-
-@app.route("/meta/<name>")
-def meme_metadata(name):
- """Public metadata (JSON + logo) of the owner's approved memecoins, used when the Pump.fun upload refuses the server."""
- import memecoin_ai as mc
- pid,_,ext=name.partition(".")
- if not re.fullmatch(r"[0-9a-f]{8}",pid) or ext not in ("json","png"):return Response("not found",status=404)
- meta,png=mc.metadata_for(pid)
- if not meta:return Response("not found",status=404)
- if ext=="png":return Response(png,mimetype="image/png")
- return Response(json.dumps(meta),mimetype="application/json")
 
 @app.route("/exportar",methods=["GET","POST"])
 def export_page():
@@ -1584,66 +866,10 @@ def panel():
  msg=dashboard.ACTIONS.get(request.args.get("ok",""),"")
  return Response(dashboard.page(msg,request.args.get("ordem","lucro")),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
   "X-Content-Type-Options":"nosniff","Referrer-Policy":"same-origin"})
-def pro_action(action,chat):
- """Backtest PRO buttons (Telegram and web panel). Returns '' or why not."""
- import sniper_pro,snipe_backtest
- if action=="pro_x":sniper_pro.cancel();return ""
- if action=="pro_sim":
-  return "" if sniper_pro.apply_to_simulation() else "ainda não há estratégia VALIDADA (rode o Backtest PRO; se nenhum perfil passar, nada é aplicado)"
- kind={"pro_dl":"download","pro_cmp":"compare","pro_opt":"optimise"}[action]
- rpc=snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None
- return sniper_pro.start(kind,rpc,__import__("copy_trader")._sol_usd(),send,chat)
 def web_action(action,form=None):
  """On/off switches of the web panel (same effect as the Telegram buttons)."""
  import copy_trader as ct
  chat=active_chat()
- if action in ("pro_dl","pro_cmp","pro_opt","pro_sim","pro_x"):
-  why=pro_action(action,chat)
-  if why:raise ValueError(why)
-  __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]);return
- if action in ("sn_bt180","sn_paper","sn_stop"):
-  import snipe_bot,snipe_backtest
-  if action=="sn_bt180":
-   why=snipe_backtest.start_groups(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,ct._sol_usd(),send,chat)
-   if why:raise ValueError(why)
-  elif action=="sn_paper":
-   w=snipe_backtest._get("snipe_bt_winner",{})
-   if w.get("ok"):snipe_bot._use_cfg({"entry":w["entry"],"exit":w["exit"],"window":w.get("window")})
-   snipe_bot.start_sim()
-  else:snipe_bot.stop_all()
-  __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]);return
- if action.startswith("dv_"):
-  import dev_bot,dev_backtest
-  if action=="ls_run":
-   why=__import__("launch_sniper_test").start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,ct._sol_usd(),send,chat)
-   if why:raise ValueError(why)
-   __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]);return
-  if action in ("dv_bt150","dv_bt180","dv_bt365","dv_btc"):
-   days,start_ts,end_ts,label=(int(action[5:]) if action!="dv_btc" else None),None,None,None
-   if action=="dv_btc":
-    import calendar
-    f=form or {}
-    start_ts=calendar.timegm(time.strptime(f.get("inicio",""),"%Y-%m-%d"))
-    end_ts=calendar.timegm(time.strptime(f.get("fim",""),"%Y-%m-%d"))+86400
-    label=f.get("inicio")+" a "+f.get("fim")
-   else:label=format(days/30,".0f")+" meses"
-   why=dev_backtest.start(days=days,start_ts=start_ts,end_ts=end_ts,label=label,
-    rpc=dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,sol_usd=ct._sol_usd(),send=send,chat=chat)
-   if why:raise ValueError(why)
-  elif action=="dv_btx":dev_backtest.cancel()
-  elif action=="hunt":
-   import dev_hunter
-   f=form or {}
-   why=dev_hunter.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,int(f.get("dias") or 30),
-    min(2000,max(10,int(f.get("max") or 300))),float(f.get("acerto") or 80)/100,int(f.get("ops") or 20),send=send,chat=chat)
-   if why:raise ValueError(why)
-  elif action=="hunt_x":__import__("dev_hunter").cancel()
-  elif action=="dv_on":dev_bot.set_enabled(True)
-  elif action=="dv_off":dev_bot.set_enabled(False)
-  elif action=="dv_stop":dev_bot.emergency_stop(send,chat)
-  else:raise ValueError("ação desconhecida")
-  __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action])
-  return
  def start_engine(what):
   try:live_engine.start()
   except Exception:
@@ -1651,25 +877,12 @@ def web_action(action,form=None):
    if chat:start_real_or_wait(chat,what)
  if action=="copy_real":start_engine("copy trade");ct.set_mode(True,True)
  elif action=="copy_off":ct.set_mode(False)
- elif action in ("rks_on","rks_off"):
-  import rocket_bot
-  rocket_bot.set_signals(action=="rks_on")
  else:raise ValueError("ação desconhecida")
  note="🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]
  try:
   if chat:send(chat,note)
   else:__import__("dashboard").record(note)
  except Exception:__import__("dashboard").record(note)
-@app.get("/painel/backtest.csv")
-def panel_backtest_csv():
- import dashboard
- if len(dashboard.password())<12 or not dashboard.authorized(request.authorization):
-  return Response("Senha do painel",status=401,headers={"WWW-Authenticate":'Basic realm="Painel do bot"'})
- rid=request.args.get("id","")
- run=next((r for r in __import__("dev_backtest").runs() if str(r.get("id"))==rid),None)
- if not run:return Response("Backtest não encontrado",status=404)
- return Response(run.get("csv",""),mimetype="text/csv",headers={"Content-Disposition":"attachment; filename=backtest-dev-"+rid+".csv",
-  "Cache-Control":"no-store"})
 @app.get("/painel-sw.js")
 def panel_sw():
  """Empty service worker: lets the panel show notifications on phones (no data, no caching)."""

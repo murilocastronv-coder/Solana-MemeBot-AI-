@@ -54,9 +54,8 @@ class WithdrawFlowTests(unittest.TestCase):
 
     def test_menu_has_deposit_and_withdraw(self):
         import telegram_bot as tb
-        with patch.object(tb, "OWNER_MENU", "btc"):
-            data = {b["callback_data"] for row in tb.keyboard() for b in row}
-        self.assertTrue({"wallet_deposit", "wd_start", "wallet_balance"} <= data)
+        data = {b["callback_data"] for row in tb.keyboard() for b in row}
+        self.assertTrue({"wallet_deposit", "wallet_withdraw", "wallet_balance"} <= data)
 
 
 if __name__ == "__main__":

@@ -81,54 +81,5 @@ class SearchTests(unittest.TestCase):
         print("\\nfull search took %.0f s, qualified %d/%d" % (took, rep["qualified"], rep["tested"]))
 
 
-class TelegramTests(unittest.TestCase):
-    def test_command_starts_research_not_removed_message(self):
-        import telegram_bot as tb
-        out = []
-        with patch.dict(os.environ, {"TELEGRAM_CHAT_ID": "1"}), patch.object(tb, "CHAT", "1"), \
-                patch.object(tb, "send", side_effect=lambda chat, text, kb=None: out.append(text)), \
-                patch.object(tb, "request_api", return_value={}), patch.object(tb, "run_async") as ra:
-            tb.handle({"message": {"chat": {"id": 1, "type": "private"}, "text": "/pesquisa_btc"}})
-        self.assertIn("Pesquisa BTC", out[0])
-        self.assertIs(ra.call_args[0][0], tb.btc_research_job)
-
-
-class BtcModeTests(unittest.TestCase):
-    def test_owner_menu_is_only_btc(self):
-        import telegram_bot as tb
-        with patch.object(tb, "OWNER_MENU", "btc"):
-            data = [b["callback_data"] for row in tb.keyboard() for b in row]
-        self.assertEqual(data, ["btc_research", "btc_last", "btc_dip", "fd_status", "fd_on", "fd_off", "fd_lev1", "fd_lev2", "fd_lev3", "fd_lev4", "fd_lev5", "fd_usd20", "fd_usd50", "fd_usd100", "fd_usd200", "fd_usdask", "fd_sell", "wallet_deposit", "wd_start", "wallet_balance"])
-
-    def test_btc_button_starts_research(self):
-        import telegram_bot as tb
-        out = []
-        with patch.dict(os.environ, {"TELEGRAM_CHAT_ID": "1"}), patch.object(tb, "CHAT", "1"), \
-                patch.object(tb, "send", side_effect=lambda chat, text, kb=None: out.append(text)), \
-                patch.object(tb, "request_api", return_value={}), patch.object(tb, "run_async") as ra:
-            tb.handle({"callback_query": {"id": "1", "data": "btc_research",
-                                          "message": {"chat": {"id": 1, "type": "private"}}}})
-        self.assertIs(ra.call_args[0][0], tb.btc_research_job)
-
-    def test_restart_notice_has_no_copy_trade_text(self):
-        import telegram_bot as tb
-        out = []
-        with patch.object(tb, "OWNER_MENU", "btc"), patch.object(tb, "active_chat", return_value="1"), \
-                patch.object(tb, "send", side_effect=lambda chat, text, kb=None: out.append(text)), \
-                patch("live_trade_state.status", return_value={"positions": 1, "pending": 0}):
-            tb.startup_notice()
-        self.assertEqual(len(out), 1)
-        self.assertIn("MODO BTC", out[0])
-        self.assertNotIn("COPY", out[0])
-
-    def test_stop_all_buying(self):
-        import telegram_bot as tb
-        with patch("copy_trader.set_mode") as cm, patch("rocket_bot.set_enabled") as re_, \
-                patch("rocket_bot.set_signals") as rs, patch("signals.set_enabled") as se, patch("signals.set_auto") as sa:
-            tb.stop_all_buying()
-        cm.assert_called_with(False); re_.assert_called_with(False); rs.assert_called_with(False)
-        se.assert_called_with(False); sa.assert_called_with(False)
-
-
 if __name__ == "__main__":
     unittest.main()
