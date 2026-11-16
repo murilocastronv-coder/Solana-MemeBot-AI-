@@ -151,22 +151,10 @@ def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
- return [[{"text":"🎓 BACKTEST: MOEDA QUE GRADUOU (3 meses)","callback_data":"gr_bt"}],
+ # owner (Nov 16, later): ONLY the GRADUADOS robot (wallet: type /saldo, /depositar, /sacar)
+ return [[{"text":"🎓 Graduados: status","callback_data":"gd_status"}],
   [{"text":"🎓 Graduados: LIGAR REAL","callback_data":"gd_on"},{"text":"⏸️ Graduados: desligar","callback_data":"gd_off"}],
-  [{"text":"🎓 Graduados: status","callback_data":"gd_status"}],
-  [{"text":"🎯 BACKTEST SNIPER (3 meses, ~3 min)","callback_data":"sn_bt"}],
-  [{"text":"🎯 BACKTEST SNIPER — moedas com 1h30+","callback_data":"sn_bt_old"}],
-  [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Ligar sniper vencedor","callback_data":"sn_apply"}],
-  [{"text":"⏸️ Desligar sniper","callback_data":"sn_off"}],
-  [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
-  [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
-  [{"text":"🧪 TESTAR ESTRATÉGIA DEV (3 meses)","callback_data":"st_run"},{"text":"⏹️ Parar teste","callback_data":"st_x"}],
-  [{"text":"🎯 BACKTEST DEV LAUNCH SNIPER (5 meses)","callback_data":"ls_run"}],
-  [{"text":"🕵️ Buscar DEVs 7d","callback_data":"hunt7"},{"text":"30d","callback_data":"hunt30"},{"text":"90d","callback_data":"hunt90"}],
-  [{"text":"📋 DEVs encontrados","callback_data":"hunt_list"},{"text":"⏹️ Parar busca","callback_data":"hunt_x"}],
-  [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
-  [{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
-  [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}]]
+  [{"text":"🎓 BACKTEST: MOEDA QUE GRADUOU (3 meses)","callback_data":"gr_bt"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -813,7 +801,9 @@ def startup_notice():
    ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
     if st["positions"] else ""),keyboard())
   return
- send(chat,"🔄 Bot reiniciado (deploy).\n"+status_text(),keyboard())
+ try:txt=__import__("grad_bot").status_text()
+ except Exception:txt=""
+ send(chat,"🔄 Bot reiniciado (deploy).\n"+txt,keyboard())
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
@@ -846,7 +836,7 @@ def background_loop():
      if not trade_state.pending_orders():
       closed,lamports,sig=rent_reclaim.reclaim(rent_reclaim.rpc_full,rent_reclaim.bot_signer())
       if closed:
-       send(active_chat(),"♻️ Fechei "+str(closed)+" conta(s) de token vazia(s) e devolvi "+format(lamports/1e9,".6f")+" SOL de depósito para a carteira.")
+       logging.info("rent reclaim: %s accounts, %.6f SOL",closed,lamports/1e9)   # owner: only GRADUADOS messages
     except Exception as exc:logging.warning("rent reclaim failed: %s",str(exc)[:120])
    if active_chat() and time.monotonic()-last_recovery_notice>3600:
     last_recovery_notice=time.monotonic()
@@ -1223,15 +1213,33 @@ def snipe_loop():
     else:snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
+def grad_only_once():
+ """Owner (Nov 16, later): only the GRADUADOS robot. Every other robot stops buying (open positions keep their exits)."""
+ for step in (lambda:__import__("copy_trader").set_mode(False),
+              lambda:__import__("rocket_bot").set_enabled(False),
+              lambda:__import__("rocket_bot").set_signals(False),
+              lambda:__import__("signals").set_enabled(False),
+              lambda:__import__("signals").set_auto(False),
+              lambda:__import__("snipe_bot").stop_live(),
+              lambda:__import__("snipe_bot").set_enabled(False),
+              lambda:__import__("dev_bot").set_enabled(False)):
+  try:step()
+  except Exception:logging.exception("grad only: step failed")
+ try:
+  import dev_bot
+  d=dev_bot._load();d["real"]=False;dev_bot._save(d)
+ except Exception:logging.exception("grad only: dev real off failed")
 def grad_loop():
- """Owner (Nov 16): buys coins that graduate from pump.fun to PumpSwap (real money, grad_bot)."""
- import grad_bot,snipe_backtest
- time.sleep(70)
+ """Owner (Nov 16): buys coins that graduate from pump.fun to PumpSwap (real money, grad_bot).
+ Also reads the new pump.fun launches (snipe_bot.scan_launches feeds grad_bot.add_launches)."""
+ import grad_bot,snipe_backtest,snipe_bot
+ time.sleep(30)
  rpc=None
  while True:
   try:
    if os.getenv("SOLANA_RPC_URL"):
     rpc=rpc or snipe_backtest.fast_rpc(rps=5)
+    snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
     grad_bot.cycle(send,active_chat(),rpc=rpc)
   except Exception as exc:logging.exception("grad cycle failed: %s",type(exc).__name__)
   time.sleep(grad_bot.CHECK_S)
@@ -1283,43 +1291,20 @@ def loop():
  # off the polling thread: a slow Telegram must not delay the answer to /start after a deploy
  threading.Thread(target=notice,daemon=True).start()
  threading.Thread(target=background_loop,daemon=True).start()
- threading.Thread(target=copy_loop,daemon=True).start()
- try:
-  import copy_trader
-  copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
- except Exception:logging.exception("copy buy worker failed to start")
+ if OWNER_MENU=="btc":threading.Thread(target=copy_loop,daemon=True).start()
  remove_robots_once()      # Diamond removed; the Sniper only sends signals (owner, Nov 14)
  if OWNER_MENU=="btc":
   stop_all_buying()        # BTC mode: no automatic buys; open positions keep their automatic sells
   threading.Thread(target=btc_live_loop,daemon=True).start()
   threading.Thread(target=btc_dip_loop,daemon=True).start()
  else:
-  copy_only_once()         # only the copy trade (owner): BTC robot and signals off
-  dev_mode_once()          # real copy trade off (owner, Nov 15)
-  dev_real_once()          # DEV robot with real money (owner, Nov 15, later)
-  try:__import__("dev_hunter").mark_interrupted()
-  except Exception:logging.exception("hunter state")
+  grad_only_once()         # owner (Nov 16, later): only the GRADUADOS robot; every other robot off
   try:__import__("snipe_backtest").mark_interrupted()
   except Exception:logging.exception("snipe backtest state")
-  try:__import__("dev_bot").relink_once()
-  except Exception:logging.exception("dev relink")
-  try:__import__("dev_bot").retier_once()
-  except Exception:logging.exception("dev retier")
-  try:__import__("dev_backtest").mark_interrupted()
-  except Exception:logging.exception("backtest job state")
-  threading.Thread(target=dev_loop,daemon=True).start()
-  threading.Thread(target=dev_audit_loop,daemon=True).start()
-  threading.Thread(target=dev_follow_loop,daemon=True).start()
-  threading.Thread(target=snipe_loop,daemon=True).start()
   threading.Thread(target=grad_loop,daemon=True).start()
-  threading.Thread(target=dev_fast_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
- threading.Thread(target=rocket_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
- if OWNER_MENU!="btc":     # wallet search/audit only matter for the copy trade (saves RPC credits)
-  threading.Thread(target=audit_loop,daemon=True).start()
-  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  while True:
   try:
    if TOKEN:

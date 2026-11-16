@@ -26,6 +26,9 @@ def trail_text(position):
     """'sells X% below the top' for the position's trailing rule."""
     if position.get("mode") == "consensus":
         return format(float(CONSENSUS_EXIT["drop"]) * 100, ".0f")
+    if position.get("mode") == "grad":
+        import grad_bot
+        return format(grad_bot.DROP * 100, ".0f")
     if position.get("copy_orphan"):
         return format(float(ORPHAN_EXIT["drop"]) * 100, ".0f")
     if position.get("mode") == "rocket":
@@ -162,6 +165,8 @@ def position_signal(position, cost, proceeds):
         peak = max(ratio, float(position.get("peak_ratio") or 0))
         held = time.time() - float(position.get("opened_at") or time.time())
         action, reason = grad_bot.exit_signal(ratio, peak, held)
+        if action == "hold" and peak >= 1 + grad_bot.ARM:
+            reason = "trailing"                      # owner gets the "STOP MÓVEL ATIVADO" message once
         return {"action": action, "reason": reason or "grad_hold", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") == "dev":
         # DEV robot: its own exits (dev sells, -8%, +15% / trailing) run in dev_bot; this is only a safety
