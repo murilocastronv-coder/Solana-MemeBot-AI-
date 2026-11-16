@@ -129,9 +129,10 @@ class KaminoTest(unittest.TestCase):
         other = str(pk())
         self.res[other] = dict(self.res[self.rsol], mint=str(pk()), address=other)
         ob2 = dict(self.ob, borrows=[dict(self.ob["borrows"][0], reserve=other)])
-        p, why = lb.plan(ob2, self.res, 200 * 10 ** 6)
-        self.assertIsNone(p)
-        self.assertIn("USDT", why)
+        self.res[self.rusdc]["min_bonus_bps"] = 500
+        ob2 = dict(ob2, deposits=[dict(self.ob["deposits"][0], reserve=self.rusdc)])
+        p, why = lb.plan(ob2, self.res, 200 * 10 ** 6)          # owner: any debt token is accepted now
+        self.assertEqual(p["repay"]["address"], other)
 
     def test_scope_price_chain(self):
         data = struct.pack("<QQ", 150_000_000, 6) + bytes(40) + struct.pack("<QQ", 2_000_000, 6) + bytes(40)
