@@ -1,4 +1,5 @@
-"""MEMECOIN CREATOR (owner, Nov 16) - SIMULATION ONLY for now.
+"""MEMECOIN CREATOR (owner, Nov 16). Simulation by default; REAL mode (owner, "opção 2") launches on Pump.fun only
+when the owner presses APROVAR on that proposal (pump_launch.py), inside the limits below.
 
 What runs:
 1. Trend radar: the Solana memecoins with REAL activity right now (DexScreener lists the bot already reads), words of
@@ -33,7 +34,8 @@ LAUNCH_COST_SOL = E("MEME_LAUNCH_COST_SOL", 0.02)      # Pump.fun create + rent 
 BUDGET_PER_LAUNCH = E("MEME_BUDGET_USD", 5)
 DAILY_BUDGET = E("MEME_DAILY_BUDGET_USD", 10)
 RESERVE_USD = E("MEME_RESERVE_USD", 20)
-DEV_BUY_PCT = E("MEME_DEV_BUY_PCT", 10)                # owner (Nov 16): the creator buys 10% of each coin at launch
+DEV_BUY_PCT = E("MEME_DEV_BUY_PCT", 0.1)               # owner (Nov 16, "opção 2"): small public creator buy, inside US$ 5
+KEEP_SOL_USD = E("MEME_KEEP_SOL_USD", 3)               # owner: always leave US$ 3 in SOL in the wallet
 # Pump.fun bonding curve at creation: 30 SOL virtual / 1,073,000,000 virtual tokens, 1,000,000,000 supply
 CURVE_SOL, CURVE_TOKENS, SUPPLY = 30.0, 1_073_000_000.0, 1_000_000_000.0
 
@@ -52,7 +54,7 @@ _MEM = {}
 def _load():
     with _LOCK:
         if not _MEM:
-            d = {"auto": False, "proposals": [], "launches": [], "last_auto": 0}
+            d = {"auto": False, "real": False, "proposals": [], "launches": [], "last_auto": 0}
             try:
                 import pg_store
                 if pg_store.enabled():
@@ -72,6 +74,16 @@ def _save():
             pg_store.put(KEY, json.loads(json.dumps(_MEM)))
     except Exception as exc:
         logging.warning("meme: save failed (%s)", type(exc).__name__)
+
+
+def set_real(on):
+    with _LOCK:
+        _load()["real"] = bool(on)
+        _save()
+
+
+def real():
+    return bool(_load().get("real"))
 
 
 def set_auto(on):
@@ -224,8 +236,9 @@ def decide(pid, approve, sol_usd=None):
         if not prop or prop["status"] != "pending":
             return None
         prop["status"] = "approved" if approve else "rejected"
-        if approve:
-            cost = LAUNCH_COST_SOL * float(sol_usd or 0)
+        if approve and d.get("real"):
+            prop["status"] = "launching"           # launch_real() runs next, with every limit checked again
+        elif approve:
             cost = (LAUNCH_COST_SOL + dev_buy_sol()) * float(sol_usd or 0)
             d["launches"] = (d["launches"] or [])[-99:] + [{"id": pid, "name": prop["name"], "symbol": prop["symbol"],
                                                             "at": time.time(), "cost_usd": round(cost, 2), "simulated": True,
@@ -234,38 +247,129 @@ def decide(pid, approve, sol_usd=None):
         return prop
 
 
+def real_buy_sol(sol_usd):
+    """Creator buy for a real launch: DEV_BUY_PCT% of the supply, cut so creation + buy stay inside BUDGET_PER_LAUNCH."""
+    px = float(sol_usd or 0)
+    if px <= 0:
+        return 0.0
+    return max(0.0, min(dev_buy_sol(), BUDGET_PER_LAUNCH / px - LAUNCH_COST_SOL))
+
+
+def real_spent(day=None):
+    L = [x for x in _load()["launches"] if not x.get("simulated")]
+    return sum(x.get("cost_usd", 0) for x in L if day is None or x.get("day") == day), sum(1 for x in L if day is None or x.get("day") == day)
+
+
+def limits_ok(sol_usd, wallet_lamports, now=None):
+    """('' , buy_sol) when a real launch fits every limit, else (why, 0)."""
+    px = float(sol_usd or 0)
+    if px <= 0:
+        return "sem preço do SOL agora", 0.0
+    today = time.strftime("%Y-%m-%d", time.gmtime(now or time.time()))
+    buy = real_buy_sol(px)
+    cost = (LAUNCH_COST_SOL + buy) * px
+    day_usd, day_n = real_spent(today)
+    all_usd, _ = real_spent()
+    if day_n >= MAX_PER_DAY:
+        return "já foram " + str(MAX_PER_DAY) + " lançamentos reais hoje", 0.0
+    if cost > BUDGET_PER_LAUNCH + 0.01:
+        return "custo de US$ " + format(cost, ".2f") + " passa do orçamento de US$ " + format(BUDGET_PER_LAUNCH, "g"), 0.0
+    if day_usd + cost > DAILY_BUDGET + 0.01:
+        return "passaria do limite de US$ " + format(DAILY_BUDGET, "g") + " por dia (hoje: US$ " + format(day_usd, ".2f") + ")", 0.0
+    if all_usd + cost > RESERVE_USD + 0.01:
+        return "a reserva de US$ " + format(RESERVE_USD, "g") + " para lançamentos acabou (usado: US$ " + format(all_usd, ".2f") + ")", 0.0
+    need = (LAUNCH_COST_SOL + buy) * 1e9 + KEEP_SOL_USD / px * 1e9 + 0.003e9
+    if wallet_lamports < need:
+        return ("pouco SOL na carteira: precisa de ~" + format(need / 1e9, ".3f") + " SOL (lançamento + US$ " + format(KEEP_SOL_USD, "g") +
+                " que sempre ficam em SOL), tem " + format(wallet_lamports / 1e9, ".3f")), 0.0
+    return "", buy
+
+
+def launch_real(pid, sol_usd, rpc, signer, launcher=None):
+    """The owner approved `pid` with real mode on -> (launch dict, '') or (None, why)."""
+    import liq_bot as lb
+    import pump_launch as pl
+    launcher = launcher or pl.launch
+    d = _load()
+    prop = next((p for p in d["proposals"] if p["id"] == pid), None)
+    if not prop or prop.get("status") != "launching":
+        return None, "proposta não está aprovada para lançamento"
+    me = str(signer.pubkey())
+    why, buy = limits_ok(sol_usd, lb.sol_lamports(rpc, me))
+    if why:
+        prop["status"] = "blocked"
+        _save()
+        return None, why
+    res, why = launcher(rpc, signer, prop["name"], prop["symbol"], prop["description"], logo_png(prop["name"]),
+                        int(buy * 1e9), lb.simulate)
+    now = time.time()
+    if not res:
+        prop["status"] = "unknown" if "não confirmou a tempo" in why else "failed"
+        prop["error"] = why
+        if prop["status"] == "unknown":              # may have landed: count it so the limits stay safe
+            d["launches"] = d["launches"][-99:] + [{"id": pid, "name": prop["name"], "symbol": prop["symbol"], "at": now,
+                                                   "day": time.strftime("%Y-%m-%d", time.gmtime(now)), "simulated": False,
+                                                   "cost_usd": round((LAUNCH_COST_SOL + buy) * float(sol_usd), 2), "unconfirmed": True}]
+        _save()
+        return None, why
+    pct = pl.tokens_for(buy * 0.98) / SUPPLY * 100
+    rec = {"id": pid, "name": prop["name"], "symbol": prop["symbol"], "at": now, "day": time.strftime("%Y-%m-%d", time.gmtime(now)),
+           "simulated": False, "mint": res["mint"], "sig": res["sig"], "buy_sol": round(buy, 4), "dev_buy_pct": round(pct, 3),
+           "cost_usd": round((LAUNCH_COST_SOL + buy) * float(sol_usd), 2)}
+    prop["status"] = "launched"
+    prop["mint"] = res["mint"]
+    d["launches"] = d["launches"][-99:] + [rec]
+    _save()
+    return rec, ""
+
+
+def launched_text(rec):
+    return ("🚀 LANÇADA DE VERDADE NA PUMP.FUN: " + rec["name"] + " ($" + rec["symbol"] + ")\n"
+            "Contrato: " + rec["mint"] + "\nhttps://pump.fun/coin/" + rec["mint"] + "\nTransação: https://solscan.io/tx/" + rec["sig"] +
+            "\n💰 Compra do criador: " + format(rec["buy_sol"], "g") + " SOL (~" + format(rec["dev_buy_pct"], ".2f") +
+            "% das moedas, pública) · custo total ~US$ " + format(rec["cost_usd"], ".2f") +
+            "\n🔒 O bot NUNCA vende essas moedas sozinho. Divulgue só em canais seus, sem prometer lucro.")
+
+
 def proposal_text(p):
-    return ("🧪 PROPOSTA DE MEMECOIN (SIMULAÇÃO)\n"
+    head = "🚀 PROPOSTA DE MEMECOIN (REAL — APROVAR CRIA NA PUMP.FUN)\n" if real() else "🧪 PROPOSTA DE MEMECOIN (SIMULAÇÃO)\n"
+    return (head +
             "Nome: " + p["name"] + "\nSímbolo: $" + p["symbol"] + "\nTema em alta: \"" + p["theme"] + "\" (moedas com volume: " +
             ", ".join(p.get("theme_examples") or []) + ")\nTexto por: " + p.get("source", "?") + "\n\n" + p["description"] +
             "\n\n📣 Posts de lançamento:\n• " + "\n• ".join(p.get("posts") or []) +
-            "\n\n" + dev_buy_line() + "\n⚠️ APROVAR agora só registra uma SIMULAÇÃO: nada é criado na blockchain.")
+            "\n\n" + dev_buy_line() + ("\n⚠️ APROVAR cria a moeda DE VERDADE com dinheiro da carteira (simulado antes de enviar)." if real()
+                                        else "\n⚠️ APROVAR agora só registra uma SIMULAÇÃO: nada é criado na blockchain."))
 
 
-def dev_buy_line(sol_usd=None):
-    sol = dev_buy_sol()
+def _px(sol_usd=None):
     px = float(sol_usd or 0)
     if not px:
         try:
             px = float(__import__("copy_trader")._sol_usd() or 0)
         except Exception:
             px = 0.0
+    return px
+
+
+def dev_buy_line(sol_usd=None):
+    px = _px(sol_usd)
+    sol = real_buy_sol(px) if px else dev_buy_sol()
+    pct = (__import__("pump_launch").tokens_for(sol * 0.98) / SUPPLY * 100) if sol else 0.0
     usd = (sol + LAUNCH_COST_SOL) * px
-    over = px and usd > BUDGET_PER_LAUNCH
-    return ("💰 Lançamento: ~" + format(LAUNCH_COST_SOL, "g") + " SOL de criação + compra do criador de " + format(DEV_BUY_PCT, "g") +
-            "% das moedas = ~" + format(sol, ".2f") + " SOL" + (" (~US$ " + format(usd, ",.0f") + ")" if px else "") +
-            " · a compra do criador aparece para todos (transparência) · sem venda automática" +
-            ("\n⛔ Acima do orçamento de US$ " + format(BUDGET_PER_LAUNCH, "g") + " por lançamento: no real esse lançamento seria bloqueado." if over else ""))
+    return ("💰 Lançamento: ~" + format(LAUNCH_COST_SOL, "g") + " SOL de criação + compra do criador de ~" + format(sol, ".3f") +
+            " SOL (~" + format(pct, ".2f") + "% das moedas)" + (" = ~US$ " + format(usd, ".2f") if px else "") +
+            " · máx. US$ " + format(BUDGET_PER_LAUNCH, "g") + " por lançamento · a compra do criador aparece para todos · sem venda automática")
 
 
 def status_text(sol_usd=None):
     d = _load()
     L = ["🤖 CRIADOR DE MEMECOINS — " + ("🟢 propostas automáticas a cada " + format(AUTO_EVERY_S / 3600, "g") + " h" if d.get("auto")
-                                          else "⏸️ propostas só quando você pedir") + " · SIMULAÇÃO",
+                                          else "⏸️ propostas só quando você pedir") +
+         (" · 💵 REAL (cada APROVAR cria a moeda na Pump.fun)" if d.get("real") else " · SIMULAÇÃO"),
          "⚙️ Máx. " + str(MAX_PER_DAY) + " por dia · orçamento por lançamento US$ " + format(BUDGET_PER_LAUNCH, "g") + " · por dia US$ " +
-         format(DAILY_BUDGET, "g") + " · reserva US$ " + format(RESERVE_USD, "g") + " (para o lançamento real, ainda desligado)",
-         "📊 Propostas: " + str(len(d["proposals"])) + " · aprovadas (simuladas): " + str(len(d["launches"])) +
-         " · custo simulado US$ " + format(sum(x.get("cost_usd", 0) for x in d["launches"]), ".2f"),
+         format(DAILY_BUDGET, "g") + " · reserva total US$ " + format(RESERVE_USD, "g") + " · sempre deixa US$ " + format(KEEP_SOL_USD, "g") + " em SOL",
+         "📊 Propostas: " + str(len(d["proposals"])) + " · lançadas de verdade: " + str(real_spent()[1]) + " (US$ " +
+         format(real_spent()[0], ".2f") + ") · simuladas: " + str(sum(1 for x in d["launches"] if x.get("simulated"))),
          dev_buy_line(sol_usd)]
     try:
         tr = trends()
@@ -274,5 +378,6 @@ def status_text(sol_usd=None):
     except Exception:
         pass
     for x in d["launches"][-3:]:
-        L.append("• " + x["name"] + " ($" + x["symbol"] + ") — aprovada " + time.strftime("%d/%m %H:%M", time.gmtime(x["at"])) + " (simulada)")
+        L.append("• " + x["name"] + " ($" + x["symbol"] + ") — " + time.strftime("%d/%m %H:%M", time.gmtime(x["at"])) +
+                 (" (simulada)" if x.get("simulated") else (" ⚠️ sem confirmação" if x.get("unconfirmed") else " https://pump.fun/coin/" + x.get("mint", ""))))
     return "\n".join(L)
