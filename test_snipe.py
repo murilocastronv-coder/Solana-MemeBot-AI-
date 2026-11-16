@@ -374,3 +374,24 @@ class GradCandlesTest(unittest.TestCase):
         store = {"M" + str(k): [[g + 3600 * k + 60 * j, 1.0, 1.6, 0.9, 1.5, 30000] for j in range(10)] for k in range(40)}
         txt, ok, best = gc.report(store, {m: g - 600 for m in store}, 40, final=True)
         self.assertIn("📌", txt)
+
+
+class LiqBacktestTest(unittest.TestCase):
+    def test_liquidation_parse_and_report(self):
+        import liq_backtest as lb
+        w = "WalletLiquidator1111111111111111111111111111"
+        usdc, sol = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "So11111111111111111111111111111111111111112"
+        tx = {"blockTime": NOW, "transaction": {"message": {"accountKeys": [w]}},
+              "meta": {"err": None, "fee": 5000, "logMessages": ["Program log: Instruction: LiquidateObligationAndRedeemReserveCollateral"],
+                       "preBalances": [10 ** 9], "postBalances": [10 ** 9 - 5000],
+                       "preTokenBalances": [{"owner": w, "mint": usdc, "uiTokenAmount": {"uiAmount": 100}}],
+                       "postTokenBalances": [{"owner": w, "mint": usdc, "uiTokenAmount": {"uiAmount": 0}},
+                                             {"owner": w, "mint": sol, "uiTokenAmount": {"uiAmount": 0.7}}]}}
+        e = lb.liquidation_of(tx)
+        self.assertEqual(e["deltas"], {usdc: -100.0, sol: 0.7})
+        self.assertIsNone(lb.liquidation_of(dict(tx, meta=dict(tx["meta"], logMessages=["Instruction: Deposit"]))))
+        store = {"markets": [("Kamino", "JLP", "M1")], "done": {"M1": 3}, "liqs": {"M1": [e] * 10}, "txs": 300,
+                 "span": {"M1": NOW - 10 * 86400}}
+        fetch = lambda u: [{"baseToken": {"address": sol}, "liquidity": {"usd": 1e7}, "priceUsd": "150"}]
+        txt = lb.report(store, NOW, final=True, fetch=fetch)
+        self.assertIn("Com US$ 50: US$ 74.40", txt)

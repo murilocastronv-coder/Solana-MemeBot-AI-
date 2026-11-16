@@ -149,7 +149,7 @@ class TelegramMenuTests(unittest.TestCase):
         self.assertNotIn("rk_on", data)                # Sniper and Diamond removed (owner, Nov 14)
         self.assertNotIn("dm_on", data)
         self.assertNotIn("copy_real", data)             # owner (Nov 15): only the DEV robot buttons
-        self.assertIn("gd_on", data)                     # owner (Nov 16, later): only the GRADUADOS robot
+        self.assertIn("lq_bt", data)                     # owner (Nov 16, later): only the GRADUADOS robot
         self.assertFalse([x for x in data if x.startswith(("btc", "vol_", "launch", "lev_"))])
 
     def test_discovery_text_without_rpc(self):
