@@ -23,7 +23,7 @@ E = lambda k, d: sg._f(k, d)   # noqa: E731 - every number configurable on Rende
 START_USD = E("DEV_SIM_START_USD", 500)
 BUY_USD = E("DEV_BUY_USD", 5)
 MIN_SCORE = E("DEV_MIN_SCORE", 0)        # owner (Nov 15, prompt criteria): no DEV SCORE minimum
-MIN_LIQ = E("DEV_MIN_LIQUIDITY_USD", 20_000)
+MIN_LIQ = E("DEV_MIN_LIQUIDITY_USD", 3_000)     # owner (Nov 16): minimum US$ 3 thousand
 MIN_VOL_5M = E("DEV_MIN_VOLUME_5M", 5_000)
 MAX_OPEN = int(E("DEV_MAX_OPEN", 3))
 MAX_RUNUP_5M = E("DEV_MAX_RUNUP_5M", 30)          # % in 5 min: too late to enter
@@ -68,7 +68,7 @@ def bt_ok(h):
     cost = h.get("cost_usd")
     return r <= BT_MAX_RET and (cost is None or float(cost) >= BT_MIN_COST_USD)
 BT_PERIOD_CAPITAL = E("DEV_BT_PERIOD_CAPITAL", 500)
-CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 1_000)      # owner (Nov 16): enter early on the pump.fun curve
+CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 3_000)      # owner (Nov 16): minimum US$ 3 thousand (live and backtests)
 CURVE_MIN_VOL_5M = E("DEV_CURVE_MIN_VOLUME_5M", 0)   # a coin launched seconds ago has no 5-min volume yet
 # owner (Nov 15): only pump.fun coins (launch curve, PumpSwap or a pump.fun mint)
 PUMP_ONLY = os.getenv("DEV_PUMP_ONLY", "true").strip().lower() != "false"
@@ -87,9 +87,20 @@ def _path():
     return live_trade_state._path().with_name("dev_bot.json")
 
 
-def _load():
-    d = {"enabled": True, "cash": START_USD, "start": START_USD, "positions": {}, "history": [], "tokens": {},
-         "devs": {}, "equity_peak": START_USD, "max_dd": 0.0, "fees": 0.0, "log": [], "backtest": ""}
+# The state lives in memory (one process): reading it from PostgreSQL on every access made the whole robot - and
+# the Telegram buttons - slow once thousands of devs were stored. Saves go to PostgreSQL + disk at most every
+# FLUSH_S seconds (a background flusher writes the last change; at most FLUSH_S seconds can be lost on a crash).
+FLUSH_S = E("DEV_STATE_FLUSH_SECONDS", 5)
+_MEM = {"key": None, "d": None, "dirty": False, "last": 0.0, "flusher": False}
+
+
+def _defaults():
+    return {"enabled": True, "cash": START_USD, "start": START_USD, "positions": {}, "history": [], "tokens": {},
+            "devs": {}, "equity_peak": START_USD, "max_dd": 0.0, "fees": 0.0, "log": [], "backtest": ""}
+
+
+def _read_store():
+    d = _defaults()
     import pg_store
     if pg_store.enabled():
         try:
@@ -108,19 +119,54 @@ def _load():
     return d
 
 
-def _save(d):
+def _load():
+    key = str(_path())
+    if _MEM["key"] == key and _MEM["d"] is not None:
+        return _MEM["d"]
+    with _LOCK:
+        if _MEM["key"] != key or _MEM["d"] is None:
+            _MEM.update(key=key, d=_read_store(), dirty=False)
+        return _MEM["d"]
+
+
+def _persist():
+    with _LOCK:
+        if not _MEM["dirty"] or _MEM["d"] is None:
+            return
+        text = json.dumps(_MEM["d"])
+        _MEM.update(dirty=False, last=time.time())
+        p = _path()
     import pg_store
     if pg_store.enabled():
         try:
-            pg_store.put("dev_bot", d)
+            pg_store.put("dev_bot", json.loads(text))
         except Exception as exc:
             logging.warning("devbot: postgres save failed (%s), disk only", type(exc).__name__)
-    p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".devbot.")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(d, f)
+        f.write(text)
     os.replace(tmp, p)
+
+
+def _flusher():
+    while True:
+        time.sleep(max(1.0, FLUSH_S))
+        try:
+            _persist()
+        except Exception:
+            logging.exception("devbot: state flush failed")
+
+
+def _save(d):
+    with _LOCK:
+        _MEM.update(key=str(_path()), d=d, dirty=True)
+        due = FLUSH_S <= 0 or time.time() - _MEM["last"] >= FLUSH_S
+        if not due and not _MEM["flusher"]:
+            _MEM["flusher"] = True
+            threading.Thread(target=_flusher, daemon=True).start()
+    if due:
+        _persist()
 
 
 def note(text):
