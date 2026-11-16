@@ -154,6 +154,7 @@ def keyboard():
  return [[{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🧪 TESTAR ESTRATÉGIA DEV (3 meses)","callback_data":"st_run"},{"text":"⏹️ Parar teste","callback_data":"st_x"}],
+  [{"text":"🎯 BACKTEST DEV LAUNCH SNIPER (5 meses)","callback_data":"ls_run"}],
   [{"text":"🕵️ Buscar DEVs 7d","callback_data":"hunt7"},{"text":"30d","callback_data":"hunt30"},{"text":"90d","callback_data":"hunt90"}],
   [{"text":"📋 DEVs encontrados","callback_data":"hunt_list"},{"text":"⏹️ Parar busca","callback_data":"hunt_x"}],
   [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
@@ -313,6 +314,11 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
+ if action=="ls_run":
+  import launch_sniper_test as lst
+  why=lst.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
+  send(chat,("🎯 Backtest DEV Launch Sniper (5 meses, dados reais): compara vender igual ao DEV, vender tudo na 1ª venda, "
+   "TP +20%/SL −8%/15 min e filtro de momentum. Resultado em até ~3 min; cada toque continua de onde parou.") if not why else "⛔ "+why,keyboard());return
  if action in ("st_run","st_x"):
   import dev_strategy_test as dst
   if action=="st_x":dst.cancel();send(chat,"⏹️ Parando o teste (o que já calculou fica salvo).",keyboard());return
@@ -1296,6 +1302,10 @@ def web_action(action,form=None):
  chat=active_chat()
  if action.startswith("dv_"):
   import dev_bot,dev_backtest
+  if action=="ls_run":
+   why=__import__("launch_sniper_test").start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,ct._sol_usd(),send,chat)
+   if why:raise ValueError(why)
+   __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]);return
   if action in ("dv_bt150","dv_bt180","dv_bt365","dv_btc"):
    days,start_ts,end_ts,label=(int(action[5:]) if action!="dv_btc" else None),None,None,None
    if action=="dv_btc":

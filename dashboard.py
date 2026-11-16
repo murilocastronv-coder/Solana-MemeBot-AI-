@@ -40,7 +40,7 @@ def csrf_ok(token):
     return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
 
 
-ACTIONS = {"hunt": "Busca de DEVs lucrativos iniciada", "hunt_x": "Busca de DEVs parada", "dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
+ACTIONS = {"ls_run": "Backtest DEV Launch Sniper (5 meses) iniciado — o resultado chega no Telegram", "hunt": "Busca de DEVs lucrativos iniciada", "hunt_x": "Busca de DEVs parada", "dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
            "dv_bt365": "Backtest DEV de 12 meses iniciado", "dv_btc": "Backtest DEV do período escolhido iniciado",
            "dv_btx": "Backtest DEV cancelado", "dv_on": "Robô DEV rodando", "dv_off": "Robô DEV pausado",
            "dv_stop": "PARADA DE EMERGÊNCIA: robô DEV pausado e posições vendidas",
@@ -384,7 +384,10 @@ def backtest_tab():
     import dev_backtest as dbt
     j = dbt.job()
     rs = dbt.runs()
-    out = ["<div class='card'><h2>🧪 Backtest do robô DEV</h2>", _button("dv_bt150", "▶ EXECUTAR BACKTEST — 5 MESES", "big"),
+    out = ["<div class='card'><h2>🎯 DEV Launch Sniper</h2>", _button("ls_run", "▶ EXECUTAR BACKTEST — 5 MESES (Launch Sniper)", "big"),
+           "<div class='mut'>Dados reais da blockchain; compara 4 variações; o resultado chega no Telegram em até ~3 min "
+           "(cada toque continua de onde parou).</div></div>",
+           "<div class='card'><h2>🧪 Backtest do robô DEV</h2>", _button("dv_bt150", "▶ EXECUTAR BACKTEST — 5 MESES", "big"),
            "<div style='margin-top:8px'>", _button("dv_bt180", "6 meses"), _button("dv_bt365", "12 meses"),
            _button("dv_btx", "⏹️ Cancelar", "stop"), "</div>",
            "<form method='post' action='/painel/acao' style='margin-top:10px'><input type='hidden' name='csrf' value='",

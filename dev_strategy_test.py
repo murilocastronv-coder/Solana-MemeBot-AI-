@@ -37,16 +37,16 @@ def _cache():
     return sbt._get("dev_strat_cache", {})
 
 
-def _qualifies(prior):
-    if len(prior) < 20:
+def _qualifies(prior, min_win=None, min_trades=20):
+    if len(prior) < min_trades:
         return False
     pnl = [float(q.get("pnl_usd") or 0) for q in prior]
     gw, gl = sum(x for x in pnl if x > 0), -sum(x for x in pnl if x < 0)
-    return (sum(1 for x in pnl if x > 0) / len(pnl) >= db.TIERS[-1][1] and sum(pnl) > 0
+    return (sum(1 for x in pnl if x > 0) / len(pnl) >= (db.TIERS[-1][1] if min_win is None else min_win) and sum(pnl) > 0
             and (gl == 0 or gw / gl >= 2) and len({q.get("mint") for q in prior}) >= max(db.MIN_TOKENS, 1))
 
 
-def events(d=None, now=None, days=None):
+def events(d=None, now=None, days=None, min_win=None, min_trades=20):
     """[(time, dev, trade)] of the period where the dev was already approved by its PAST trades."""
     d = d or db._load()
     now = now or time.time()
@@ -59,7 +59,7 @@ def events(d=None, now=None, days=None):
             if t < since:
                 continue
             prior = [q for q in hist if float(q["closed"]) < t]
-            if _qualifies(prior):
+            if _qualifies(prior, min_win, min_trades):
                 out.append((t, dev, h))
                 devs_ok.add(dev)
     out.sort(key=lambda x: x[0])
