@@ -262,6 +262,8 @@ def cycle(send=None, chat=None, now=None, get=None, fetch=None, safety=None):
     try:
         cands = pools(get)
     except Exception as exc:
+        logging.warning("pool list failed: %s: %s", type(exc).__name__, str(exc)[:200])
+        d["last_scan"] = {"at": now, "n": 0, "in_range": 0, "best": [], "error": type(exc).__name__ + ": " + str(exc)[:100]}
         if now - d.get("api_err_at", 0) > 3600:
             d["api_err_at"] = now
             note("não consegui a lista de pools da Meteora (" + type(exc).__name__ + "): tento de novo a cada 10 min")
@@ -374,6 +376,8 @@ def status_text():
              format(float(d.get("cash") or CAPITAL) if not pos else value_now(pos, pos["last_price"]), ".2f"))
     ls = d.get("last_scan")
     if ls:
+        if ls.get("error"):
+            L.append("⚠️ Última busca (" + time.strftime("%H:%M", time.gmtime(ls["at"])) + " UTC) falhou: " + ls["error"])
         L.append("🔎 Última busca (" + time.strftime("%H:%M", time.gmtime(ls["at"])) + " UTC): " + str(ls["n"]) +
                  " pools com liquidez e volume suficientes · " + str(ls["in_range"]) + " pagando " + format(MIN_DAY_YIELD * 100, ".0f") +
                  "–" + format(MAX_DAY_YIELD * 100, ".0f") + "% ao dia · maiores: " +
