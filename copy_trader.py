@@ -75,11 +75,13 @@ MIN_LONG_SHARE = _env("COPY_MIN_LONG_HOLD_SHARE", 0.6)
 AUDIT_MAX_TX = int(_env("COPY_AUDIT_MAX_TX", 300))
 # Recent results: only copy wallets that made money in the last RESULT_DAYS days
 # (>= RESULT_MIN_TRADES closed trades, win rate >= RESULT_MIN_WIN, profit > RESULT_MIN_USD).
-RESULT_DAYS = _env("COPY_RESULT_DAYS", 9)
-RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 40))   # at least 40 trades in the period
+# owner (Nov 16, evening): last 30 days, >= 25 trades, >= 70% win rate and >= 400% return in the last week
+RESULT_DAYS = _env("COPY_RESULT_DAYS", 30)
+RESULT_MIN_TRADES = int(_env("COPY_RESULT_MIN_TRADES", 25))
 # Keep only the TOP_WALLETS wallets with the highest profit in the period; the rest are removed.
 TOP_WALLETS = int(_env("COPY_TOP_WALLETS", 20))
-RESULT_MIN_WIN = _env("COPY_RESULT_MIN_WIN", 0.5)
+RESULT_MIN_WIN = _env("COPY_RESULT_MIN_WIN", 0.70)
+ROI_WEEK_MIN = _env("COPY_ROI_WEEK_MIN", 4.0)          # profit / money put in coins, last 7 days (4.0 = +400%)
 RESULT_MIN_USD = _env("COPY_RESULT_MIN_USD", 0)
 AUDIT_VALID_S = _env("COPY_AUDIT_VALID_HOURS", 24) * 3600
 # Stable list: candidates are audited BEFORE being followed (a few per round), rejected wallets
@@ -1741,7 +1743,11 @@ def weekly(recent, now):
     for p in recent:
         k = int((now - float(p.get("closed", now))) // (7 * 86400))
         weeks[k] = weeks.get(k, 0.0) + float(p.get("pnl_usd", 0.0))
-    return {"weeks_with_trades": len(weeks), "weeks_positive": sum(1 for v in weeks.values() if v > 0)}
+    last = [p for p in recent if float(p.get("closed", 0)) >= now - 7 * 86400]
+    put = sum(float(p.get("cost_closed") or 0) for p in last)
+    pnl = sum(float(p.get("pnl_usd", 0.0)) for p in last)
+    return {"weeks_with_trades": len(weeks), "weeks_positive": sum(1 for v in weeks.values() if v > 0),
+            "roi_week": round(pnl / put, 4) if put > 0 else 0.0}
 
 
 def measure(address, rpc, sol_usd, max_tx=None):
@@ -2078,7 +2084,7 @@ def result_status(w, now=None):
     if not a or now - a.get("at", 0) > AUDIT_VALID_S or "pnl_recent" not in a:
         return "unknown"
     ok = (a["trades_recent"] >= RESULT_MIN_TRADES and a["win_recent"] >= RESULT_MIN_WIN
-          and a["pnl_recent"] > RESULT_MIN_USD)
+          and a["pnl_recent"] > RESULT_MIN_USD and ("roi_week" not in a or float(a["roi_week"]) >= ROI_WEEK_MIN))   # audits before Nov 16 lack it
     return "ok" if ok else "bad"
 
 
