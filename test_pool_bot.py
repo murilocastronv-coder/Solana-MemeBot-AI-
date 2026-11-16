@@ -76,3 +76,16 @@ class GeckoPoolsTest(unittest.TestCase):
         rows = pb._gecko_pools(fetch=fetch, rpc=rpc)
         self.assertAlmostEqual(rows[0]["fees_24h"], 40e6 * 0.0025 * 0.95)
         self.assertEqual(rows[0]["mint_y"], SOL)
+
+
+class DatapiTest(unittest.TestCase):
+    def test_new_meteora_api_parse(self):
+        data = {"data": [{"address": "P9", "name": "AAA-SOL", "tvl": 500000, "volume": {"24h": 3000000},
+                          "fees": {"24h": 90000}, "is_blacklisted": False,
+                          "token_x": {"address": "AAA"}, "token_y": {"address": SOL}}]}
+        urls = []
+        rows = pb._datapi_pools(get=lambda u: urls.append(u) or data)
+        self.assertIn("sort_by=fee_tvl_ratio_24h", urls[0])
+        self.assertEqual(rows[0]["fees_24h"], 90000)
+        got = pb.pools(get=lambda u: rows)
+        self.assertAlmostEqual(got[0]["day_yield"], 0.18)
