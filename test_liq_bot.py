@@ -162,3 +162,16 @@ class KaminoTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeadSliceTest(unittest.TestCase):
+    def test_scan_slice_reads_the_referrer(self):
+        c = KaminoTest()
+        c.setUp()
+        market = c.market
+        full = make_obligation(market, c.rsol, 10 ** 9, 100.0, c.rusdc, 80e6, 80.0, 85.0)
+        head = full[:k.OBLIGATION_HEAD]
+        ob = k.obligation(str(pk()), head)
+        self.assertEqual(ob["referrer"], k.SYSTEM)
+        with self.assertRaises(ValueError):
+            k._pk(full[:2300], 2288)

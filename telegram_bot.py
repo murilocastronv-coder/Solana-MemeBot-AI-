@@ -1257,7 +1257,9 @@ def liq_loop():
      try:liq_bot.top_up(rpc,get_address(),send,active_chat())
      except Exception as exc:logging.warning("liq top up: %s",type(exc).__name__)
     liq_bot.cycle(rpc,send,active_chat())
-  except Exception as exc:logging.exception("liq cycle failed: %s",type(exc).__name__)
+  except BaseException as exc:            # a panic of the Solana library is a BaseException: never kill the robot
+   if isinstance(exc,(KeyboardInterrupt,SystemExit)):raise
+   logging.exception("liq cycle failed: %s",type(exc).__name__)
   time.sleep(liq_bot.FAST_S)
 def liq_only_once():
  """Owner (Nov 16, later): the GRADUADOS robot is removed too (open positions keep their exits). Once."""

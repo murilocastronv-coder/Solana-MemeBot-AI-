@@ -25,7 +25,7 @@ SF = float(2 ** 60)                     # Kamino "scaled fraction": 60 fractiona
 
 OBLIGATION_SIZE = 3344
 RESERVE_SIZE = 8624
-OBLIGATION_HEAD = 2290                  # bytes read from an obligation (everything the bot uses)
+OBLIGATION_HEAD = 2320                  # bytes read from an obligation (everything the bot uses, up to the referrer)
 
 
 def _disc(kind, name):
@@ -57,7 +57,10 @@ def _u128(b, o):
 
 
 def _pk(b, o):
-    return str(Pubkey.from_bytes(bytes(b[o:o + 32])))
+    raw = bytes(b[o:o + 32])
+    if len(raw) != 32:
+        raise ValueError("account data too short")       # never let the Rust library panic (kills the thread)
+    return str(Pubkey.from_bytes(raw))
 
 
 def _real(k):
