@@ -187,7 +187,7 @@ def scan_launches(rpc, now=None, get_tx=None):
         return 0
     if not sigs:
         return 0
-    added = {}
+    added, creators = {}, []
     for sg_ in [x for x in sigs if not x.get("err")][:NEW_PER_CYCLE]:
         try:
             if get_tx:
@@ -201,7 +201,17 @@ def scan_launches(rpc, now=None, get_tx=None):
             m = b.get("mint")
             if m and m.endswith("pump"):
                 added[m] = int(sg_.get("blockTime") or now)
+                msg = ((tx or {}).get("transaction") or {}).get("message") or {}
+                keys = [k.get("pubkey") if isinstance(k, dict) else k for k in msg.get("accountKeys") or []]
+                if keys:
+                    creators.append((keys[0], m))      # owner (Nov 16): the creator goes to the dev analysis
                 break
+    if creators:
+        try:
+            import dev_bot
+            dev_bot.enqueue_creators(creators, now)
+        except Exception as exc:
+            logging.info("snipe creators: %s", type(exc).__name__)
     with _LOCK:
         dd = _load()
         dd["auth_last"] = sigs[0]["signature"]

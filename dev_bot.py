@@ -813,6 +813,32 @@ def _notify_tier(dev, was, st, send=None, chat=None):
         logging.exception("devbot notice failed")
 
 
+PRUNE_S = E("DEV_PRUNE_HOURS", 48) * 3600
+
+
+def enqueue_creators(pairs, now=None):
+    """Owner (Nov 16): every coin being launched NOW on pump.fun -> its creator goes to the analysis queue (the
+    audit dismisses a fresh wallet with one cheap call; only wallets with history get the full read). Wallets
+    dismissed for a short history are forgotten after PRUNE_S so the state does not grow without end."""
+    now = now or time.time()
+    with _LOCK:
+        d = _load()
+        n = 0
+        for dev, mint in pairs:
+            v = d["devs"].get(dev)
+            if v is None:
+                d["devs"][dev] = {"tokens_seen": [mint], "tier": "NA FILA", "rated": 0, "found_by": "live", "found_at": now}
+                n += 1
+            elif mint not in (v.get("tokens_seen") or []):
+                v["tokens_seen"] = ((v.get("tokens_seen") or []) + [mint])[-20:]
+        old = [k for k, v in d["devs"].items() if v.get("found_by") == "live" and v.get("tier") == "MONITORADO"
+               and str(v.get("why") or "").startswith("carteira com pouco histórico") and now - float(v.get("rated") or 0) > PRUNE_S]
+        for k in old:
+            d["devs"].pop(k, None)
+        _save(d)
+    return n
+
+
 def relink_once():
     """Owner (Nov 16): the good devs dropped for an empty wallet go back in line once, so the audit finds where
     their money went (follow the funds)."""
