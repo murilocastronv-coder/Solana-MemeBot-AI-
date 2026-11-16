@@ -280,3 +280,23 @@ class OldCoinsTest(Tmp):
         self.assertIn("90", c["coins"][MINT]["snaps"])
         rep = sbt.report(c, created - 10, created + 10, sbt.OLD_AGES)
         self.assertIn("1h30+", sbt.text(rep))
+
+
+class GradTest(Tmp):
+    def test_complete_flag_trade_and_report(self):
+        import base64
+        import grad_backtest as gb
+        raw = bytearray(60)
+        raw[48] = 1
+        done = base64.b64encode(bytes(raw)).decode()
+        rpc = lambda m, p: {"value": [{"data": [done, "base64"]}, {"data": [base64.b64encode(bytes(60)).decode(), "base64"]}]}
+        mints = ["So11111111111111111111111111111111111111112", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"]
+        self.assertEqual(gb.completed(rpc, mints), {mints[0]: True, mints[1]: False})
+        e = {"grad": NOW, "path": [[NOW + 40, 1.0], [NOW + 100, 1.3], [NOW + 200, 1.6]]}
+        r = gb.trade(e, 30, ("sl20 tp50", 0.20, 0.50, 0, 0, 240))
+        self.assertEqual(r[2], "alvo")
+        g = {"points": {"1": 2}, "launch": {"A": NOW, "B": NOW}, "complete": {"A": True, "B": False},
+             "coins": {"A": e}}
+        txt, ok = gb.report(g, NOW, 1)
+        self.assertIn("GRADUOU", txt)
+        self.assertFalse(ok)
