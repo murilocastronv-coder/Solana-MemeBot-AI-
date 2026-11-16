@@ -142,7 +142,7 @@ def keyboard():
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
-  [{"text":"💸 Saque","callback_data":"wallet_withdraw"},{"text":"🔑 Exportar chave privada","callback_data":"wallet_export"}]]
+  [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -419,21 +419,8 @@ def wallet_action(chat,action):
   if action=="/start" and not owner:return
  if action=="/start" and not owner:
   send(chat,"👛 SUA CARTEIRA DO BOT\n"+address+"\n\nEla é só sua: cada conta do Telegram tem a própria carteira.",kb);return
- if action in ("wallet_export","/exportar_chave"):
-  if not owner:
-   send(chat,"🔒 A exportação de chave privada é só para o dono do bot.",kb);return
-  EXPORT_ASK[str(chat)]=time.time()
-  send(chat,"🔑 EXPORTAR CHAVE PRIVADA\nCarteira: "+address+"\n\n⚠️ Quem tiver essa chave controla TODO o saldo da carteira."
-   "\n• Nunca mande para ninguém (nem para \"suporte\").\n• A mensagem com a chave será APAGADA em "+str(EXPORT_DELETE_S)+" s."
-   "\n• Copie e importe na Phantom: Adicionar conta › Importar chave privada.\n\nConfirmar em até 2 min?",
-   [[{"text":"✅ Sim, mostrar a chave","callback_data":"wallet_export_ok"},{"text":"❌ Cancelar","callback_data":"wallet_export_no"}]]);return
- if action in ("wallet_export_ok","wallet_export_no"):
-  asked=EXPORT_ASK.pop(str(chat),0)
-  if action=="wallet_export_no" or not owner:
-   send(chat,"❌ Exportação cancelada.",kb);return
-  if time.time()-asked>120:
-   send(chat,"⌛ Confirmação expirada. Toque de novo em 🔑 Exportar chave privada.",kb);return
-  export_private_key_message(chat);return
+ if action in ("wallet_export","wallet_export_ok","wallet_export_no","/exportar_chave"):
+  send(chat,"🔒 A exportação de chave privada foi DESATIVADA no bot, para todas as contas.",kb);return
  if action in ("/sacar","wallet_withdraw"):
   send(chat,"💸 SAQUE\nA exportação de chave privada está desativada e o bot ainda não faz saques automáticos.\nPara sacar, fale com o dono do bot.\nSua carteira: "+address,kb);return
  if action in ("/depositar","/deposito","wallet_deposit"):
@@ -456,31 +443,6 @@ def wallet_action(chat,action):
    send(chat,"👛 Sua carteira: "+address+"\nNão foi possível consultar o saldo agora.",kb)
   return
  send(chat,"👛 SUA CARTEIRA DO BOT\n"+address,kb)
-EXPORT_ASK={}
-EXPORT_DELETE_S=120
-def export_private_key_message(chat):
- """Owner only: send the main wallet's private key once, then delete that message.
- Goes straight to the Telegram API (not send()): never recorded on the panel, logs or dedup cache."""
- if not authorized(chat):return
- try:address,secret=user_wallets._private_key(chat)
- except Exception as exc:
-  logging.warning("private key export failed: %s",type(exc).__name__)
-  request_api("sendMessage",chat_id=chat,text="⛔ Não foi possível exportar a chave agora.");return
- text=("🔑 CHAVE PRIVADA (base58) — "+address+"\n\n"+secret+"\n\nToque no botão 📋 Copiar chave (ou segure a chave e copie)."
-  "\nEsta mensagem será apagada em "+str(EXPORT_DELETE_S)+" s.")
- start=text.index(secret)
- # no protect_content: it would block copying the text. copy_text = one tap copies the key (Telegram 7.11+)
- r=request_api("sendMessage",chat_id=chat,text=text,disable_web_page_preview=True,
-  entities=[{"type":"code","offset":len(text[:start].encode("utf-16-le"))//2,"length":len(secret)}],
-  reply_markup={"inline_keyboard":[[{"text":"📋 Copiar chave","copy_text":{"text":secret}}]]})
- del secret,text
- mid=((r or {}).get("result") or {}).get("message_id")
- if mid:
-  def wipe():
-   time.sleep(EXPORT_DELETE_S)
-   try:request_api("deleteMessage",chat_id=chat,message_id=mid)
-   except Exception:logging.warning("could not delete the private key message")
-  threading.Thread(target=wipe,daemon=True).start()
 WITHDRAW={}
 def owner_withdraw(chat,action,text):
  """Owner's withdrawal of SOL from the bot wallet: address -> amount -> confirm button -> send."""

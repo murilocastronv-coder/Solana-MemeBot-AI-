@@ -5,8 +5,8 @@
 - Every other Telegram account gets its own new wallet the first time it uses the bot,
   stored encrypted on the persistent disk (user_wallets/<chat_id>.json, key derived from
   BOT_WALLET_ENCRYPTION_PASSPHRASE with scrypt). A wallet is never shared or reused.
-- Only the bot owner can export the main wallet's private key (Telegram button, with
-  confirmation; the message is deleted after 60 s). Other accounts' keys are never exported.
+- Private keys are never exported (the export feature was removed); they are only used by the
+  bot to sign the account's own trades.
 Never log, print or send a private key or a password.
 """
 import base64
