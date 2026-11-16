@@ -317,14 +317,19 @@ class RecentResultTests(unittest.TestCase):
         return a, c._load()["wallets"][a]
 
     def test_profitable_last_two_weeks_is_ok(self):
-        a, w = self.audit([1.5, 1.4, 0.9, 1.6] * 10, days_ago=4)  # 40 trades, 30 wins, +US$ 1400
+        a, w = self.audit([1.5, 1.4, 0.9, 1.6] * 10, days_ago=4)  # 40 trades, 75% wins, but +35% in the week
         self.assertEqual(w["audit"]["trades_recent"], 40)
         self.assertAlmostEqual(w["audit"]["pnl_recent"], 1400.0, places=0)
+        self.assertEqual(c.result_status(w), "bad")                  # owner (Nov 16): needs >= +400% in the week
+        b, w2 = self.audit([6.0, 5.5, 0.9, 7.0] * 8, days_ago=4)   # 32 trades, 75% wins, ~+360% -> still under 400%
+        self.assertEqual(c.result_status(w2), "bad")
+        a, w = self.audit([6.0, 6.5, 0.9, 7.0] * 8, days_ago=4)    # ~+410% in the week, 75% wins, 32 trades
+        self.assertGreaterEqual(w["audit"]["roi_week"], 4.0)
         self.assertEqual(c.result_status(w), "ok")
         self.assertEqual(c.holder_status(w)[0], "ok")
 
     def test_needs_40_trades_in_9_days(self):
-        self.assertEqual((c.RESULT_MIN_TRADES, c.RESULT_DAYS), (40, 9))
+        self.assertEqual((c.RESULT_MIN_TRADES, c.RESULT_DAYS, c.RESULT_MIN_WIN, c.ROI_WEEK_MIN), (25, 30, 0.70, 4.0))   # owner, Nov 16
         a, w = self.audit([1.5] * 39, days_ago=3)        # profitable, but only 39 trades
         self.assertEqual(c.result_status(w), "bad")
         b, w2 = self.audit([1.5] * 16, days_ago=12)      # good, but 12 days ago (outside 9 days)

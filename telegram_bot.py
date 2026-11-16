@@ -151,15 +151,14 @@ def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
- # owner (Nov 16, later): ONLY the liquidation work (small lending markets); everything else removed
- return [[{"text":"💧 Liquidação: status","callback_data":"lq_status"}],
-  [{"text":"💵 Liquidação: LIGAR REAL","callback_data":"lq_real"},{"text":"👀 Só observar","callback_data":"lq_obs"}],
-  [{"text":"⏸️ Liquidação: desligar","callback_data":"lq_off"}],
-  [{"text":"💧 BACKTEST LIQUIDAÇÃO (mercados menores, 50/60 USD)","callback_data":"lq_bt"}],
-  [{"text":"📈 BACKTEST FUNDING (Drift, US$ 60)","callback_data":"fr_bt"}],
-  [{"text":"🌊 BACKTEST LIQUIDEZ SOL/USDC (US$ 60)","callback_data":"lp_bt"}],
-  [{"text":"🏊 Pools: status","callback_data":"pl_status"},{"text":"▶️ Pools: ligar (simulação)","callback_data":"pl_on"}],
-  [{"text":"💵 Pools: LIGAR REAL","callback_data":"pl_real"},{"text":"⏸️ Pools: desligar","callback_data":"pl_off"}]]
+ # owner (Nov 16, evening): ONLY the copy trade with real money; every other robot removed
+ return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
+  [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
+  [{"text":"📋 Carteiras copiadas","callback_data":"copy_wallets"},{"text":"📦 Posições","callback_data":"copy_positions"}],
+  [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
+  [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
+  [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
+  [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -853,9 +852,7 @@ def startup_notice():
    ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
     if st["positions"] else ""),keyboard())
   return
- try:txt=__import__("liq_bot").status_text()
- except Exception:txt=""
- send(chat,"🔄 Bot reiniciado (deploy).\n"+txt,keyboard())
+ send(chat,"🔄 Bot reiniciado (deploy).\n"+status_text(),keyboard())
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
@@ -1292,6 +1289,29 @@ def pool_loop():
    if pool_bot.enabled():pool_bot.cycle(send,active_chat())
   except Exception as exc:logging.warning("pool cycle failed: %s: %s",type(exc).__name__,str(exc)[:150])
   time.sleep(pool_bot.CYCLE_S)
+def copy_only_v2_once():
+ """Owner (Nov 16, evening): remove every robot (liquidation, pools, graduados, DEV, sniper, signals) and run only
+ the copy trade with real money. Done once; afterwards the owner's buttons decide."""
+ for step in (lambda:__import__("liq_bot").set_enabled(False),
+              lambda:__import__("pool_bot").set_enabled(False),
+              lambda:__import__("grad_bot").set_enabled(False),
+              lambda:__import__("dev_bot").set_enabled(False),
+              lambda:__import__("snipe_bot").stop_live(),
+              lambda:__import__("rocket_bot").set_enabled(False),
+              lambda:__import__("signals").set_enabled(False),
+              lambda:__import__("signals").set_auto(False)):
+  try:step()
+  except Exception:logging.exception("copy only: step failed")
+ try:
+  import copy_trader
+  d=copy_trader._load()
+  if not d.get("copy_v2"):
+   d["copy_v2"]=True;copy_trader._save(d)
+   try:live_engine.start()
+   except Exception:logging.exception("copy only: engine not started")
+   copy_trader.set_mode(True,True)
+   logging.info("copy trade on with real money (owner, Nov 16 evening)")
+ except Exception:logging.exception("copy only failed")
 def liq_only_once():
  """Owner (Nov 16, later): the GRADUADOS robot is removed too (open positions keep their exits). Once."""
  try:
@@ -1385,13 +1405,16 @@ def loop():
   threading.Thread(target=btc_live_loop,daemon=True).start()
   threading.Thread(target=btc_dip_loop,daemon=True).start()
  else:
-  grad_only_once()         # owner (Nov 16, later): every other robot off
-  liq_only_once()          # owner (Nov 16, later): GRADUADOS off too; only the liquidation backtest
+  copy_only_v2_once()      # owner (Nov 16, evening): only the copy trade, real money; every other robot off
   try:__import__("snipe_backtest").mark_interrupted()
   except Exception:logging.exception("snipe backtest state")
-  threading.Thread(target=grad_loop,daemon=True).start()
-  threading.Thread(target=liq_loop,daemon=True).start()
-  threading.Thread(target=pool_loop,daemon=True).start()
+  threading.Thread(target=copy_loop,daemon=True).start()
+  try:
+   import copy_trader
+   copy_trader.start_buy_worker()        # real copy buys run one by one off the wallet-reading loop
+  except Exception:logging.exception("copy buy worker failed to start")
+  threading.Thread(target=audit_loop,daemon=True).start()
+  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
