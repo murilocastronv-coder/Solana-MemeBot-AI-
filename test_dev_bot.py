@@ -351,10 +351,10 @@ class DevHunterTest(unittest.TestCase):
         s = db.split_stats(closed, ["A"])
         self.assertEqual((s["n_own"], s["win_own"], s["n_other"], s["win_other"]), (2, 0.5, 1, 1.0))
 
-    def test_min_win_control_never_below_80(self):
+    def test_min_win_control_never_below_70(self):
         import dev_hunter as dh
         with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
-            self.assertEqual(dh.set_cfg(0.5, 5), {"min_win": 0.8, "min_trades": 20})
+            self.assertEqual(dh.set_cfg(0.5, 5), {"min_win": 0.7, "min_trades": 20})
 
 
 class DevFundsTest(unittest.TestCase):

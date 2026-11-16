@@ -45,8 +45,8 @@ DEV_AUDIT_TX = int(E("DEV_AUDIT_TX", 300))
 DEV_REAUDIT_S = E("DEV_REAUDIT_HOURS", 12) * 3600
 WATCH_S = E("DEV_WATCH_HOURS", 24) * 3600
 # Approval (second spec): hit rate, closed trades, distinct tokens, profit factor, no rug pattern
-TIERS = (("ELITE", 0.90, 30, 2.5), ("PREMIUM", 0.85, 25, 2.0), ("APROVADO", 0.80, 20, 2.0))
-MIN_TOKENS = int(E("DEV_MIN_TOKENS", 10))  # DEV Hunter prompt (Nov 15): history of at least 10 tokens
+TIERS = (("ELITE", 0.90, 30, 2.5), ("PREMIUM", 0.85, 25, 2.0), ("APROVADO", E("DEV_MIN_WIN", 0.70), 20, 2.0))  # owner (Nov 16): 70%
+MIN_TOKENS = int(E("DEV_MIN_TOKENS", 5))   # owner (Nov 16): at least 5 different tokens
 MAX_DEV_DD = E("DEV_MAX_DRAWDOWN", 0)      # 0 = off (prompt criteria)
 MAX_TOP_COIN_SHARE = E("DEV_MAX_TOP_COIN_SHARE", 0.60)     # profit from one coin only = excluded
 RUG_LOSS = 0.80
@@ -628,9 +628,9 @@ MIN_BALANCE_SOL = E("DEV_MIN_BALANCE_SOL", 0.5)
 LINK_MIN_SOL = E("DEV_LINK_MIN_SOL", 0.5)
 LINK_MAX_SIGS = int(E("DEV_LINK_MAX_TX", 300))     # a fresh wallet (exchanges / old wallets are not followed)
 LINK_DAYS = E("DEV_LINK_DAYS", 14)
-MIN_LAUNCH_DAYS = E("DEV_MIN_LAUNCH_DAYS", 7)
+MIN_LAUNCH_DAYS = E("DEV_MIN_LAUNCH_DAYS", 2)    # owner (Nov 16): 2 days
 BT_TX = int(E("DEV_BT_TX", 300))
-DEV_CALLS_PER_HOUR = int(E("DEV_HISTORY_CALLS_PER_HOUR", 100))   # Helius history calls (~100 credits each)
+DEV_CALLS_PER_HOUR = int(E("DEV_HISTORY_CALLS_PER_HOUR", 300))   # owner (Nov 16): 3x faster   # Helius history calls (~100 credits each)
 _CALLS = []
 
 
@@ -848,7 +848,7 @@ def relink_once():
             return 0
         n = 0
         for v in d["devs"].values():
-            if str(v.get("why") or "").startswith("carteira sem fundo") and v.get("win", 0) >= 0.8:
+            if str(v.get("why") or "").startswith("carteira sem fundo") and v.get("win", 0) >= 0.7:
                 v["rated"] = 0
                 n += 1
         d["relink_v1"] = True
@@ -861,7 +861,7 @@ def retier_once():
     that pass now go back in line so the audit checks the same-wallet rule (and notifies) before they are copied."""
     with _LOCK:
         d = _load()
-        if d.get("retier_v2"):
+        if d.get("retier_v3"):
             return 0
         n = 0
         for v in d["devs"].values():
@@ -873,7 +873,7 @@ def retier_once():
                 n += 1
             elif t not in TIER_OK and v.get("tier") in TIER_OK:
                 v.update(tier=t, why=why)
-        d["retier_v2"] = True
+        d["retier_v3"] = True
         _save(d)
     note("critérios do prompt: " + str(n) + " DEVs voltaram para a fila para conferir a carteira")
     return n
@@ -1349,7 +1349,7 @@ def status_text():
              " · drawdown máx " + format(m["max_dd"] * 100, ".1f") + "% · taxas US$ " + format(m["fees"], ".2f"),
              "🔎 Tokens vigiados: " + str(len(d["tokens"])) + " · DEVs aprovados vigiados em qualquer moeda nova · DEVs analisados: " +
              str(sum(1 for v in devs.values() if v.get("rated"))) + " · aprovados: " + str(len(ok)),
-             "⚙️ US$ " + format(buy_usd(), "g") + " por compra · DEV: acerto ≥ 80%, ≥ 20 ops, PF ≥ 2, lucro, sem rug, mesma carteira · liquidez ≥ US$ " +
+             "⚙️ US$ " + format(buy_usd(), "g") + " por compra · DEV: acerto ≥ 70%, ≥ 20 ops, ≥ 5 moedas, PF ≥ 2, lucro, sem rug, mesma carteira ≥ 2 dias, com fundo · liquidez ≥ US$ " +
              format(MIN_LIQ / 1000, ".0f") + " mil · volume 5 min ≥ US$ " + format(MIN_VOL_5M / 1000, ".0f") +
              " mil · " + ("vende só quando o DEV vende (a mesma parte), sem stop e sem alvo" if MIRROR_DEV and STOP_LOSS <= 0
                           else "stop −" + format(STOP_LOSS * 100, ".0f") + "% · TP +" + format(TP1 * 100, ".0f") + "%")]
