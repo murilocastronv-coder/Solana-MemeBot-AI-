@@ -4,7 +4,8 @@ For the devs with a good record (hit rate >= 80%, >= 20 trades, approved or drop
 take their own launches that the bot already knows (launch mints + the dev's real buy / sell times), and replay
 them with REAL on-chain trades (Helius getTransactionsForAddress):
 - entry = price of the first trade at least DELAY seconds after the dev's buy, for DELAYS (2 s, 10 s, 30 s);
-- exit = the same share the dev sold, at the price of the first trade after each dev sale ("vende junto com o DEV");
+- exit = the same share the dev sold, at the first trade by SOMEONE ELSE at least DELAY seconds after each dev sale
+  (the bot reacts with the same delay; it never gets the dev's own price);
   a coin with no trade after the dev's sale = total loss;
 - costs: SNIPE_BT_COST per side + network fee; US$ per trade = the sniper's.
 Honest limits: a 2-second entry assumes the bot sees the launch in ~1 s (WebSocket); today the bot checks every
@@ -18,8 +19,8 @@ import dev_bot as db
 import snipe_backtest as sbt
 
 DELAYS = (2, 10, 30)
-MAX_LAUNCHES = int(db.E("LAUNCH_TEST_MAX", 200))
-MAX_S = db.E("LAUNCH_TEST_MINUTES", 4) * 60
+MAX_LAUNCHES = int(db.E("LAUNCH_TEST_MAX", 150))
+MAX_S = db.E("LAUNCH_TEST_MINUTES", 8) * 60
 _RUNNING = threading.Lock()
 
 
@@ -41,35 +42,40 @@ def candidates(d=None):
     return out[:MAX_LAUNCHES]
 
 
-def _first_price(rpc, mint, t, sol_usd, window=900):
-    txs = sbt.history_call(rpc, mint, gte=t, lte=t + window, order="asc", limit=20)
-    for tx in txs:
-        tr = sbt.trade_of(tx, mint, sol_usd)
-        if tr and tr[0] >= t:
-            return tr[1], tr[0]
-    return None, None
+def _trades(rpc, mint, gte, until, sol_usd, pages=5):
+    """Trades [(t, price, payer)] from gte, paging until `until` (or `pages` pages)."""
+    out, start = [], int(gte)
+    for _ in range(pages):
+        txs = sbt.history_call(rpc, mint, gte=start, lte=int(until) + 3600, order="asc", limit=100)
+        for tx in txs:
+            tr = sbt.trade_of(tx, mint, sol_usd)
+            keys = sbt._keys(tx)
+            if tr:
+                out.append((tr[0], tr[1], keys[0] if keys else ""))
+        if len(txs) < 100 or not out or out[-1][0] > until:
+            break
+        start = out[-1][0]
+    return sorted(set(out), key=lambda x: x[0])
 
 
-def replay(rpc, mint, opened, sells, sol_usd):
-    """{delay: return} for one launch (None when there is no price at the entry)."""
-    txs = sbt.history_call(rpc, mint, gte=int(opened) - 2, lte=int(opened) + 120, order="asc", limit=100)
-    trades = sorted((x for x in (sbt.trade_of(tx, mint, sol_usd) for tx in txs) if x), key=lambda x: x[0])
-    exits = []
-    for t, frac in sells[:4]:
-        px, _ = _first_price(rpc, mint, int(t), sol_usd)
-        exits.append((float(frac), px))
+def replay(rpc, mint, opened, sells, sol_usd, dev=""):
+    """{delay: return} for one launch (None when there is no price at the entry). The bot reacts with the SAME delay
+    to the dev's sales and sells at the first trade by someone else after that (never at the dev's own price)."""
+    first = _trades(rpc, mint, int(opened) - 2, opened + max(DELAYS) + 5, sol_usd)
+    sale_trades = [_trades(rpc, mint, int(t), int(t) + max(DELAYS) + 5, sol_usd, pages=2) for t, _ in sells[:4]]
     out = {}
     for delay in DELAYS:
-        entry = next((x[1] for x in trades if x[0] >= opened + delay), None)
+        entry = next((px for t, px, who in first if t >= opened + delay and who != dev), None)
         if not entry:
             out[delay] = None
             continue
         left, got = 1.0, 0.0
-        for i, (frac, px) in enumerate(exits):
-            part = left if i == len(exits) - 1 else left * min(frac, 1.0)
+        for i, ((t_sale, frac), trades) in enumerate(zip(sells[:4], sale_trades)):
+            px = next((p for t, p, who in trades if t >= t_sale + delay and who != dev), None)
+            part = left if i == len(sale_trades) - 1 else left * min(float(frac), 1.0)
             got += part * ((px or 0.0) / entry)        # no trade after the dev's sale = nothing back (rug)
             left -= part
-        out[delay] = (1 + (got - 1)) * (1 - sbt.COST) ** 2 - 1
+        out[delay] = got * (1 - sbt.COST) ** 2 - 1
     return out
 
 
@@ -80,7 +86,7 @@ def run(rpc, sol_usd, should_stop=None):
         if time.time() - began > MAX_S or (should_stop and should_stop()):
             break
         try:
-            rows.append((dev, mint, replay(rpc, mint, opened, sells, sol_usd)))
+            rows.append((dev, mint, replay(rpc, mint, opened, sells, sol_usd, dev)))
         except Exception as exc:
             logging.warning("launch test %s: %s: %s", mint[:8], type(exc).__name__, str(exc)[:120])
     return rows
