@@ -8,8 +8,8 @@ What runs:
    are refused (no confusion with other projects); a logo is drawn by the bot (PNG, shapes + colours from the name).
 3. Owner approval on Telegram (APROVAR / REJEITAR). Approving records a SIMULATED launch with the estimated cost -
    nothing is created on-chain. The real Pump.fun launch is a later step, only after the owner decides it.
-Rules kept: no copy of existing coins or brands, no fake volume, no automatic selling, creator holds nothing (no dev
-buy), max MAX_PER_DAY proposals per day, budget limits stored for the real step.
+Rules kept: no copy of existing coins or brands, no fake volume, no automatic selling, the creator buys DEV_BUY_PCT% at launch and it
+is disclosed in the texts, max MAX_PER_DAY proposals per day, budget limits stored for the real step.
 """
 import hashlib
 import json
@@ -33,6 +33,15 @@ LAUNCH_COST_SOL = E("MEME_LAUNCH_COST_SOL", 0.02)      # Pump.fun create + rent 
 BUDGET_PER_LAUNCH = E("MEME_BUDGET_USD", 5)
 DAILY_BUDGET = E("MEME_DAILY_BUDGET_USD", 10)
 RESERVE_USD = E("MEME_RESERVE_USD", 20)
+DEV_BUY_PCT = E("MEME_DEV_BUY_PCT", 10)                # owner (Nov 16): the creator buys 10% of each coin at launch
+# Pump.fun bonding curve at creation: 30 SOL virtual / 1,073,000,000 virtual tokens, 1,000,000,000 supply
+CURVE_SOL, CURVE_TOKENS, SUPPLY = 30.0, 1_073_000_000.0, 1_000_000_000.0
+
+
+def dev_buy_sol(pct=None):
+    """SOL needed to buy pct% of the supply right at creation (constant-product curve, before fees)."""
+    t = SUPPLY * (DEV_BUY_PCT if pct is None else pct) / 100
+    return CURVE_SOL * t / (CURVE_TOKENS - t) if t < CURVE_TOKENS else float("inf")
 STOP = {"the", "of", "and", "coin", "token", "sol", "solana", "on", "a", "to", "in", "for", "is", "inu", "official", "ai", "x"}
 KEY = "memecoin_ai"
 _LOCK = threading.RLock()
@@ -115,9 +124,9 @@ def _own_generator(theme, rnd):
     name = rnd.choice([rnd.choice(PREFIX) + " " + t, t + " " + rnd.choice(SUFFIX), rnd.choice(PREFIX) + t + rnd.choice(SUFFIX)])
     letters = re.sub(r"[^A-Z]", "", name.upper())
     symbol = (letters[:2] + t.upper()[:3])[:6] if len(letters) >= 2 else t.upper()[:5]
-    desc = (name + " is a community memecoin on Solana inspired by today's \"" + theme + "\" wave. No team allocation, "
+    desc = (name + " is a community memecoin on Solana inspired by today's \"" + theme + "\" wave. The creator bought " + format(DEV_BUY_PCT, "g") + "% of the supply at launch, "
             "no promises - just memes, fun and an open community. Not financial advice.")
-    posts = ["Meet $" + symbol + " 🚀 a fresh community memecoin on Solana. Fair launch on Pump.fun, creator holds 0. "
+    posts = ["Meet $" + symbol + " 🚀 a fresh community memecoin on Solana. Launched on Pump.fun; the creator bought " + format(DEV_BUY_PCT, "g") + "% at launch. "
              "Not financial advice.",
              "$" + symbol + " community is live - share your best " + theme + " memes! Contract: <CA> · DYOR."]
     return {"name": name, "symbol": symbol, "description": desc, "posts": posts}
@@ -131,7 +140,7 @@ def _claude(theme, examples):
               "Do NOT reuse or imitate these existing coins: " + ", ".join(examples) + ", nor any brand, celebrity or "
               "trademark. Return only JSON: {\"name\": str (2-3 words), \"symbol\": str (3-6 capital letters), "
               "\"description\": str (English, 2 sentences, say it is a community meme with no promises of profit), "
-              "\"posts\": [2 short English launch posts, no profit promises, mention creator holds 0]}")
+              "\"posts\": [2 short English launch posts, no profit promises, disclose that the creator bought " + format(DEV_BUY_PCT, "g") + "% of the supply at launch]}")
     r = requests.post("https://api.anthropic.com/v1/messages", timeout=40, headers={
         "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
         json={"model": os.getenv("MEME_AI_MODEL", "claude-haiku-5-5"), "max_tokens": 600,
@@ -217,8 +226,10 @@ def decide(pid, approve, sol_usd=None):
         prop["status"] = "approved" if approve else "rejected"
         if approve:
             cost = LAUNCH_COST_SOL * float(sol_usd or 0)
+            cost = (LAUNCH_COST_SOL + dev_buy_sol()) * float(sol_usd or 0)
             d["launches"] = (d["launches"] or [])[-99:] + [{"id": pid, "name": prop["name"], "symbol": prop["symbol"],
-                                                            "at": time.time(), "cost_usd": round(cost, 2), "simulated": True}]
+                                                            "at": time.time(), "cost_usd": round(cost, 2), "simulated": True,
+                                                            "dev_buy_pct": DEV_BUY_PCT}]
         _save()
         return prop
 
@@ -228,8 +239,23 @@ def proposal_text(p):
             "Nome: " + p["name"] + "\nSímbolo: $" + p["symbol"] + "\nTema em alta: \"" + p["theme"] + "\" (moedas com volume: " +
             ", ".join(p.get("theme_examples") or []) + ")\nTexto por: " + p.get("source", "?") + "\n\n" + p["description"] +
             "\n\n📣 Posts de lançamento:\n• " + "\n• ".join(p.get("posts") or []) +
-            "\n\n💰 Custo estimado do lançamento real: ~" + format(LAUNCH_COST_SOL, "g") + " SOL · criador fica com 0 moedas · "
-            "sem venda automática\n⚠️ APROVAR agora só registra uma SIMULAÇÃO: nada é criado na blockchain.")
+            "\n\n" + dev_buy_line() + "\n⚠️ APROVAR agora só registra uma SIMULAÇÃO: nada é criado na blockchain.")
+
+
+def dev_buy_line(sol_usd=None):
+    sol = dev_buy_sol()
+    px = float(sol_usd or 0)
+    if not px:
+        try:
+            px = float(__import__("copy_trader")._sol_usd() or 0)
+        except Exception:
+            px = 0.0
+    usd = (sol + LAUNCH_COST_SOL) * px
+    over = px and usd > BUDGET_PER_LAUNCH
+    return ("💰 Lançamento: ~" + format(LAUNCH_COST_SOL, "g") + " SOL de criação + compra do criador de " + format(DEV_BUY_PCT, "g") +
+            "% das moedas = ~" + format(sol, ".2f") + " SOL" + (" (~US$ " + format(usd, ",.0f") + ")" if px else "") +
+            " · a compra do criador aparece para todos (transparência) · sem venda automática" +
+            ("\n⛔ Acima do orçamento de US$ " + format(BUDGET_PER_LAUNCH, "g") + " por lançamento: no real esse lançamento seria bloqueado." if over else ""))
 
 
 def status_text(sol_usd=None):
@@ -239,7 +265,8 @@ def status_text(sol_usd=None):
          "⚙️ Máx. " + str(MAX_PER_DAY) + " por dia · orçamento por lançamento US$ " + format(BUDGET_PER_LAUNCH, "g") + " · por dia US$ " +
          format(DAILY_BUDGET, "g") + " · reserva US$ " + format(RESERVE_USD, "g") + " (para o lançamento real, ainda desligado)",
          "📊 Propostas: " + str(len(d["proposals"])) + " · aprovadas (simuladas): " + str(len(d["launches"])) +
-         " · custo simulado US$ " + format(sum(x.get("cost_usd", 0) for x in d["launches"]), ".2f")]
+         " · custo simulado US$ " + format(sum(x.get("cost_usd", 0) for x in d["launches"]), ".2f"),
+         dev_buy_line(sol_usd)]
     try:
         tr = trends()
         if tr:
