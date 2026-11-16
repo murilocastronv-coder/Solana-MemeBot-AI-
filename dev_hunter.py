@@ -56,6 +56,8 @@ def results(d=None):
         if v.get("tier") in db.TIER_OK:
             continue
         why = str(v.get("why") or v.get("tier"))
+        if why.startswith("carteira sem fundo"):
+            why = "carteira sem fundo"
         key = why.split("(")[0].split(":")[0].strip()[:40]
         reasons[key] = reasons.get(key, 0) + 1
     return {"found": len(hunted), "analysed": len(analysed), "approved": len(ok), "rejected": len(analysed) - len(ok),
@@ -72,7 +74,7 @@ def mark_interrupted():
         _set_job(status="interrompido", stage="o servidor reiniciou — toque de novo (o que já achou fica salvo)")
 
 
-def hunt(rpc, days, max_cand, now=None, history=None, should_stop=None, on_progress=None):
+def hunt(rpc, days, max_cand, now=None, history=None, should_stop=None, on_progress=None, balance=None):
     """Find up to max_cand new creator wallets in the last `days`. Returns how many new ones were queued."""
     import snipe_backtest as sbt
     history = history or sbt.history_call
@@ -97,13 +99,25 @@ def hunt(rpc, days, max_cand, now=None, history=None, should_stop=None, on_progr
             if mint and keys:
                 new.append((keys[0], mint))
         if new:
+            known = set(db._load()["devs"])
+            fresh = []
+            for dev, mint in dict(new).items():
+                if dev in known:
+                    continue                             # duplicates / already known: no second analysis
+                bal = (balance or db.balance_sol)(rpc, dev)   # owner: only wallets with funds (1 cheap call)
+                fresh.append((dev, mint, bal))
             with db._LOCK:
                 d = db._load()
-                for dev, mint in new:
+                for dev, mint, bal in fresh:
                     if dev in d["devs"] or found >= max_cand:
-                        continue                         # duplicates / already known: no second analysis
+                        continue
+                    if bal is not None and bal < db.MIN_BALANCE_SOL:
+                        d["devs"][dev] = {"tokens_seen": [mint], "tier": "MONITORADO", "rated": now, "found_by": "hunter",
+                                          "found_at": now, "balance_sol": bal,
+                                          "why": "carteira sem fundo: " + format(bal, ".2f") + " SOL"}
+                        continue
                     d["devs"][dev] = {"tokens_seen": [mint], "tier": "NA FILA", "rated": 0, "found_by": "hunter",
-                                      "found_at": now}
+                                      "found_at": now, "balance_sol": bal}
                     found += 1
                 db._save(d)
         if on_progress:

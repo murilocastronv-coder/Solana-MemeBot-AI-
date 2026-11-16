@@ -95,7 +95,7 @@ class BacktestTest(Tmp):
                                  for i in range(20)]}
             return {"data": [swap_tx(gte + i * 30, MINT, 1000, -int((0.06 + i * 0.01) * 1e9)) for i in range(40)]}
 
-        with mock.patch.object(sbt, "SAMPLE_POINTS", 2), mock.patch.object(sbt, "DAYS", 60):
+        with mock.patch.object(sbt, "SAMPLE_POINTS", 24), mock.patch.object(sbt, "DAYS", 1):
             c = sbt.download(rpc, 150, NOW, created - 10, created + 86400)
             self.assertTrue(c["coins"])
             rep = sbt.report(c, created - 10, created + 86400)

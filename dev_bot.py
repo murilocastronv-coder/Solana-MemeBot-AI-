@@ -227,6 +227,9 @@ def tier(s):
         return "MONITORADO", "lucro concentrado em uma moeda"
     if MAX_DEV_DD and s["max_dd"] > MAX_DEV_DD:
         return "MONITORADO", "drawdown alto"
+    if "balance_sol" in s and s["balance_sol"] < MIN_BALANCE_SOL:
+        return "MONITORADO", ("carteira sem fundo: " + format(s["balance_sol"], ".2f") + " SOL (mín. " +
+                              format(MIN_BALANCE_SOL, "g") + " SOL)")
     if "launches" in s and (s["launches"] < MIN_LAUNCHES or s.get("launch_days", 0) < MIN_LAUNCH_DAYS):
         return "MONITORADO", ("troca de carteira: só " + str(s["launches"]) + " moedas criadas com esta carteira em " +
                               format(s.get("launch_days", 0), ".0f") + " dias (mín. " + str(MIN_LAUNCHES) + " em " +
@@ -619,6 +622,8 @@ def emergency_stop(send=None, chat=None, now=None):
 DEV_FIRST_TX = int(E("DEV_FIRST_TX", 100))
 # owner (Nov 15): only devs that always launch with the SAME wallet (not throw-away wallets)
 MIN_LAUNCHES = int(E("DEV_MIN_LAUNCHES", 5))
+# owner (Nov 16): only wallets WITH FUNDS (a dev with an empty wallet cannot buy, so there is nothing to copy)
+MIN_BALANCE_SOL = E("DEV_MIN_BALANCE_SOL", 0.5)
 MIN_LAUNCH_DAYS = E("DEV_MIN_LAUNCH_DAYS", 7)
 BT_TX = int(E("DEV_BT_TX", 300))
 DEV_CALLS_PER_HOUR = int(E("DEV_HISTORY_CALLS_PER_HOUR", 100))   # Helius history calls (~100 credits each)
@@ -666,6 +671,16 @@ def launch_stats(dev, d=None, launches_fn=None):
     ts = sorted(t for t in times.values() if t)
     return {"launches": len(times), "launch_days": round((ts[-1] - ts[0]) / 86400, 1) if len(ts) > 1 else 0.0,
             "launch_mints": [m for m in times if not str(m).startswith("t")][-300:]}
+
+
+def balance_sol(rpc, wallet):
+    """SOL in the wallet now, or None when the RPC does not answer."""
+    try:
+        r = rpc("getBalance", [wallet])
+        lamports = r.get("value") if isinstance(r, dict) else r
+        return round(float(lamports or 0) / 1e9, 4)
+    except Exception:
+        return None
 
 
 def wilson(wins, n, z=1.96):
@@ -756,7 +771,7 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
     # devs approved by the rating (tier) before the same-wallet rule existed: re-checked first, once
     # (by tier, not approved(): with a follower rule every dev counts as approved and they would loop forever)
     tiers = ("ELITE", "PREMIUM", "APROVADO")
-    old_ok = [(k, v) for k, v in d["devs"].items() if v.get("tier") in tiers and "launches" not in v
+    old_ok = [(k, v) for k, v in d["devs"].items() if v.get("tier") in tiers and ("launches" not in v or "balance_sol" not in v)
               and now - float(v.get("rated") or 0) >= 60]
     queue = old_ok + [(k, v) for k, v in sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
                       if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S and (k, v) not in old_ok]
@@ -787,6 +802,9 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
                     stats = rate_dev(closed, now)
                 if stats["tier"] in ("ELITE", "PREMIUM", "APROVADO"):
                     _spend()
+                    bal = balance_sol(rpc, dev)
+                    if bal is not None:
+                        stats["balance_sol"] = bal
                     stats.update(launch_stats(dev, d, launches_fn))
                     stats.update(split_stats(closed, stats.get("launch_mints")))
                     stats["tier"], stats["why"] = tier(stats)
