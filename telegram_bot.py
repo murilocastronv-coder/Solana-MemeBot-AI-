@@ -150,20 +150,13 @@ def btc_keyboard():
 def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
- # owner (Nov 15): only the DEV robot buttons (wallet: type /saldo, /depositar, /sacar)
- return [[{"text":"🎯 Sniper 24h: status","callback_data":"sn_status"}],
-  [{"text":"▶️ Ligar sniper","callback_data":"sn_on"},{"text":"⏸️ Pausar sniper","callback_data":"sn_off"}],
-  [{"text":"🧪 Backtest sniper 2 meses","callback_data":"sn_bt"},{"text":"⏹️ Cancelar","callback_data":"sn_btx"}],
-  [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
-  [{"text":"🚀 Testar compra no lançamento","callback_data":"lt_run"}],
+ # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
+ return [[{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
+  [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
+  [{"text":"🧪 TESTAR ESTRATÉGIA DEV (3 meses)","callback_data":"st_run"},{"text":"⏹️ Parar teste","callback_data":"st_x"}],
   [{"text":"🕵️ Buscar DEVs 7d","callback_data":"hunt7"},{"text":"30d","callback_data":"hunt30"},{"text":"90d","callback_data":"hunt90"}],
   [{"text":"📋 DEVs encontrados","callback_data":"hunt_list"},{"text":"⏹️ Parar busca","callback_data":"hunt_x"}],
-  [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
-  [{"text":"✅ Usar estratégia vencedora","callback_data":"dv_apply"},{"text":"↩️ Regra original","callback_data":"dv_orig"}],
-  [{"text":"▶ BACKTEST 5 MESES","callback_data":"dv_bt150"}],
-  [{"text":"🧪 6 meses","callback_data":"dv_bt180"},{"text":"🧪 12 meses","callback_data":"dv_bt365"},
-   {"text":"⏹️ Cancelar","callback_data":"dv_btx"}],
   [{"text":"🧹 Encerrar posições DEV","callback_data":"dv_close"}],
   [{"text":"💵 DEV dinheiro real","callback_data":"dv_real"},{"text":"🧪 DEV simulação","callback_data":"dv_sim"}]]
 def user_keyboard():
@@ -320,6 +313,12 @@ def handle(update):
    except Exception as exc:r=type(exc).__name__+": "+str(exc)[:120]
    if r:send(chat,"⛔ Não comprei: "+r,keyboard())
   run_async(run_buy);return
+ if action in ("st_run","st_x"):
+  import dev_strategy_test as dst
+  if action=="st_x":dst.cancel();send(chat,"⏹️ Parando o teste (o que já calculou fica salvo).",keyboard());return
+  why=dst.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
+  send(chat,("🧪 Testando a estratégia DEV nos últimos 3 meses com preços REAIS: DEV aprovado compra → o bot compra 5/10/30 s "
+   "depois → vende junto com o DEV. Leva até ~8 min; cada toque continua de onde parou.") if not why else "⛔ "+why,keyboard());return
  if action=="lt_run":
   import launch_test
   why=launch_test.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
@@ -1172,7 +1171,8 @@ def snipe_loop():
  time.sleep(60)
  while True:
   try:
-   if os.getenv("SOLANA_RPC_URL") and snipe_bot.enabled():snipe_bot.cycle(send,active_chat(),rpc=DEV_RPC.setdefault("rpc",dex_rpc()))
+   # owner (Nov 16): only the DEV robot - the sniper does not buy any more; its launch scan only finds new creators
+   if os.getenv("SOLANA_RPC_URL"):snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
 def dev_real_once():

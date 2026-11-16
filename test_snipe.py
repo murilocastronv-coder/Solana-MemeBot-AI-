@@ -165,3 +165,33 @@ class LiveCreatorsTest(Tmp):
             db._save(d)
             db.enqueue_creators([], NOW + db.PRUNE_S + 10)
             self.assertNotIn("CREATORZ", db._load()["devs"])       # dismissed fresh wallets are forgotten
+
+
+class DevStrategyTestTest(Tmp):
+    def test_only_devs_approved_by_past_trades_and_real_replay(self):
+        import dev_bot as db
+        import dev_strategy_test as dst
+        with mock.patch.object(db, "_path", return_value=pathlib.Path(self.tmp.name) / "d.json"):
+            hist = [{"mint": "C" + str(i) + "pump", "opened": NOW - (40 - i) * 86400, "closed": NOW - (40 - i) * 86400 + 600,
+                     "result_pct": 0.5, "pnl_usd": 5, "cost_usd": 20, "entry_usd": 0.0001,
+                     "sells": [[NOW - (40 - i) * 86400 + 600, 1.0]]} for i in range(40)]
+            d = db._load()
+            d["devs"] = {"GOODDEV": {"hist": hist}}
+            db._save(d)
+            evs, ok = dst.events(now=NOW, days=90)
+            self.assertEqual(len(evs), 20)                  # the first 20 trades only build the record
+            self.assertEqual(ok, {"GOODDEV"})
+
+            def rpc(method, params):
+                addr, opt = params
+                gte = opt["filters"]["blockTime"]["gte"]
+                opened = max(h["opened"] for h in hist if h["opened"] <= gte + 2)
+                rel = gte - opened                           # seconds after the dev's buy
+                if rel >= 600:                               # after the dev sold: 1.5x
+                    return {"data": [swap_tx(gte + 40 + k, addr, 1_000_000, -int(0.15 * 1e9)) for k in range(3)]}
+                return {"data": [swap_tx(gte + 2 + k * 3, addr, 1_000_000, -int(0.1 * 1e9)) for k in range(20)]}
+            c = dst.download(rpc, 150, evs[:3])
+            s = dst.simulate(evs, c, 10)
+            self.assertEqual(s["trades"], 3)
+            self.assertGreater(s["pnl"], 0)
+            self.assertIn("TESTE DA ESTRATÉGIA DEV", dst.text(evs, ok, c, NOW))
