@@ -44,3 +44,11 @@ class MemeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DevBuyTest(unittest.TestCase):
+    def test_ten_percent_cost_and_budget_warning(self):
+        self.assertAlmostEqual(mc.dev_buy_sol(10), 30 * 1e8 / (1.073e9 - 1e8), places=6)   # ~3.08 SOL
+        line = mc.dev_buy_line(sol_usd=150.0)
+        self.assertIn("10%", line)
+        self.assertIn("Acima do orçamento", line)
