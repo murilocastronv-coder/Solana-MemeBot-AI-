@@ -151,11 +151,8 @@ def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
- # owner (Nov 16, later): ONLY the GRADUADOS robot (wallet: type /saldo, /depositar, /sacar)
- return [[{"text":"🎓 Graduados: status","callback_data":"gd_status"}],
-  [{"text":"🧪 BACKTEST v2: velas de 1 min + filtros","callback_data":"gr_bt2"}],
-  [{"text":"🎓 Graduados: LIGAR REAL","callback_data":"gd_on"},{"text":"⏸️ Graduados: desligar","callback_data":"gd_off"}],
-  [{"text":"🎓 BACKTEST: MOEDA QUE GRADUOU (3 meses)","callback_data":"gr_bt"}]]
+ # owner (Nov 16, later): ONLY the liquidation work (small lending markets); everything else removed
+ return [[{"text":"💧 BACKTEST LIQUIDAÇÃO (mercados menores, 50/60 USD)","callback_data":"lq_bt"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -355,6 +352,12 @@ def handle(update):
    send(chat,pre+grad_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Graduados: "+str(exc)[:200],keyboard())
   return
+ if action=="lq_bt":
+  import liq_backtest,snipe_backtest
+  why=liq_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,send,chat)
+  send(chat,("💧 Backtest de LIQUIDAÇÃO: lê os mercados menores de empréstimo (Kamino isolados e pools da Save/Solend), acha cada "
+   "liquidação dos últimos 3 meses, quanto o liquidante pagou e ganhou, quantos bots disputam, e calcula o máximo que US$ 50 e "
+   "US$ 60 teriam ganhado. Primeiro relatório em ~3 min; o final chega sozinho (até ~1 h).") if not why else "⛔ "+why,keyboard());return
  if action=="gr_bt2":
   import grad_candles
   why=grad_candles.start(send,chat)
@@ -809,8 +812,7 @@ def startup_notice():
    ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
     if st["positions"] else ""),keyboard())
   return
- try:txt=__import__("grad_bot").status_text()
- except Exception:txt=""
+ txt="💧 Só o backtest de liquidação (mercados menores) está no menu."
  send(chat,"🔄 Bot reiniciado (deploy).\n"+txt,keyboard())
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
@@ -1221,6 +1223,14 @@ def snipe_loop():
     else:snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
+def liq_only_once():
+ """Owner (Nov 16, later): the GRADUADOS robot is removed too (open positions keep their exits). Once."""
+ try:
+  import grad_bot
+  d=grad_bot._load()
+  if not d.get("off_v1"):
+   d["off_v1"]=True;d["enabled"]=False;grad_bot._save()
+ except Exception:logging.exception("liq only failed")
 def grad_only_once():
  """Owner (Nov 16, later): only the GRADUADOS robot. Every other robot stops buying (open positions keep their exits)."""
  for step in (lambda:__import__("copy_trader").set_mode(False),
@@ -1245,7 +1255,7 @@ def grad_loop():
  rpc=None
  while True:
   try:
-   if os.getenv("SOLANA_RPC_URL"):
+   if os.getenv("SOLANA_RPC_URL") and (grad_bot.enabled() or grad_bot._open()):   # off: only manage open positions
     rpc=rpc or snipe_backtest.fast_rpc(rps=5)
     snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
     grad_bot.cycle(send,active_chat(),rpc=rpc)
@@ -1306,7 +1316,8 @@ def loop():
   threading.Thread(target=btc_live_loop,daemon=True).start()
   threading.Thread(target=btc_dip_loop,daemon=True).start()
  else:
-  grad_only_once()         # owner (Nov 16, later): only the GRADUADOS robot; every other robot off
+  grad_only_once()         # owner (Nov 16, later): every other robot off
+  liq_only_once()          # owner (Nov 16, later): GRADUADOS off too; only the liquidation backtest
   try:__import__("snipe_backtest").mark_interrupted()
   except Exception:logging.exception("snipe backtest state")
   threading.Thread(target=grad_loop,daemon=True).start()
