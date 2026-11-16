@@ -99,10 +99,38 @@ def set_real(on):
 
 
 # ---------------------------------------------------------------- data
+HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+           "Accept": "application/json"}
+PAGED = "https://dlmm-api.meteora.ag/pair/all_with_pagination?page={p}&limit=100&sort_key=feetvlratio&order_by=desc&hide_low_tvl=10000"
+
+
+def _fetch_pools(url):
+    """Meteora's pool list; logs the HTTP status when it is not JSON (blocked / down) and tries the paged list."""
+    r = requests.get(url, headers=HEADERS, timeout=60)
+    try:
+        return r.json()
+    except ValueError:
+        logging.warning("pool api %s: HTTP %s, %s", url[-30:], r.status_code, (r.text or "")[:80].replace("\n", " "))
+    out = []
+    for page in range(5):
+        r = requests.get(PAGED.format(p=page), headers=HEADERS, timeout=30)
+        try:
+            data = r.json()
+        except ValueError:
+            logging.warning("pool api paged: HTTP %s, %s", r.status_code, (r.text or "")[:80].replace("\n", " "))
+            break
+        rows = (data.get("pairs") or data.get("data") or []) if isinstance(data, dict) else data
+        if not rows:
+            break
+        out += rows
+    if not out:
+        raise RuntimeError("API da Meteora não respondeu com a lista de pools")
+    return out
+
+
 def pools(get=None):
     """[{address, name, coin, quote, liq, vol, fees24, day_yield}] - Meteora DLMM pools against SOL/USDC/USDT."""
-    get = get or (lambda u: requests.get(u, timeout=60).json())
-    rows = get(METEORA) or []
+    rows = (get or _fetch_pools)(METEORA) or []
     if isinstance(rows, dict):
         rows = rows.get("pairs") or rows.get("data") or []
     out = []
@@ -183,7 +211,14 @@ def cycle(send=None, chat=None, now=None, get=None, fetch=None, safety=None):
     d = _load()
     if not d.get("enabled"):
         return None
-    cands = pools(get)
+    try:
+        cands = pools(get)
+    except Exception as exc:
+        if now - d.get("api_err_at", 0) > 3600:
+            d["api_err_at"] = now
+            note("não consegui a lista de pools da Meteora (" + type(exc).__name__ + "): tento de novo a cada 10 min")
+        _save()
+        return d.get("pos")
     by_addr = {p["address"]: p for p in cands}
     pos = d.get("pos")
     if pos:
