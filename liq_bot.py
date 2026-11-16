@@ -52,7 +52,7 @@ def volatile(ob):
 def watch_from(ob):
     return VOLATILE_WATCH_LTV if volatile(ob) else WATCH_LTV
 TRIGGER_LTV = E("LIQ_TRIGGER_LTV", 0.995)
-MAX_MARKETS = int(E("LIQ_MAX_MARKETS", 20))
+MAX_MARKETS = int(E("LIQ_MAX_MARKETS", 60))              # owner: all Kamino markets (~40)
 CU_LIMIT = int(E("LIQ_CU_LIMIT", 1_000_000))
 CU_PRICE = int(E("LIQ_CU_PRICE_MICROLAMPORTS", 50_000))
 JITO_TIP = int(E("LIQ_JITO_TIP_LAMPORTS", 20_000))
@@ -134,21 +134,25 @@ def day_pnl(now=None):
 
 # ---------------------------------------------------------------- markets / scan
 def markets(fetch=None):
-    """[(name, address)] - Kamino's MAIN market first, then the small markets where liquidations happened."""
+    """[(name, address)] - owner (Nov 16): ALL Kamino markets. Main market first, then the ones where the backtest
+    found liquidations (most first), then every other market Kamino lists."""
     import snipe_backtest as sbt
-    out = []
+    main, rest = [], []
     try:
         for m in (fetch or sg._get)(KAMINO_API) or []:
-            if m.get("isPrimary") and m.get("lendingMarket"):
-                out.append((str(m.get("name") or "Main"), m["lendingMarket"]))
+            a = m.get("lendingMarket")
+            if a:
+                (main if m.get("isPrimary") else rest).append((str(m.get("name") or a[:6]), a))
     except Exception as exc:
         logging.warning("liq markets api: %s", type(exc).__name__)
     bt = sbt._get("liq_bt_cache", {})
     names = {a: n for p, n, a in bt.get("markets") or [] if p == "Kamino"}
-    ranked = sorted(((len(v), a) for a, v in (bt.get("liqs") or {}).items() if a in names), reverse=True)
-    small = [(names[a], a) for _, a in ranked] or list((n, a) for a, n in names.items())
-    have = {a for _, a in out}
-    out += [x for x in small if x[1] not in have]
+    ranked = [(names[a], a) for _, a in sorted(((len(v), a) for a, v in (bt.get("liqs") or {}).items() if a in names), reverse=True)]
+    out, have = [], set()
+    for n, a in main + ranked + rest + list((n, a) for a, n in names.items()):
+        if a not in have:
+            have.add(a)
+            out.append((n, a))
     return out[:MAX_MARKETS]
 
 
