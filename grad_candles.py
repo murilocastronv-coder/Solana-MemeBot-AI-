@@ -66,6 +66,8 @@ def _ohlcv(pool, before, fetch):
     url = (sg.GECKO + "/networks/solana/pools/" + pool + "/ohlcv/minute?aggregate=1&before_timestamp=" + str(int(before)) +
            "&limit=1000&currency=usd")
     data = fetch(url) or {}
+    if not isinstance(data, dict):
+        return []
     rows = ((data.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
     return sorted([[int(r[0])] + [float(x) for x in r[1:6]] for r in rows], key=lambda r: r[0])
 
@@ -274,39 +276,50 @@ def start(send=None, chat=None, fetch=None, first_report_s=170):
             began = time.time()
             sent_first = False
             dirty = set()
+            stats = {"com velas": 0, "sem velas": 0, "erro": 0, "limite": 0}
             for m in grads:
                 if m in store:
                     continue
                 if time.time() - began > BG_MAX_S:
                     break
-                if not sent_first and time.time() - began > first_report_s:
-                    _save(store_sh(store), dirty)
-                    dirty.clear()
-                    txt, _, _ = report(store, launch, len(grads))
-                    if send and chat:
-                        send(chat, txt)
-                    sent_first = True
-                try:
-                    store[m] = candles(m, launch.get(m, 0), fetch)
-                except sg.GeckoBusy:
-                    time.sleep(30)
-                    continue
-                except Exception as exc:
-                    code = getattr(getattr(exc, "response", None), "status_code", None)
-                    if code == 429:
-                        time.sleep(60)
-                        continue
-                    logging.info("grad candles %s: %s", m[:8], type(exc).__name__)
-                    store[m] = []
-                dirty.add(_shard(m))
-                if len(dirty) and int(time.time() - began) % 60 < 3:
+                for attempt in range(6):                   # rate limited: wait and try the SAME coin again
+                    if not sent_first and time.time() - began > first_report_s:
+                        _save(store_sh(store), dirty)
+                        dirty.clear()
+                        txt, _, _ = report(store, launch, len(grads))
+                        if send and chat:
+                            send(chat, txt + "\n📥 até agora: " + ", ".join(k + " " + str(v) for k, v in stats.items()))
+                        sent_first = True
+                    try:
+                        store[m] = candles(m, launch.get(m, 0), fetch)
+                        stats["com velas" if store[m] else "sem velas"] += 1
+                        break
+                    except sg.GeckoBusy:
+                        stats["limite"] += 1
+                        time.sleep(20)
+                    except Exception as exc:
+                        code = getattr(getattr(exc, "response", None), "status_code", None)
+                        if code == 429:
+                            stats["limite"] += 1
+                            time.sleep(30)
+                            continue
+                        stats["erro"] += 1
+                        logging.warning("grad candles %s: %s: %s", m[:8], type(exc).__name__, str(exc)[:150])
+                        store[m] = []
+                        break
+                if m in store:
+                    dirty.add(_shard(m))
+                n = sum(stats.values())
+                if n % 25 == 0:
+                    logging.warning("grad candles progress: %s", stats)
+                if dirty and int(time.time() - began) % 60 < 3:
                     _save(store_sh(store), dirty)
                     dirty.clear()
             _save(store_sh(store), dirty or {_shard(m) for m in store})
             txt, ok, best = report(store, launch, len(grads), final=True)
             sbt._put("grad_v2_winner", {"ok": ok, "rule": _rule_json(best) if best else None, "at": time.time()})
             if send and chat:
-                send(chat, txt)
+                send(chat, txt + "\n📥 download: " + ", ".join(k + " " + str(v) for k, v in stats.items()))
         except Exception as exc:
             logging.exception("grad candles failed")
             if send and chat:
