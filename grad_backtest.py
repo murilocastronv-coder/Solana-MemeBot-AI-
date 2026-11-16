@@ -170,7 +170,7 @@ def report(g, now, total_points=POINTS):
         start, end = min(e["grad"] for e in rows), max(e["grad"] for e in rows) + 1
     cut = start + (end - start) * 0.7
     L = ["🎓 BACKTEST: COMPRAR MOEDA QUE GRADUOU NA PUMP.FUN (dados REAIS, 3 meses)",
-         "Lançamentos da amostra: " + str(len(g["launch"])) + " em " + str(len(g["points"])) + " de " + str(total_points) +
+         "Lançamentos da amostra: " + str(len(g["launch"])) + " em " + str(min(len(g["points"]), total_points)) + " de " + str(total_points) +
          " momentos · verificados: " + str(len(g["complete"])) + " · graduaram: " + str(grads) + " (com preço depois: " +
          str(len(rows)) + ") · US$ " + format(USD, "g") + " por compra · máx. " + str(MAX_OPEN) + " abertas · custos " +
          format(COST * 100, ".0f") + "% por lado"]
@@ -194,7 +194,7 @@ def report(g, now, total_points=POINTS):
         ok = te["n"] >= 30 and te["pnl"] > 0 and (te["pf"] is None or te["pf"] >= 1.3)
     else:
         L.append("🏆 Ainda sem combinação com 10+ operações no treino.")
-    left = (total_points - len(g["points"])) + (len(g["launch"]) - len(g["complete"])) + (grads - len(g["coins"]))
+    left = max(0, total_points - len(g["points"])) + (len(g["launch"]) - len(g["complete"])) + (grads - len(g["coins"]))
     if left > 0:
         L.append("⏳ PARCIAL: ainda falta baixar parte da amostra — toque de novo (continua de onde parou).")
     L.append("✅ Deu lucro confiável fora da amostra." if ok else
@@ -216,7 +216,7 @@ def start(rpc, sol_usd, send=None, chat=None):
             g = sbt._get("grad_bt_cache", {"points": {}, "launch": {}, "complete": {}, "coins": {}})
             began = time.time()
             _DL[0] = began + MAX_S
-            end = now - 2 * 86400
+            end = (now - 2 * 86400) // 86400 * 86400      # fixed for the day: every tap continues the same sample
             step = DAYS * 86400 / POINTS
             pts = [int(end - DAYS * 86400 + step * (i + 0.5)) // 3600 * 3600 for i in range(POINTS)]
             try:

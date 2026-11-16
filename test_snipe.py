@@ -300,3 +300,24 @@ class GradTest(Tmp):
         txt, ok = gb.report(g, NOW, 1)
         self.assertIn("GRADUOU", txt)
         self.assertFalse(ok)
+
+
+class GradBotTest(Tmp):
+    def test_detect_then_buy_after_delay(self):
+        import grad_bot as gbot
+        gbot._MEM.clear()
+        gbot._load()["enabled"] = True
+        gbot.add_launches({"MintA": NOW - 600, "MintB": NOW - 600})
+        flags = lambda rpc, ms: {m: m == "MintA" for m in ms}
+        bought = []
+        buy = lambda p, m, s, send, chat: bought.append(m) or True
+        fetch = lambda url: [{"dexId": "pumpswap", "baseToken": {"symbol": "A"}, "liquidity": {"usd": 50000}, "marketCap": 90000}]
+        self.assertIsNone(gbot.cycle(rpc=object(), now=NOW, buy=buy, fetch=fetch, completed=flags))
+        self.assertEqual(gbot.cycle(rpc=object(), now=NOW + 35, buy=buy, fetch=fetch, completed=flags), "MintA")
+        self.assertEqual(gbot.cycle(rpc=object(), now=NOW + 50, buy=buy, fetch=fetch, completed=flags), None)
+        self.assertEqual(bought, ["MintA"])
+        self.assertEqual(gbot.exit_signal(0.74, 1.0, 10)[1], "stop_loss")
+        self.assertEqual(gbot.exit_signal(1.2, 1.6, 10)[1], "take_profit")
+        self.assertEqual(gbot.exit_signal(1.1, 1.2, 10)[0], "hold")
+        self.assertEqual(gbot.exit_signal(1.1, 1.2, 241 * 60)[1], "time_stop")
+        gbot._MEM.clear()

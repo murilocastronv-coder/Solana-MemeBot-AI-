@@ -241,6 +241,11 @@ def scan_launches(rpc, now=None, get_tx=None):
                 if keys:
                     creators.append((keys[0], m))      # owner (Nov 16): the creator goes to the dev analysis
                 break
+    try:
+        import grad_bot
+        grad_bot.add_launches(added)          # owner (Nov 16): graduation robot watches every launch
+    except Exception as exc:
+        logging.info("snipe grad feed: %s", type(exc).__name__)
     if creators:
         try:
             import dev_bot
