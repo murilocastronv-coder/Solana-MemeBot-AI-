@@ -200,7 +200,7 @@ def live_prices(rpc, reserves):
     out = {}
     for a, r in reserves.items():
         px = k.scope_price(prices.get(r["scope"], {}), r.get("chain") or [0, 0, 0, 0]) if k._real(r["scope"]) else None
-        out[a] = dict(r, price=px) if px else r
+        out[a] = dict(r, price=px, price_ref=r["price"]) if px else r
     return out
 
 

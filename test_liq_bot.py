@@ -89,7 +89,7 @@ class KaminoTest(unittest.TestCase):
         self.assertAlmostEqual(self.res[self.rsol]["rate"], 1.0, places=6)
         self.assertEqual(len(self.ob["deposits"]), 1)
         self.assertAlmostEqual(k.ltv_now(self.ob, self.res), 80 / 85, places=4)
-        self.res[self.rsol]["price"] = 90.0                       # SOL fell 10%: limit 76.5 < debt 80
+        self.res[self.rsol].update(price=90.0, price_ref=100.0)   # live oracle 10% under the reserve: limit 76.5 < debt 80
         self.assertGreater(k.ltv_now(self.ob, self.res), 1.0)
 
     def test_plan_and_instructions(self):
