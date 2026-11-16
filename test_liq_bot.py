@@ -216,3 +216,22 @@ class ExactHealthTest(unittest.TestCase):
         c.res[c.rsol]["threshold_pct"] = 0
         p, why = lb.plan(c.ob, c.res, 100 * 10 ** 6)
         self.assertIsNone(p)
+
+
+class CalibrationTest(unittest.TestCase):
+    def test_gap_is_learned_and_drops_from_watch(self):
+        import base64
+        c = KaminoTest()
+        c.setUp()
+        lb._TRIED.clear()
+        lb._CAL.clear()
+        lb._WATCH[c.ob["address"]] = c.ob
+        refreshed = make_obligation(c.market, c.rsol, 10 ** 9, 100.0, c.rusdc, 80e6, 80.0, 100.0)    # Kamino: 0.80
+
+        def rpc(method, params):
+            if method == "simulateTransaction":
+                return {"value": {"err": None, "accounts": [{"data": [base64.b64encode(refreshed).decode(), "base64"]}]}}
+            raise AssertionError(method)
+        self.assertIsNone(lb.attempt(rpc, c.ob, c.res, 1.0, signer=Keypair()))
+        self.assertAlmostEqual(lb._CAL[c.ob["address"]], 0.8, places=3)
+        self.assertNotIn(c.ob["address"], lb._WATCH)
