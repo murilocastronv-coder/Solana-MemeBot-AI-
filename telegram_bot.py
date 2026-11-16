@@ -152,6 +152,7 @@ def keyboard():
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
  return [[{"text":"🎯 BACKTEST SNIPER (3 meses, ~3 min)","callback_data":"sn_bt"}],
+  [{"text":"🎯 BACKTEST SNIPER — moedas com 1h30+","callback_data":"sn_bt_old"}],
   [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Ligar sniper vencedor","callback_data":"sn_apply"}],
   [{"text":"⏸️ Desligar sniper","callback_data":"sn_off"}],
   [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
@@ -353,6 +354,11 @@ def handle(update):
    for part in split_message("\n".join(lines)):send(chat,part,keyboard())
   except Exception as exc:send(chat,"⛔ DEV Hunter: "+str(exc)[:200],keyboard())
   return
+ if action=="sn_bt_old":
+  import snipe_backtest
+  why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat,old=True)
+  send(chat,("🎯 Backtest do SNIPER para moedas com 1h30+ de vida (3 meses, dados reais): olha as moedas que sobreviveram com "
+   "1h30, 2h, 3h e 4h e testa as 40 combinações. Relatório em ~3 min; toque de novo se vier PARCIAL.") if not why else "⛔ "+why,keyboard());return
  if action=="sn_apply":
   import snipe_bot
   r=snipe_bot.apply_winner()

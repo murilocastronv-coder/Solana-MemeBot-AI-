@@ -52,7 +52,7 @@ def apply_winner():
         return None
     with _LOCK:
         d = _load()
-        d["cfg"] = {"entry": w["entry"], "exit": w["exit"]}
+        d["cfg"] = {"entry": w["entry"], "exit": w["exit"], "ages": w.get("ages")}
         d["enabled"], d["live_ok"] = True, True
         _save(d)
     _use_cfg(d["cfg"])
@@ -71,7 +71,9 @@ def live_ok():
 
 
 def _use_cfg(cfg):
-    global MIN_VOL_5M, MIN_BUY_RATIO, MIN_UP_5M, MAX_UP_5M, STOP, ARM, DROP, MAX_HOLD_MIN
+    global MIN_VOL_5M, MIN_BUY_RATIO, MIN_UP_5M, MAX_UP_5M, STOP, ARM, DROP, MAX_HOLD_MIN, MIN_AGE_MIN, MAX_AGE_MIN
+    if cfg and cfg.get("ages"):
+        MIN_AGE_MIN, MAX_AGE_MIN = cfg["ages"][0], cfg["ages"][1] + 30      # winner for coins with 1h30+ of life
     if cfg and cfg.get("entry") and cfg.get("exit"):
         MIN_VOL_5M, MIN_BUY_RATIO, MIN_UP_5M, MAX_UP_5M = cfg["entry"]
         STOP, ARM, DROP, MAX_HOLD_MIN = cfg["exit"]

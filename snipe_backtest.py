@@ -29,6 +29,7 @@ DAYS = sg._f("SNIPE_BT_DAYS", 90)          # owner (Nov 16): 3 months
 SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 180))      # 2 per day over 3 months (same 12 h grid)
 DECISION_MIN = (5, 10, 15, 20, 30, 45)
 PER_POINT = int(sg._f("SNIPE_BT_PER_POINT", 15))      # launches per sampled moment
+OLD_AGES = (90, 120, 180, 240)      # owner (Nov 16): coins that already lived 1h30+
 DELAY_S = sg._f("SNIPE_BT_DELAY_S", 20)
 COST = sg._f("SNIPE_BT_COST_PER_SIDE", 0.03)                  # swap fee + slippage on young coins
 NET_FEE = sg._f("SNIPE_BT_NET_FEE_USD", 0.02)
@@ -247,6 +248,38 @@ def _passes_any(snap):
                for mv, mr, mu, mx in GRID_ENTRY)
 
 
+def refill_old(rpc, c, sol_usd, began, max_s, now, should_stop=None):
+    """Coins already downloaded that were alive in their first 45 min: snapshots at 1h30 / 2h / 3h / 4h of life and
+    the price paths after the ones some entry would buy (coins dead early are skipped: they rarely come back)."""
+    n = 0
+    for m, coin in c["coins"].items():
+        if coin.get("dead") or coin.get("old_done") or coin["created"] + max(OLD_AGES) * 60 + 3600 > now:
+            continue
+        for age in OLD_AGES:
+            if (should_stop and should_stop()) or time.time() - began > max_s:
+                return n
+            t = coin["created"] + age * 60
+            try:
+                if str(age) not in coin["snaps"]:
+                    txs = history_call(rpc, m, gte=t - 300, lte=t, order="desc", limit=100)
+                    coin["snaps"][str(age)] = snapshot([x for x in (trade_of(tx, m, sol_usd) for tx in txs) if x], t)
+                snap = coin["snaps"][str(age)]
+                if snap is None:
+                    coin["old_done"] = True              # no trades at that age any more: no later entries
+                    break
+                if str(age) not in coin["after"] and _passes_any(snap):
+                    coin["after"][str(age)] = fetch_path(rpc, m, t, sol_usd)
+            except TimeoutError:
+                return n
+            except Exception as exc:
+                logging.warning("snipe bt old %s: %s", m[:8], type(exc).__name__)
+                break
+        else:
+            coin["old_done"] = True
+        n += 1
+    return n
+
+
 def refill(rpc, c, sol_usd, began, max_s, should_stop=None):
     """Coins downloaded before the entry grid grew: fetch only the price paths the new entries need."""
     n = 0
@@ -351,7 +384,7 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
 
 
 # ---------------------------------------------------------------- simulation
-def simulate(c, start, end, entry, exit_, usd=None, max_open=None, daily_loss=None):
+def simulate(c, start, end, entry, exit_, usd=None, max_open=None, daily_loss=None, ages=None):
     usd = float(usd or sb.USD)
     max_open = int(max_open or sb.MAX_OPEN)
     daily_loss = sb.DAILY_LOSS if daily_loss is None else daily_loss
@@ -361,7 +394,7 @@ def simulate(c, start, end, entry, exit_, usd=None, max_open=None, daily_loss=No
     for m, coin in c["coins"].items():
         if not start <= coin["created"] < end:
             continue
-        for age in DECISION_MIN:
+        for age in ages or DECISION_MIN:
             snap = coin["snaps"].get(str(age))
             if snap is None:
                 break
@@ -420,12 +453,12 @@ def _summary(trades, start, end):
             "pf": round(gw / gl, 2) if gl > 0 else None, "max_dd": round(dd, 3), "worst": round(min(pnl, default=0), 2)}
 
 
-def report(c, start, end):
+def report(c, start, end, ages=None):
     cut = start + (end - start) * 0.7
     grid = []
     for en in GRID_ENTRY:
         for ex in GRID_EXIT:
-            tr, _, _ = simulate(c, start, cut, en, ex)
+            tr, _, _ = simulate(c, start, cut, en, ex, ages=ages)
             grid.append((tr, en, ex))
     ok = [g for g in grid if g[0]["trades"] >= 10]
     best = max(ok, key=lambda g: g[0]["pnl"]) if ok else None
@@ -434,13 +467,16 @@ def report(c, start, end):
            "alive": sum(1 for x in c["coins"].values() if start <= x["created"] < end and not x.get("dead")),
            "points": sum(1 for p in c["points"] if start <= int(p) < end), "total_points": len(sample_points(start, end)),
            "best": None, "live": {}}
-    lt = simulate(c, cut, end, *live)
-    lf = simulate(c, start, end, *live)
+    lt = simulate(c, cut, end, *live, ages=ages)
+    lf = simulate(c, start, end, *live, ages=ages)
     out["live"] = {"test": lt[0], "full": lf[0], "rejected": lf[2], "exits": _exits(lf[1])}
     if best:
-        bt = simulate(c, cut, end, best[1], best[2])
+        bt = simulate(c, cut, end, best[1], best[2], ages=ages)
         out["best"] = {"entry": best[1], "exit": best[2], "train": best[0], "test": bt[0]}
     out["trades"] = lf[1]
+    out["ages"] = list(ages or DECISION_MIN)
+    if ages:
+        out["alive"] = sum(1 for x in c["coins"].values() if start <= x["created"] < end and (x["snaps"].get(str(ages[0])) or None))
     return out
 
 
@@ -465,7 +501,8 @@ def verdict_ok(rep):
 
 
 def text(rep):
-    L = ["🎯 BACKTEST SNIPER — " + time.strftime("%d/%m/%Y", time.gmtime(rep["start"])) + " a " +
+    old = rep.get("ages") and rep["ages"][0] >= 60
+    L = ["🎯 BACKTEST SNIPER" + (" — MOEDAS COM 1h30+" if old else "") + " — " + time.strftime("%d/%m/%Y", time.gmtime(rep["start"])) + " a " +
          time.strftime("%d/%m/%Y", time.gmtime(rep["end"])),
          "Amostra REAL da blockchain: " + str(rep["coins"]) + " lançamentos da pump.fun (" + str(rep.get("alive", 0)) +
          " tiveram volume para o sniper olhar; o resto morreu logo) em " + str(rep["points"]) + " de " +
@@ -494,8 +531,10 @@ def text(rep):
     else:
         L.append("❌ Ainda não há ajuste com lucro confiável fora da amostra (precisa ≥ 30 ops no teste, lucro e PF ≥ 1,3). "
                  "O sniper fica DESLIGADO.")
+    if rep.get("old_left"):
+        L.append("⏳ PARCIAL: faltam " + str(rep["old_left"]) + " moedas vivas para olhar com 1h30+. Toque de novo (continua de onde parou).")
     left = rep.get("total_points", SAMPLE_POINTS) - rep["points"]
-    if left > 0:
+    if left > 0 and not rep.get("ages", [0])[0] >= 60:
         L.append("⏳ Resultado PARCIAL: faltam " + str(left) + " momentos da amostra. Toque de novo: cada toque baixa mais "
                  "~3 min e o resultado fica mais confiável.")
     L.append("⚠️ Amostra de lançamentos (não todos); preço do SOL constante; falhas de transação não simuladas. "
@@ -513,7 +552,7 @@ def mark_interrupted():
         _set_job(status="interrompido", stage="o servidor reiniciou — toque de novo para continuar de onde parou")
 
 
-def start(rpc, sol_usd, send=None, chat=None, now=None):
+def start(rpc, sol_usd, send=None, chat=None, now=None, old=False):
     if not _RUNNING.acquire(blocking=False):
         return "já tem um backtest do sniper rodando"
     if rpc is None:
@@ -532,15 +571,24 @@ def start(rpc, sol_usd, send=None, chat=None, now=None):
                          stage="momentos " + str(done) + "/" + str(total) + " · " + str(coins) + " moedas baixadas")
             DEADLINE[0] = time.time() + JOB_MAX_S
             try:
-                c = download(rpc, sol_usd, now, begin, end, _STOP.is_set, prog)
+                if old:
+                    c = cache()
+                    if refill_old(rpc, c, sol_usd, time.time(), JOB_MAX_S, now, _STOP.is_set):
+                        _put("snipe_bt_cache_v3", c)
+                else:
+                    c = download(rpc, sol_usd, now, begin, end, _STOP.is_set, prog)
             finally:
                 DEADLINE[0] = 0.0
-            rep = report(c, begin, end)
+            rep = report(c, begin, end, OLD_AGES if old else None)
+            if old:
+                left = sum(1 for x in c["coins"].values() if not x.get("dead") and not x.get("old_done")
+                           and x["created"] + max(OLD_AGES) * 60 + 3600 <= now)
+                rep["old_left"] = left
             txt = text(rep)
             _put("snipe_bt_runs", runs()[-4:] + [{"id": str(int(now)), "created": time.time(), "text": txt}])
             b = rep.get("best")
-            _put("snipe_bt_winner", {"ok": verdict_ok(rep), "entry": b["entry"], "exit": b["exit"], "test": b["test"]}
-                 if b else {"ok": False})
+            _put("snipe_bt_winner", {"ok": verdict_ok(rep), "entry": b["entry"], "exit": b["exit"], "test": b["test"],
+                                     "ages": [OLD_AGES[0], OLD_AGES[-1]] if old else None} if b else {"ok": False})
             _set_job(status="cancelado" if _STOP.is_set() else "pronto", progress=100 if not _STOP.is_set() else job().get("progress"),
                      stage="pronto", finished=time.time())
             sb.note("backtest: " + txt.split("\n")[3][:150])
