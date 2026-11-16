@@ -267,6 +267,11 @@ def cycle(send=None, chat=None, now=None, get=None, fetch=None, safety=None):
             note("não consegui a lista de pools da Meteora (" + type(exc).__name__ + "): tento de novo a cada 10 min")
         _save()
         return d.get("pos")
+    in_range = [c for c in cands if MIN_DAY_YIELD <= c["day_yield"] <= MAX_DAY_YIELD]
+    d["last_scan"] = {"at": now, "n": len(cands), "in_range": len(in_range),
+                      "best": [[c["name"], c["day_yield"]] for c in cands[:3]]}
+    logging.warning("pool scan: %d pools ok, %d in %.0f-%.0f%%/day, best %s", len(cands), len(in_range),
+                    MIN_DAY_YIELD * 100, MAX_DAY_YIELD * 100, [(c["name"], round(c["day_yield"] * 100, 1)) for c in cands[:3]])
     by_addr = {p["address"]: p for p in cands}
     pos = d.get("pos")
     if pos:
@@ -367,6 +372,12 @@ def status_text():
     tot = sum(c["result"] for c in closed)
     L.append("📊 " + str(len(closed)) + " pools fechadas · resultado " + format(tot, "+.2f") + " USD · capital simulado US$ " +
              format(float(d.get("cash") or CAPITAL) if not pos else value_now(pos, pos["last_price"]), ".2f"))
+    ls = d.get("last_scan")
+    if ls:
+        L.append("🔎 Última busca (" + time.strftime("%H:%M", time.gmtime(ls["at"])) + " UTC): " + str(ls["n"]) +
+                 " pools com liquidez e volume suficientes · " + str(ls["in_range"]) + " pagando " + format(MIN_DAY_YIELD * 100, ".0f") +
+                 "–" + format(MAX_DAY_YIELD * 100, ".0f") + "% ao dia · maiores: " +
+                 ", ".join(n + " " + format(y * 100, ".1f") + "%" for n, y in ls["best"]))
     for x in (d.get("log") or [])[-4:]:
         L.append("• " + x)
     return "\n".join(L)
