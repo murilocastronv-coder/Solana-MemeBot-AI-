@@ -34,6 +34,17 @@ POINTS = int(sbt.sg._f("GRAD_BT_POINTS", 180))
 PUMP_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 
 
+_DL = [0.0]     # this test's own time limit (never shared with the sniper test, never waits for the budget)
+
+
+def _hist(rpc, address, **kw):
+    if _DL[0] and time.time() > _DL[0]:
+        raise TimeoutError("tempo do teste esgotado")
+    if not sbt._budget_ok():
+        raise TimeoutError("cota de leituras da hora esgotada")
+    return sbt.history_call(rpc, address, **kw)
+
+
 def curve_of(mint):
     from solders.pubkey import Pubkey
     return str(Pubkey.find_program_address([b"bonding-curve", bytes(Pubkey.from_string(mint))],
@@ -61,7 +72,7 @@ def _is_swap(tx):
 
 
 def _price(rpc, mint, t, sol_usd, window=900):
-    txs = sbt.history_call(rpc, mint, gte=int(t), lte=int(t) + window, order="asc", limit=5)
+    txs = _hist(rpc, mint, gte=int(t), lte=int(t) + window, order="asc", limit=5)
     px = sorted(tr[1] for tr in (sbt.trade_of(tx, mint, sol_usd) for tx in txs) if tr)
     return px[len(px) // 2] if px else None
 
@@ -69,7 +80,7 @@ def _price(rpc, mint, t, sol_usd, window=900):
 def graduation(rpc, mint, created, sol_usd):
     """Graduation time (first PumpSwap trade) or None."""
     end = created + GRAD_WINDOW_H * 3600
-    txs = sbt.history_call(rpc, mint, gte=int(created), lte=int(end), order="desc", limit=5)
+    txs = _hist(rpc, mint, gte=int(created), lte=int(end), order="desc", limit=5)
     if not any(_is_swap(tx) for tx in txs):
         return None
     lo, hi = created, max(int(tx.get("blockTime") or 0) for tx in txs if _is_swap(tx))
@@ -77,7 +88,7 @@ def graduation(rpc, mint, created, sol_usd):
         if hi - lo < 60:
             break
         mid = (lo + hi) // 2
-        page = sbt.history_call(rpc, mint, gte=int(lo), lte=int(mid), order="desc", limit=3)
+        page = _hist(rpc, mint, gte=int(lo), lte=int(mid), order="desc", limit=3)
         if any(_is_swap(tx) for tx in page):
             hi = min(int(tx.get("blockTime") or hi) for tx in page if _is_swap(tx))
         else:
@@ -89,7 +100,7 @@ def fetch(rpc, mint, created, sol_usd):
     g = graduation(rpc, mint, created, sol_usd)
     if not g:
         return {"grad": None}
-    txs = sbt.history_call(rpc, mint, gte=int(g), lte=int(g) + 1200, order="asc", limit=100)
+    txs = _hist(rpc, mint, gte=int(g), lte=int(g) + 1200, order="asc", limit=100)
     dense = sorted([[tr[0], tr[1]] for tr in (sbt.trade_of(tx, mint, sol_usd) for tx in txs) if tr])
     sparse = []
     for k in range(1, 9):                          # one price every 30 min for 4 h
@@ -204,7 +215,7 @@ def start(rpc, sol_usd, send=None, chat=None):
             now = time.time()
             g = sbt._get("grad_bt_cache", {"points": {}, "launch": {}, "complete": {}, "coins": {}})
             began = time.time()
-            sbt.DEADLINE[0] = began + MAX_S
+            _DL[0] = began + MAX_S
             end = now - 2 * 86400
             step = DAYS * 86400 / POINTS
             pts = [int(end - DAYS * 86400 + step * (i + 0.5)) // 3600 * 3600 for i in range(POINTS)]
@@ -213,7 +224,7 @@ def start(rpc, sol_usd, send=None, chat=None):
                 for p in pts:
                     if str(p) in g["points"] or time.time() - began > MAX_S * 0.4:
                         continue
-                    txs = sbt.history_call(rpc, sb.PUMP_MINT_AUTHORITY, gte=p, lte=p + 3600, order="asc", limit=100)
+                    txs = _hist(rpc, sb.PUMP_MINT_AUTHORITY, gte=p, lte=p + 3600, order="asc", limit=100)
                     ms = []
                     for tx in txs:
                         m = sbt.created_mint(tx)
@@ -240,7 +251,6 @@ def start(rpc, sol_usd, send=None, chat=None):
                         logging.warning("grad bt %s: %s: %s", m[:8], type(exc).__name__, str(exc)[:120])
             except TimeoutError:
                 pass
-            sbt.DEADLINE[0] = 0.0
             sbt._put("grad_bt_cache", g)
             txt, ok = report(g, now, len(pts))
             if send and chat:
@@ -250,7 +260,7 @@ def start(rpc, sol_usd, send=None, chat=None):
             if send and chat:
                 send(chat, "⛔ Backtest de graduação falhou: " + type(exc).__name__ + ": " + str(exc)[:150])
         finally:
-            sbt.DEADLINE[0] = 0.0
+            _DL[0] = 0.0
             _RUNNING.release()
 
     threading.Thread(target=work, daemon=True).start()
