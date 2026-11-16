@@ -158,7 +158,7 @@ class DevTransferScamTest(unittest.TestCase):
     def test_hidden_transfer_sells_and_blocks(self):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
             d = db._load()
-            d["devs"] = {DEV: {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3, "rated": NOW, "last_sig": "old", "launches": 10}}
+            d["devs"] = {DEV: {"tier": "ELITE", "score": 90, "win": 0.9, "trades": 40, "pf": 3, "rated": NOW, "last_sig": "old", "launches": 10, "balance_sol": 5}}
             d["tokens"] = {"TOK": {"dev": DEV, "seen": NOW, "symbol": "TOK", "last_sig": "old"}}
             db._save(d)
             db.sim_buy(pair(), DEV, "t", NOW)
@@ -355,3 +355,26 @@ class DevHunterTest(unittest.TestCase):
         import dev_hunter as dh
         with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
             self.assertEqual(dh.set_cfg(0.5, 5), {"min_win": 0.8, "min_trades": 20})
+
+
+class DevFundsTest(unittest.TestCase):
+    def test_wallet_without_funds_is_not_approved_nor_analysed(self):
+        import dev_hunter as dh
+        st = db.rate_dev([pos("M" + str(i), 20, 0.5, NOW - i * 20000) for i in range(32)], NOW)
+        st["balance_sol"] = 0.01
+        self.assertIn("sem fundo", db.tier(st)[1])
+        st["balance_sol"] = 3.0
+        self.assertEqual(db.tier(st)[0], "ELITE")
+        self.assertEqual(db.balance_sol(lambda m, p: {"value": 2_500_000_000}, "W"), 2.5)
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(db, "_path", return_value=pathlib.Path(t) / "d.json"):
+            calls = {"n": 0}
+
+            def history(rpc, addr, gte=None, lte=None, order="asc", limit=100):
+                calls["n"] += 1
+                return [{"blockTime": gte, "transaction": {"message": {"accountKeys": ["W" + str(calls["n"] % 2)]}},
+                         "meta": {"logMessages": ["Instruction: Create"], "postTokenBalances": [{"mint": "X" + str(gte) + "pump"}]}}]
+            n = dh.hunt(object(), 7, 50, now=NOW, history=history, balance=lambda r, w: 0.0 if w == "W0" else 4.0)
+            d = db._load()
+            self.assertEqual(n, 1)                                   # only the funded wallet goes to the queue
+            self.assertEqual(d["devs"]["W0"]["tier"], "MONITORADO")
+            self.assertEqual(d["devs"]["W1"]["tier"], "NA FILA")

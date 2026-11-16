@@ -25,15 +25,15 @@ import signals as sg
 import snipe_bot as sb
 
 PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
-DAYS = sg._f("SNIPE_BT_DAYS", 240)
-SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 480))      # 2 per day over 8 months
+DAYS = sg._f("SNIPE_BT_DAYS", 60)          # owner (Nov 16): 2 months
+SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 120))      # 2 per day over 2 months
 DECISION_MIN = (5, 10, 15, 20, 30, 45)
 DELAY_S = sg._f("SNIPE_BT_DELAY_S", 20)
 COST = sg._f("SNIPE_BT_COST_PER_SIDE", 0.03)                  # swap fee + slippage on young coins
 NET_FEE = sg._f("SNIPE_BT_NET_FEE_USD", 0.02)
 CAPITAL = sg._f("SNIPE_BT_CAPITAL", 500)
 CALLS_PER_HOUR = int(sg._f("SNIPE_BT_CALLS_PER_HOUR", 1500))   # Helius budget (~100 credits per call)
-JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 720) * 60   # runs in the background until done (cancel stops it)
+JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 3) * 60     # owner (Nov 16): answer in ~3 min; the next tap continues
 SUPPLY = 1_000_000_000
 GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60))
 GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 45))
@@ -217,6 +217,13 @@ def download_coin(rpc, mint, created, sol_usd):
     return out
 
 
+def sample_points(start, end):
+    """Moments on a FIXED grid (multiples of the step), so a later run reuses what earlier runs downloaded."""
+    step = max(3600, int(DAYS * 86400 // SAMPLE_POINTS))
+    first = (int(start) // step + 1) * step
+    return list(range(first, int(end), step))
+
+
 def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_progress=None, max_s=None):
     """Fill the cache: launches at the sample points, then each coin. Checkpoint after every point / coin."""
     now = now or time.time()
@@ -225,7 +232,7 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
     max_s = JOB_MAX_S if max_s is None else max_s
     began = time.time()
     c = cache()
-    pts = [int(start + (end - start) * (i + 0.5) / SAMPLE_POINTS) for i in range(SAMPLE_POINTS)]
+    pts = sample_points(start, end)
     todo_pts = [p for p in pts if str(p) not in c["points"]]
     total = len(pts)
     for i, p in enumerate(todo_pts):
@@ -334,7 +341,8 @@ def report(c, start, end):
     best = max(ok, key=lambda g: g[0]["pnl"]) if ok else None
     live = ((sb.MIN_VOL_5M, sb.MIN_BUY_RATIO, sb.MIN_UP_5M, sb.MAX_UP_5M), (sb.STOP, sb.ARM, sb.DROP, sb.MAX_HOLD_MIN))
     out = {"start": start, "end": end, "cut": cut, "coins": sum(1 for x in c["coins"].values() if start <= x["created"] < end),
-           "points": len(c["points"]), "best": None, "live": {}}
+           "points": sum(1 for p in c["points"] if start <= int(p) < end), "total_points": len(sample_points(start, end)),
+           "best": None, "live": {}}
     lt = simulate(c, cut, end, *live)
     lf = simulate(c, start, end, *live)
     out["live"] = {"test": lt[0], "full": lf[0], "rejected": lf[2], "exits": _exits(lf[1])}
@@ -363,7 +371,7 @@ def text(rep):
     L = ["🎯 BACKTEST SNIPER — " + time.strftime("%d/%m/%Y", time.gmtime(rep["start"])) + " a " +
          time.strftime("%d/%m/%Y", time.gmtime(rep["end"])),
          "Amostra REAL da blockchain: " + str(rep["coins"]) + " lançamentos da pump.fun em " + str(rep["points"]) + " de " +
-         str(SAMPLE_POINTS) + " momentos sorteados · US$ " + format(sb.USD, "g") + " por compra · máx. " + str(sb.MAX_OPEN) +
+         str(rep.get("total_points", SAMPLE_POINTS)) + " momentos · US$ " + format(sb.USD, "g") + " por compra · máx. " + str(sb.MAX_OPEN) +
          " abertas · custos " + format(COST * 100, ".0f") + "% por lado + taxa · entrada " + format(DELAY_S, ".0f") + " s depois",
          "▶ Regra que está no robô real:",
          "  • TESTE (últimos 30%, fora da amostra): " + _fmt(rep["live"]["test"]),
@@ -381,8 +389,10 @@ def text(rep):
               "  • treino: " + _fmt(b["train"]), "  • TESTE: " + _fmt(b["test"])]
     else:
         L.append("🏆 Nenhum ajuste teve 10+ operações no treino: amostra pequena — rode de novo para baixar mais lançamentos.")
-    if rep["points"] < SAMPLE_POINTS:
-        L.append("⏳ Faltam " + str(SAMPLE_POINTS - rep["points"]) + " momentos da amostra: toque de novo para continuar a coleta.")
+    left = rep.get("total_points", SAMPLE_POINTS) - rep["points"]
+    if left > 0:
+        L.append("⏳ Resultado PARCIAL: faltam " + str(left) + " momentos da amostra. Toque de novo: cada toque baixa mais "
+                 "~3 min e o resultado fica mais confiável.")
     L.append("⚠️ Amostra de lançamentos (não todos); preço do SOL constante; falhas de transação não simuladas. "
              "Moeda sem negociação depois da entrada conta como perda total. Passado não garante futuro.")
     return "\n".join(L)

@@ -153,7 +153,7 @@ def keyboard():
  # owner (Nov 15): only the DEV robot buttons (wallet: type /saldo, /depositar, /sacar)
  return [[{"text":"🎯 Sniper 24h: status","callback_data":"sn_status"}],
   [{"text":"▶️ Ligar sniper","callback_data":"sn_on"},{"text":"⏸️ Pausar sniper","callback_data":"sn_off"}],
-  [{"text":"🧪 Backtest sniper 8 meses","callback_data":"sn_bt"},{"text":"⏹️ Cancelar","callback_data":"sn_btx"}],
+  [{"text":"🧪 Backtest sniper 2 meses","callback_data":"sn_bt"},{"text":"⏹️ Cancelar","callback_data":"sn_btx"}],
   [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"🕵️ Buscar DEVs 7d","callback_data":"hunt7"},{"text":"30d","callback_data":"hunt30"},{"text":"90d","callback_data":"hunt90"}],
   [{"text":"📋 DEVs encontrados","callback_data":"hunt_list"},{"text":"⏹️ Parar busca","callback_data":"hunt_x"}],
@@ -348,8 +348,8 @@ def handle(update):
    elif action=="sn_btx":snipe_backtest.cancel();pre="⏹️ Cancelando o backtest do sniper (o que já baixou fica salvo).\n\n"
    elif action=="sn_bt":
     why=snipe_backtest.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-    send(chat,("🧪 Backtest do sniper (8 meses) começou no servidor: lê lançamentos reais da pump.fun pela Helius, aos poucos "
-     "(limite de créditos por hora). Pode levar várias horas; o resultado chega aqui e o progresso aparece no status.") if not why else "⛔ "+why,keyboard());return
+    send(chat,("🧪 Backtest do sniper (2 meses) começou: baixa lançamentos reais da pump.fun pela Helius por ~3 min e "
+     "manda o resultado aqui. Cada toque continua de onde parou e deixa o teste mais completo.") if not why else "⛔ "+why,keyboard());return
    j=snipe_backtest.job()
    bt=("\n\n🧪 Backtest: "+str(j.get("status"))+" · "+str(j.get("progress",0))+"% · "+str(j.get("stage",""))) if j else ""
    send(chat,pre+snipe_bot.status_text()+bt,keyboard())
