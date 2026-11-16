@@ -169,6 +169,7 @@ def keyboard():
   [{"text":"🤖 Memecoin: nova proposta","callback_data":"mc_new"},{"text":"🤖 Memecoin: status","callback_data":"mc_status"}],
   [{"text":"🔁 Propostas automáticas","callback_data":"mc_auto"},{"text":"⏸️ Só quando eu pedir","callback_data":"mc_manual"}],
   [{"text":"🚀 Memecoin REAL (aprovo cada uma)","callback_data":"mc_real"},{"text":"🧪 Memecoin simulação","callback_data":"mc_sim"}],
+  [{"text":"🔬 Analisar criadores","callback_data":"mc_creators"},{"text":"📈 Padrões dos criadores","callback_data":"mc_patterns"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -387,7 +388,7 @@ def handle(update):
    send(chat,pre+liq_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
   return
- if action in ("mc_new","mc_status","mc_auto","mc_manual","mc_real","mc_sim") or action.startswith(("mc_ok_","mc_no_")):
+ if action in ("mc_new","mc_status","mc_auto","mc_manual","mc_real","mc_sim","mc_creators","mc_patterns") or action.startswith(("mc_ok_","mc_no_")):
   import memecoin_ai as mc
   try:
    if action=="mc_new":
@@ -403,6 +404,11 @@ def handle(update):
      send(chat,mc.launched_text(rec) if rec else "⛔ Lançamento não feito: "+why,keyboard());return
     send(chat,(("✅ APROVADA (SIMULAÇÃO): "+p["name"]+" ($"+p["symbol"]+") registrada como lançamento simulado. Nada foi criado na blockchain; "
      "o lançamento real na Pump.fun só será ligado quando você decidir.") if p["status"]=="approved" else "❌ Proposta "+p["name"]+" rejeitada."),keyboard());return
+   if action=="mc_creators":
+    import creator_patterns as cp
+    why=cp.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,send,chat)
+    send(chat,"⛔ "+why if why else "🔬 Analisando ~4 mil lançamentos reais da Pump.fun dos últimos "+format(cp.DAYS,"g")+" dias e as carteiras que tiveram vários resultados… leva uns 5 minutos.",keyboard());return
+   if action=="mc_patterns":send(chat,__import__("creator_patterns").text(__import__("creator_patterns").report()),keyboard());return
    if action=="mc_real":mc.set_real(True);send(chat,"💵 Criador de memecoins em MODO REAL: cada proposta só vira moeda de verdade quando você aperta APROVAR nela. Custo máx. US$ "+format(mc.BUDGET_PER_LAUNCH,"g")+" por lançamento (criação + compra pública do criador), "+str(mc.MAX_PER_DAY)+" por dia, US$ "+format(mc.DAILY_BUDGET,"g")+" por dia, US$ "+format(mc.RESERVE_USD,"g")+" no total, sempre ficam US$ "+format(mc.KEEP_SOL_USD,"g")+" em SOL. Nunca vende sozinho. Precisa de SOL na carteira (~0,06 SOL por lançamento).")
    if action=="mc_sim":mc.set_real(False)
    if action=="mc_auto":mc.set_auto(True)
@@ -1339,7 +1345,10 @@ def meme_loop():
  while True:
   try:
    d=mc._load()
-   if d.get("auto") and time.time()-d.get("last_auto",0)>=mc.AUTO_EVERY_S and active_chat():
+   import creator_patterns as cp
+   if os.getenv("SOLANA_RPC_URL") and time.time()-float(cp.report().get("at") or 0)>3*86400 and not cp._RUN.locked():
+    cp.start(dex_rpc(),lambda c,t:None,None)   # refreshed every 3 days in the background (no message)
+   if d.get("auto") and mc.auto_due(time.time(),d.get("last_auto",0)) and active_chat():
     d["last_auto"]=time.time();mc._save()
     send_meme_proposal(active_chat())
   except Exception as exc:logging.warning("meme loop: %s: %s",type(exc).__name__,str(exc)[:150])

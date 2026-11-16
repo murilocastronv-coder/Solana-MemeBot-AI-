@@ -145,8 +145,10 @@ def launch(rpc, signer, name, symbol, description, png, buy_lamports, simulate, 
     from solders.transaction import VersionedTransaction
     name, symbol = name[:30], symbol[:13]          # 30 (limit 32) keeps the worst case under 1232 bytes
     user = str(signer.pubkey())
+    import os
     try:
-        uri = upload(name, symbol, description, png)
+        uri = upload(name, symbol, description, png, website=os.getenv("MEME_WEBSITE", "").strip(),
+                     twitter=os.getenv("MEME_TWITTER", "").strip(), telegram=os.getenv("MEME_TELEGRAM", "").strip())
     except Exception as exc:
         return None, "upload do logo/dados na Pump.fun falhou (" + type(exc).__name__ + ") — nada foi gasto"
     mint_kp = Keypair()

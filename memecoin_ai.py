@@ -136,12 +136,23 @@ def _own_generator(theme, rnd):
     name = rnd.choice([rnd.choice(PREFIX) + " " + t, t + " " + rnd.choice(SUFFIX), rnd.choice(PREFIX) + t + rnd.choice(SUFFIX)])
     letters = re.sub(r"[^A-Z]", "", name.upper())
     symbol = (letters[:2] + t.upper()[:3])[:6] if len(letters) >= 2 else t.upper()[:5]
-    desc = (name + " is a community memecoin on Solana inspired by today's \"" + theme + "\" wave. The creator bought " + format(DEV_BUY_PCT, "g") + "% of the supply at launch, "
+    desc = (name + " is a community memecoin on Solana inspired by today's \"" + theme + "\" wave. The creator bought about " + disclosed_pct() + "% of the supply at launch, "
             "no promises - just memes, fun and an open community. Not financial advice.")
-    posts = ["Meet $" + symbol + " 🚀 a fresh community memecoin on Solana. Launched on Pump.fun; the creator bought " + format(DEV_BUY_PCT, "g") + "% at launch. "
+    posts = ["Meet $" + symbol + " 🚀 a fresh community memecoin on Solana. Launched on Pump.fun; the creator bought about " + disclosed_pct() + "% at launch. "
              "Not financial advice.",
              "$" + symbol + " community is live - share your best " + theme + " memes! Contract: <CA> · DYOR."]
     return {"name": name, "symbol": symbol, "description": desc, "posts": posts}
+
+
+def _style_hint():
+    try:
+        names = __import__("creator_patterns").report().get("win_names") or []
+    except Exception:
+        names = []
+    if not names:
+        return ""
+    return ("For STYLE only (length, tone, simplicity), these recent honest launches worked: " + ", ".join(names[:10]) +
+            ". Never reuse their names, words in the same order, symbols or images. ")
 
 
 def _claude(theme, examples):
@@ -150,9 +161,9 @@ def _claude(theme, examples):
         return None
     prompt = ("Create ONE original memecoin concept for Solana based on the trending theme \"" + theme + "\". "
               "Do NOT reuse or imitate these existing coins: " + ", ".join(examples) + ", nor any brand, celebrity or "
-              "trademark. Return only JSON: {\"name\": str (2-3 words), \"symbol\": str (3-6 capital letters), "
+              "trademark. " + _style_hint() + "Return only JSON: {\"name\": str (2-3 words), \"symbol\": str (3-6 capital letters), "
               "\"description\": str (English, 2 sentences, say it is a community meme with no promises of profit), "
-              "\"posts\": [2 short English launch posts, no profit promises, disclose that the creator bought " + format(DEV_BUY_PCT, "g") + "% of the supply at launch]}")
+              "\"posts\": [2 short English launch posts, no profit promises, disclose that the creator bought about " + disclosed_pct() + "% of the supply at launch]}")
     r = requests.post("https://api.anthropic.com/v1/messages", timeout=40, headers={
         "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
         json={"model": os.getenv("MEME_AI_MODEL", "claude-haiku-5-5"), "max_tokens": 600,
@@ -206,6 +217,11 @@ def propose(pairs=None, fetch=None, now=None, rnd=None):
     if not tr:
         return None, "nenhuma tendência com volume real agora"
     rnd = rnd or random.Random()
+    try:                                   # themes that also won in the creator analysis go first
+        ww = set(__import__("creator_patterns").win_words())
+    except Exception:
+        ww = set()
+    tr = sorted(tr, key=lambda x: x[0] not in ww)
     for theme, score, examples in tr[:4]:
         for _ in range(4):
             try:
@@ -245,6 +261,12 @@ def decide(pid, approve, sol_usd=None):
                                                             "dev_buy_pct": DEV_BUY_PCT}]
         _save()
         return prop
+
+
+def disclosed_pct(sol_usd=None):
+    px = _px(sol_usd)
+    sol = real_buy_sol(px) if px else dev_buy_sol()
+    return format(__import__("pump_launch").tokens_for(sol * 0.98) / SUPPLY * 100, ".2f")
 
 
 def real_buy_sol(sol_usd):
@@ -331,13 +353,44 @@ def launched_text(rec):
             "\n🔒 O bot NUNCA vende essas moedas sozinho. Divulgue só em canais seus, sem prometer lucro.")
 
 
+def social_line():
+    has = any(os.getenv(k, "").strip() for k in ("MEME_TWITTER", "MEME_TELEGRAM", "MEME_WEBSITE"))
+    try:
+        matters = __import__("creator_patterns").social_matters()
+    except Exception:
+        matters = False
+    if has:
+        return "\n📣 Redes que vão na moeda: " + ", ".join(os.getenv(k) for k in ("MEME_TWITTER", "MEME_TELEGRAM", "MEME_WEBSITE") if os.getenv(k, "").strip())
+    if matters:
+        return ("\n📣 Na análise, moedas com X ou Telegram deram bem mais certo. Crie um perfil seu e coloque o link em "
+                "MEME_TWITTER / MEME_TELEGRAM no Render.")
+    return ""
+
+
+def auto_due(now, last):
+    """Automatic proposal now? In the best launch hours found by the creator analysis (one per 3-hour block),
+    else every AUTO_EVERY_S."""
+    try:
+        best = __import__("creator_patterns").best_hours_utc()
+    except Exception:
+        best = []
+    if len(best) < MAX_PER_DAY or len(best) < 4:
+        return now - last >= AUTO_EVERY_S
+    h = time.gmtime(now).tm_hour
+    block = h // 3 * 3
+    if block not in best:
+        return False
+    start = now - (h - block) * 3600 - time.gmtime(now).tm_min * 60 - time.gmtime(now).tm_sec
+    return last < start
+
+
 def proposal_text(p):
     head = "🚀 PROPOSTA DE MEMECOIN (REAL — APROVAR CRIA NA PUMP.FUN)\n" if real() else "🧪 PROPOSTA DE MEMECOIN (SIMULAÇÃO)\n"
     return (head +
             "Nome: " + p["name"] + "\nSímbolo: $" + p["symbol"] + "\nTema em alta: \"" + p["theme"] + "\" (moedas com volume: " +
             ", ".join(p.get("theme_examples") or []) + ")\nTexto por: " + p.get("source", "?") + "\n\n" + p["description"] +
             "\n\n📣 Posts de lançamento:\n• " + "\n• ".join(p.get("posts") or []) +
-            "\n\n" + dev_buy_line() + ("\n⚠️ APROVAR cria a moeda DE VERDADE com dinheiro da carteira (simulado antes de enviar)." if real()
+            "\n\n" + dev_buy_line() + social_line() + ("\n⚠️ APROVAR cria a moeda DE VERDADE com dinheiro da carteira (simulado antes de enviar)." if real()
                                         else "\n⚠️ APROVAR agora só registra uma SIMULAÇÃO: nada é criado na blockchain."))
 
 
@@ -371,6 +424,13 @@ def status_text(sol_usd=None):
          "📊 Propostas: " + str(len(d["proposals"])) + " · lançadas de verdade: " + str(real_spent()[1]) + " (US$ " +
          format(real_spent()[0], ".2f") + ") · simuladas: " + str(sum(1 for x in d["launches"] if x.get("simulated"))),
          dev_buy_line(sol_usd)]
+    try:
+        best = __import__("creator_patterns").best_hours_utc()
+        if len(best) >= 4 and d.get("auto"):
+            L.append("🕒 Propostas automáticas nos melhores horários da análise de criadores (Brasília): " +
+                     ", ".join(format((h - 3) % 24, "02d") + "h" for h in sorted(best)))
+    except Exception:
+        pass
     try:
         tr = trends()
         if tr:
