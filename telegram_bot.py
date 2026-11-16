@@ -153,6 +153,7 @@ def keyboard():
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
  # owner (Nov 16, later): ONLY the GRADUADOS robot (wallet: type /saldo, /depositar, /sacar)
  return [[{"text":"🎓 Graduados: status","callback_data":"gd_status"}],
+  [{"text":"🧪 BACKTEST v2: velas de 1 min + filtros","callback_data":"gr_bt2"}],
   [{"text":"🎓 Graduados: LIGAR REAL","callback_data":"gd_on"},{"text":"⏸️ Graduados: desligar","callback_data":"gd_off"}],
   [{"text":"🎓 BACKTEST: MOEDA QUE GRADUOU (3 meses)","callback_data":"gr_bt"}]]
 def user_keyboard():
@@ -354,6 +355,13 @@ def handle(update):
    send(chat,pre+grad_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Graduados: "+str(exc)[:200],keyboard())
   return
+ if action=="gr_bt2":
+  import grad_candles
+  why=grad_candles.start(send,chat)
+  send(chat,("🧪 Backtest GRADUADOS v2: baixa as velas de 1 minuto (máxima e mínima) de cada moeda que graduou na amostra e testa "
+   "864 combinações (espera 1/2/5/10 min, subindo ou caindo desde a graduação, volume, rapidez da graduação, 6 saídas), escolhe nos 70% "
+   "e confere nos 30% finais. Primeiro relatório em ~3 min; o download continua sozinho e manda o relatório final (até ~1 h).")
+   if not why else "⛔ "+why,keyboard());return
  if action=="gr_bt":
   import grad_backtest,snipe_backtest
   why=grad_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
