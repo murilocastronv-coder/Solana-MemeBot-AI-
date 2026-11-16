@@ -349,3 +349,28 @@ class GradLiquidityTest(Tmp):
         self.assertEqual(bought, [])
         self.assertEqual(gbot.MAX_OPEN, 4)
         gbot._MEM.clear()
+
+
+class GradCandlesTest(unittest.TestCase):
+    def test_pool_trade_and_filters(self):
+        import grad_candles as gc
+        self.assertEqual(len(gc.pool_of("So11111111111111111111111111111111111111112")), 44)
+        g = 1_800_000_000
+        c = [[g + 60 * k, 1.0, 1.05, 0.95, 1.0, 5000] for k in range(5)]
+        c += [[g + 300, 1.0, 1.1, 0.70, 0.8, 5000]]           # low hits the -25% stop inside the candle
+        e = gc.entry_ok(c, g - 600, 120, gc.MOVES[0], gc.VOLS[0], gc.SPEEDS[0])
+        self.assertEqual(e[0], 2)
+        r = gc.trade(c, e[0], e[1], gc.EXITS[0])
+        self.assertEqual(r[2], "stop")
+        self.assertLess(r[0], -0.25)
+        self.assertIsNone(gc.entry_ok(c, g - 600, 120, gc.MOVES[2], gc.VOLS[0], gc.SPEEDS[0]))   # not up 1.3x
+        self.assertIsNone(gc.entry_ok(c, g - 600, 120, gc.MOVES[0], gc.VOLS[1], gc.SPEEDS[0]))   # vol < 20k
+        up = [[g + 60 * k, 1.0 + 0.2 * k, 1.0 + 0.2 * k + 0.1, 1.0 + 0.2 * k - 0.05, 1.0 + 0.2 * k, 9000] for k in range(30)]
+        up += [[g + 1800, 6.0, 6.0, 3.0, 3.5, 9000]]
+        e = gc.entry_ok(up, g - 600, 60, gc.MOVES[0], gc.VOLS[0], gc.SPEEDS[0])
+        r = gc.trade(up, e[0], e[1], gc.EXITS[0])
+        self.assertEqual(r[2], "stop móvel")
+        self.assertGreater(r[0], 1.0)
+        store = {"M" + str(k): [[g + 3600 * k + 60 * j, 1.0, 1.6, 0.9, 1.5, 30000] for j in range(10)] for k in range(40)}
+        txt, ok, best = gc.report(store, {m: g - 600 for m in store}, 40, final=True)
+        self.assertIn("📌", txt)
