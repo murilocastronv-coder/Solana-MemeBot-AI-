@@ -652,6 +652,13 @@ def cycle(rpc, send=None, chat=None, now=None, state=None):
                 raise
             logging.exception("liq attempt failed")
             note("erro ao tentar " + ob["address"][:6] + ": " + type(exc).__name__ + ": " + str(exc)[:120])
+    try:                                                   # owner: Save (Solend) too, same capital and limits
+        import save_bot
+        save_bot.cycle(rpc, send, chat, now)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        logging.warning("save cycle: %s: %s", type(exc).__name__, str(exc)[:150])
     if now - st.get("saved", 0) > 60:
         st["saved"] = now
         _save()
@@ -660,11 +667,19 @@ def cycle(rpc, send=None, chat=None, now=None, state=None):
 _STATE = {}
 
 
+def _save_line():
+    try:
+        import save_bot
+        return save_bot.status_line()
+    except Exception:
+        return "🏦 Save (Solend): iniciando"
+
+
 def status_text():
     d = _load()
     s = d.get("stats") or {}
     tr = d.get("trades") or []
-    L = ["💧 ROBÔ DE LIQUIDAÇÃO (Kamino: mercado principal + menores) — " +
+    L = ["💧 ROBÔ DE LIQUIDAÇÃO (Kamino + Save) — " +
          ("🟢 LIGADO · 💵 DINHEIRO REAL" if d.get("enabled") and d.get("real") else
           "🟡 LIGADO · só observando" if d.get("enabled") else "⏸️ DESLIGADO"),
          "⚙️ Até US$ " + format(LIQ_USD, "g") + " por liquidação · paga dívida em USDC, USDT ou SOL · preço do oráculo a cada " +
@@ -673,7 +688,8 @@ def status_text():
          "🏦 Mercados vigiados: " + str(len(d.get("markets") or _STATE.get("markets") or [])) + " · devedores lidos: " +
          str(sum((_STATE.get("borrowers") or {}).values())) + " · vigiados de perto: " + str(len(_WATCH)) +
          " (garantia que oscila: " + str(sum(1 for o in _WATCH.values() if volatile(o))) + ")",
-         "🩺 Descartadas pela conta exata do Kamino (ainda saudáveis): " + str(s.get("saudável na conta do Kamino", 0)),
+         _save_line(),
+         "🩺 Descartadas pela conta exata do protocolo (ainda saudáveis): " + str(s.get("saudável na conta do Kamino", 0)),
          "📊 Oportunidades reais " + str(s.get("oportunidades", 0)) + " · puladas " + str(s.get("puladas", 0)) + " · simulação ok " +
          str(s.get("simulação ok", 0)) + " · recusadas " + str(s.get("simulação falhou", 0)) + " · perdeu disputa " +
          str(s.get("perdeu a disputa", 0)) + " · LIQUIDOU " + str(s.get("liquidou", 0)),
