@@ -128,6 +128,28 @@ def _fetch_pools(url):
     return out
 
 
+DATAPI = "https://dlmm.datapi.meteora.ag/pools"
+
+
+def _datapi_pools(get=None):
+    """Meteora's current DLMM data API (docs.meteora.ag, Nov 2026): real 24 h fees (base + dynamic fee) and fee/TVL,
+    already filtered by Meteora (not blacklisted, liquidity and volume floors) and sorted by fee/TVL."""
+    get = get or (lambda u: requests.get(u, headers=HEADERS, timeout=40).json())
+    flt = "is_blacklisted=false && tvl>=" + str(int(MIN_LIQ)) + " && volume_24h>=" + str(int(MIN_VOL))
+    from urllib.parse import quote
+    url = (DATAPI + "?page=1&page_size=1000&sort_by=" + quote("fee_tvl_ratio_24h:desc") + "&filter_by=" + quote(flt))
+    data = get(url) or {}
+    out = []
+    for r in data.get("data") or []:
+        tx, ty = r.get("token_x") or {}, r.get("token_y") or {}
+        out.append({"address": r.get("address"), "name": r.get("name") or "?", "mint_x": tx.get("address"),
+                    "mint_y": ty.get("address"), "liquidity": r.get("tvl"), "trade_volume_24h": (r.get("volume") or {}).get("24h"),
+                    "fees_24h": (r.get("fees") or {}).get("24h"), "is_blacklisted": r.get("is_blacklisted")})
+    if not out:
+        raise RuntimeError("API nova da Meteora sem pools")
+    return out
+
+
 def _gecko_pools(pages=5, fetch=None, rpc=None):
     """Meteora DLMM pools from GeckoTerminal (Meteora retired its public pair list, Nov 2026) + each pool's fee read
     from its own on-chain LbPair account: base fee = base_factor x bin_step x 10 x 10^power / 1e9 (Meteora's formula),
@@ -176,7 +198,11 @@ def _gecko_pools(pages=5, fetch=None, rpc=None):
 def pools(get=None):
     """[{address, name, coin, quote, liq, vol, fees24, day_yield}] - Meteora DLMM pools against SOL/USDC/USDT."""
     if get is None:
-        rows = _gecko_pools()
+        try:
+            rows = _datapi_pools()
+        except Exception as exc:
+            logging.warning("pool datapi: %s: %s", type(exc).__name__, str(exc)[:150])
+            rows = _gecko_pools()
     else:
         rows = get(METEORA) or []
     if isinstance(rows, dict):
