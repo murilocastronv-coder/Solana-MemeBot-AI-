@@ -151,7 +151,10 @@ def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
- return [[{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
+ return [[{"text":"🎯 BACKTEST SNIPER (3 meses, ~3 min)","callback_data":"sn_bt"}],
+  [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Ligar sniper vencedor","callback_data":"sn_apply"}],
+  [{"text":"⏸️ Desligar sniper","callback_data":"sn_off"}],
+  [{"text":"🧑‍💻 Robô DEV: status","callback_data":"dv_status"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🧪 TESTAR ESTRATÉGIA DEV (3 meses)","callback_data":"st_run"},{"text":"⏹️ Parar teste","callback_data":"st_x"}],
   [{"text":"🎯 BACKTEST DEV LAUNCH SNIPER (5 meses)","callback_data":"ls_run"}],
@@ -350,17 +353,30 @@ def handle(update):
    for part in split_message("\n".join(lines)):send(chat,part,keyboard())
   except Exception as exc:send(chat,"⛔ DEV Hunter: "+str(exc)[:200],keyboard())
   return
+ if action=="sn_apply":
+  import snipe_bot
+  r=snipe_bot.apply_winner()
+  if r:
+   live_engine.start()
+   en,ex=r["entry"],r["exit"]
+   send(chat,"✅ SNIPER LIGADO com o ajuste que deu lucro fora da amostra: volume 5 min ≥ US$ "+format(en[0],",.0f")+", compras/vendas ≥ "+
+    format(en[1],"g")+", subiu "+format(en[2],"g")+"–"+format(en[3],"g")+"% · stop −"+format(ex[0]*100,".0f")+"%, stop móvel de +"+
+    format(ex[1]*100,".0f")+"% ("+format(ex[2]*100,".0f")+"% abaixo do topo), "+format(ex[3],"g")+" min · US$ "+format(snipe_bot.USD,"g")+
+    " por compra · máx. "+str(snipe_bot.MAX_OPEN)+" · para no dia em que perder US$ "+format(snipe_bot.DAILY_LOSS,"g")+".",keyboard())
+  else:send(chat,"⛔ O backtest ainda não achou um ajuste com lucro confiável fora da amostra. Toque em 🎯 BACKTEST SNIPER; o sniper continua desligado.",keyboard())
+  return
  if action in ("sn_status","sn_on","sn_off","sn_bt","sn_btx","/sniper"):
   import snipe_bot,snipe_backtest
   try:
    pre=""
    if action=="sn_on":live_engine.start();snipe_bot.set_enabled(True);pre="▶️ Sniper 24 h ligado (dinheiro real).\n\n"
-   elif action=="sn_off":snipe_bot.set_enabled(False);pre="⏸️ Sniper pausado: não compra; as posições abertas continuam com stop e stop móvel.\n\n"
+   elif action=="sn_off":snipe_bot.stop_live();pre="⏸️ Sniper desligado: não compra; as posições abertas continuam com stop e stop móvel.\n\n"
    elif action=="sn_btx":snipe_backtest.cancel();pre="⏹️ Cancelando o backtest do sniper (o que já baixou fica salvo).\n\n"
    elif action=="sn_bt":
-    why=snipe_backtest.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-    send(chat,("🧪 Backtest do sniper (2 meses) começou: baixa lançamentos reais da pump.fun pela Helius por ~3 min e "
-     "manda o resultado aqui. Cada toque continua de onde parou e deixa o teste mais completo.") if not why else "⛔ "+why,keyboard());return
+    why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
+    send(chat,("🎯 Backtest do SNIPER (3 meses, lançamentos REAIS da pump.fun): testa 20 combinações de entrada e saída, "
+     "escolhe nos primeiros 70% do tempo e confere nos últimos 30%. O relatório chega em ~3 min; cada toque baixa mais e "
+     "deixa o teste mais completo.") if not why else "⛔ "+why,keyboard());return
    j=snipe_backtest.job()
    bt=("\n\n🧪 Backtest: "+str(j.get("status"))+" · "+str(j.get("progress",0))+"% · "+str(j.get("stage",""))) if j else ""
    send(chat,pre+snipe_bot.status_text()+bt,keyboard())
@@ -1178,7 +1194,9 @@ def snipe_loop():
  while True:
   try:
    # owner (Nov 16): only the DEV robot - the sniper does not buy any more; its launch scan only finds new creators
-   if os.getenv("SOLANA_RPC_URL"):snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
+   if os.getenv("SOLANA_RPC_URL"):
+    if snipe_bot.live_ok() and snipe_bot.enabled():snipe_bot.cycle(send,active_chat(),rpc=DEV_RPC.setdefault("rpc",dex_rpc()))
+    else:snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
 def dev_real_once():
