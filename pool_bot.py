@@ -137,7 +137,7 @@ def _datapi_pools(get=None):
     get = get or (lambda u: requests.get(u, headers=HEADERS, timeout=40).json())
     flt = "is_blacklisted=false && tvl>=" + str(int(MIN_LIQ)) + " && volume_24h>=" + str(int(MIN_VOL))
     from urllib.parse import quote
-    url = (DATAPI + "?page=1&page_size=1000&sort_by=" + quote("fee_tvl_ratio_24h:desc") + "&filter_by=" + quote(flt))
+    url = (DATAPI + "?page=1&page_size=150&sort_by=" + quote("fee_tvl_ratio_24h:desc") + "&filter_by=" + quote(flt))
     data = get(url) or {}
     out = []
     for r in data.get("data") or []:

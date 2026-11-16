@@ -260,9 +260,14 @@ class AllMarketsTest(unittest.TestCase):
         try:
             api = [{"lendingMarket": "A%d" % i, "name": "m%d" % i} for i in range(39)] + \
                   [{"lendingMarket": "MAIN", "name": "Main", "isPrimary": True}]
+            lb.SCAN_MAIN = True
             got = lb.markets(fetch=lambda url: api)
+            lb.SCAN_MAIN = False
+            small = lb.markets(fetch=lambda url: api)
         finally:
             sbt._get = old
+            lb.SCAN_MAIN = False
+        self.assertNotIn(("Main", "MAIN"), small)                 # 512 MB server: main market off by default
         self.assertEqual(got[0], ("Main", "MAIN"))
         self.assertEqual(got[1], ("xStocks", "X1"))
         self.assertEqual(len(got), 41)
