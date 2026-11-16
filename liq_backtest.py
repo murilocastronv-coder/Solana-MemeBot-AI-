@@ -27,6 +27,7 @@ KAMINO_API = "https://api.kamino.finance/v2/kamino-market"
 SAVE_API = "https://api.solend.fi/v1/markets/configs?scope=all&deployment=production"
 MAX_MARKETS = int(sg._f("LIQ_BT_MAX_MARKETS", 40))
 CALLS_PER_MARKET = int(sg._f("LIQ_BT_CALLS_PER_MARKET", 40))     # 100 transactions per call
+DEEP_CALLS = int(sg._f("LIQ_BT_DEEP_CALLS", 300))                # markets WITH liquidations: read further back
 FIRST_REPORT_S = 170
 BG_MAX_S = sg._f("LIQ_BT_BG_MAX_S", 3600)
 TX_FEE_USD = 0.02
@@ -174,9 +175,11 @@ def report(store, now, final=False, fetch=None):
         bon = [e["profit"] / e["paid"] for e in lst if e["paid"] > 1 and 0 < e["profit"] / e["paid"] < 0.5]
         med = statistics.median(bon) if bon else med_all
         for e in lst:
-            size = e["paid"] if e["paid"] > 1 else (e["profit"] / med if med > 0 else 0)
+            # flash loan + swap in the same transaction: only the profit shows up, the size must be estimated
+            flash = e["paid"] <= 1 or e["profit"] / e["paid"] > 0.3
+            size = (e["profit"] / med if med > 0 else 0) if flash else e["paid"]
             span = max(1.0, (now - (store.get("span") or {}).get(k, now - DAYS * 86400)) / 86400)
-            events.append(dict(e, size=size, w=30.0 / span))     # weight: this market's events -> per month
+            events.append(dict(e, size=size, w=30.0 / max(span, 30.0)))   # never blow up a few days into a month
     days = max(1.0, max((now - v) / 86400 for v in (store.get("span") or {now: now - 86400}).values()))
     prof_m = sum(e["profit"] * e["w"] for e in events if e["profit"] > 0)
     n_m = sum(e["w"] for e in events)
@@ -184,6 +187,10 @@ def report(store, now, final=False, fetch=None):
     for e in events:
         who[e["who"]] = who.get(e["who"], 0) + 1
     top = max(who.values()) / len(events)
+    real = sum(max(0, e["profit"]) for e in events)
+    L.append("📒 Achado de verdade (sem projetar): " + str(len(events)) + " liquidações, lucro somado dos liquidantes US$ " +
+             format(real, ",.0f") + " · lucro mediano por liquidação US$ " +
+             format(statistics.median([e["profit"] for e in events]), ",.2f"))
     L.append("Liquidações com preço: " + str(len(events)) + " (histórico lido de até " + format(days, ".0f") + " dias; ~" +
              format(n_m, ".0f") + " por mês) · lucro dos liquidantes: ~US$ " + format(prof_m, ",.0f") +
              " por mês · bônus mediano " + format(med_all * 100, ".1f") + "%")
@@ -197,7 +204,7 @@ def report(store, now, final=False, fetch=None):
         w = {e["who"] for e in lst}
         sp = max(1.0, (now - (store.get("span") or {}).get(k, now - DAYS * 86400)) / 86400)
         L.append("• " + names.get(k, k[:6]) + ": " + str(len(lst)) + " liquidações em " + format(sp, ".0f") + " dias · lucro US$ " +
-                 format(sum(max(0, e["profit"]) for e in lst) / sp * 30, ",.0f") + "/mês · " + str(len(w)) + " liquidante(s)")
+                 format(sum(max(0, e["profit"]) for e in lst) / max(sp, 30) * 30, ",.0f") + "/mês · " + str(len(w)) + " liquidante(s)")
     L.append("💵 SE o seu bot ganhasse TODAS as disputas (limite máximo, irreal):")
     for c in CAPITALS:
         tot, n = simulate(events, c)
@@ -208,6 +215,7 @@ def report(store, now, final=False, fetch=None):
              " · lucro delas ~US$ " + format(sum(max(0, e["profit"]) * e["w"] for e in small), ",.2f") + "/mês")
     if not final:
         L.append("⏳ PARCIAL: continua lendo os mercados sozinho; manda o relatório final (até ~1 h).")
+    L.append("ℹ️ Mercados com menos de 30 dias lidos NÃO são multiplicados para o mês (conta como se fosse o mês inteiro).")
     L.append("⚠️ Valores com o preço de HOJE dos tokens; quem liquidou foi mais rápido que um bot comum, então o real "
              "seria uma fração disso. Não é promessa de lucro.")
     return "\n".join(L)
@@ -227,7 +235,11 @@ def start(rpc, send=None, chat=None, fetch=None):
                 store = {"markets": markets(fetch), "done": {}, "liqs": {}, "txs": 0, "cursor": {}, "at": now}
             began = time.time()
             sent = False
+            for addr in list(store["done"]):               # 2nd pass: markets with liquidations, read further back
+                if store["liqs"].get(addr) and store["done"][addr] < DEEP_CALLS and not store.get("full", {}).get(addr):
+                    del store["done"][addr]
             for proto, name, addr in store["markets"]:
+                limit = DEEP_CALLS if store["liqs"].get(addr) else CALLS_PER_MARKET
                 if addr in store["done"]:
                     continue
                 if time.time() - began > BG_MAX_S:
@@ -236,7 +248,7 @@ def start(rpc, send=None, chat=None, fetch=None):
                 calls = cur.get("calls", 0)
                 token, lte = cur.get("token"), cur.get("lte")
                 finished = False
-                while calls < CALLS_PER_MARKET:
+                while calls < limit:
                     if not sent and time.time() - began > FIRST_REPORT_S:
                         sbt._put("liq_bt_cache", store)
                         if send and chat:
@@ -263,7 +275,9 @@ def start(rpc, send=None, chat=None, fetch=None):
                         break
                     lte = oldest - 1 if not token else None
                 store["cursor"][addr] = {"calls": calls, "token": token, "lte": lte}
-                if finished or calls >= CALLS_PER_MARKET:
+                if finished:
+                    store.setdefault("full", {})[addr] = True
+                if finished or calls >= limit:
                     store["done"][addr] = calls
                 sbt._put("liq_bt_cache", store)
             sbt._put("liq_bt_cache", store)
