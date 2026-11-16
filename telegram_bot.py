@@ -171,6 +171,7 @@ def keyboard():
   [{"text":"🚀 Memecoin REAL (aprovo cada uma)","callback_data":"mc_real"},{"text":"🧪 Memecoin simulação","callback_data":"mc_sim"}],
   [{"text":"🔬 Analisar criadores","callback_data":"mc_creators"},{"text":"📈 Padrões dos criadores","callback_data":"mc_patterns"}],
   [{"text":"🎯 INICIAR BACKTEST — 180 DIAS","callback_data":"sn_bt180"}],
+  [{"text":"🔬 Backtest PRO 180 dias","callback_data":"pro_dl"},{"text":"🧪 Melhor PRO em simulação","callback_data":"pro_sim"}],
   [{"text":"🧪 INICIAR SNIPER (simulação)","callback_data":"sn_paper"},{"text":"⏹️ Parar sniper","callback_data":"sn_stop"}],
   [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Sniper REAL (vencedor)","callback_data":"sn_apply"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
@@ -461,6 +462,13 @@ def handle(update):
   why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat,old=True)
   send(chat,("🎯 Backtest do SNIPER para moedas com 1h30+ de vida (3 meses, dados reais): olha as moedas que sobreviveram com "
    "1h30, 2h, 3h e 4h e testa as 40 combinações. Relatório em ~3 min; toque de novo se vier PARCIAL.") if not why else "⛔ "+why,keyboard());return
+ if action in ("pro_dl","pro_cmp","pro_opt","pro_sim","pro_x"):
+  why=pro_action(action,chat)
+  send(chat,"⛔ "+why if why else {"pro_dl":"🔬 BACKTEST PRO 180 DIAS iniciado: baixa os lançamentos reais que faltam (várias horas, continua de onde parou), "
+   "depois otimiza 3 perfis com milhares de combinações (dias 1–90), valida (91–120), testa fora da amostra (121–150 e 151–180) e roda os testes "
+   "de robustez. Te aviso no fim. Progresso no painel web, aba 🎯 Sniper.","pro_cmp":"🔬 Comparando idades e perfis com os dados já baixados…",
+   "pro_opt":"🔬 Otimizando parâmetros com os dados já baixados…","pro_x":"⏹️ Backtest PRO interrompido (o que já baixou fica salvo; toque de novo para continuar).",
+   "pro_sim":"🧪 Melhor estratégia VALIDADA aplicada ao sniper em SIMULAÇÃO (dinheiro de mentira). A conta real não muda."}[action],keyboard());return
  if action in ("sn_bt180","sn_paper","sn_stop"):
   import snipe_bot,snipe_backtest
   if action=="sn_bt180":
@@ -1541,10 +1549,23 @@ def panel():
  msg=dashboard.ACTIONS.get(request.args.get("ok",""),"")
  return Response(dashboard.page(msg,request.args.get("ordem","lucro")),mimetype="text/html",headers={"Cache-Control":"no-store","X-Frame-Options":"DENY",
   "X-Content-Type-Options":"nosniff","Referrer-Policy":"same-origin"})
+def pro_action(action,chat):
+ """Backtest PRO buttons (Telegram and web panel). Returns '' or why not."""
+ import sniper_pro,snipe_backtest
+ if action=="pro_x":sniper_pro.cancel();return ""
+ if action=="pro_sim":
+  return "" if sniper_pro.apply_to_simulation() else "ainda não há estratégia VALIDADA (rode o Backtest PRO; se nenhum perfil passar, nada é aplicado)"
+ kind={"pro_dl":"download","pro_cmp":"compare","pro_opt":"optimise"}[action]
+ rpc=snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None
+ return sniper_pro.start(kind,rpc,__import__("copy_trader")._sol_usd(),send,chat)
 def web_action(action,form=None):
  """On/off switches of the web panel (same effect as the Telegram buttons)."""
  import copy_trader as ct
  chat=active_chat()
+ if action in ("pro_dl","pro_cmp","pro_opt","pro_sim","pro_x"):
+  why=pro_action(action,chat)
+  if why:raise ValueError(why)
+  __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]);return
  if action in ("sn_bt180","sn_paper","sn_stop"):
   import snipe_bot,snipe_backtest
   if action=="sn_bt180":

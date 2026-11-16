@@ -40,7 +40,8 @@ def csrf_ok(token):
     return bool(password()) and hmac.compare_digest(str(token or ""), csrf_token())
 
 
-ACTIONS = {"sn_bt180": "Backtest do sniper (180 dias) iniciado — o relatório chega no Telegram", "sn_paper": "Sniper ligado em SIMULAÇÃO",
+ACTIONS = {"pro_dl": "Backtest PRO 180 dias iniciado", "pro_cmp": "Comparação de estratégias iniciada", "pro_opt": "Otimização iniciada",
+           "pro_sim": "Melhor estratégia validada aplicada à SIMULAÇÃO", "pro_x": "Backtest PRO interrompido", "sn_bt180": "Backtest do sniper (180 dias) iniciado — o relatório chega no Telegram", "sn_paper": "Sniper ligado em SIMULAÇÃO",
            "sn_stop": "Sniper parado", "ls_run": "Backtest DEV Launch Sniper (5 meses) iniciado — o resultado chega no Telegram", "hunt": "Busca de DEVs lucrativos iniciada", "hunt_x": "Busca de DEVs parada", "dv_bt150": "Backtest DEV de 5 meses iniciado", "dv_bt180": "Backtest DEV de 6 meses iniciado",
            "dv_bt365": "Backtest DEV de 12 meses iniciado", "dv_btc": "Backtest DEV do período escolhido iniciado",
            "dv_btx": "Backtest DEV cancelado", "dv_on": "Robô DEV rodando", "dv_off": "Robô DEV pausado",
@@ -394,6 +395,32 @@ def sniper_tab():
            "<div style='margin-top:8px'>", _button("sn_paper", "🧪 INICIAR SNIPER (simulação)"), _button("sn_stop", "⏹️ Parar", "stop"),
            "</div><div class='mut'>O modo REAL só liga pelo Telegram (✅ Sniper REAL), e só se o backtest achar um grupo com lucro "
            "fora da amostra.</div><pre>", _e(sb.status_text()), "</pre></div>"]
+    import sniper_pro as sp
+    pj = sp.state()
+    out += ["<div class='card'><h2>🔬 Backtest PRO 180 dias</h2>", _button("pro_dl", "▶ INICIAR BACKTEST 180 DIAS", "big"),
+            "<div style='margin-top:8px'>", _button("pro_cmp", "COMPARAR ESTRATÉGIAS"), _button("pro_opt", "OTIMIZAR PARÂMETROS"),
+            _button("pro_sim", "TESTAR MELHOR ESTRATÉGIA EM SIMULAÇÃO"), _button("pro_x", "⏹️ Interromper", "stop"), "</div>"]
+    if pj:
+        prog = int(pj.get("progress") or 0)
+        out += ["<div style='margin-top:10px'><b>", _e(pj.get("kind", "")), "</b> — ", _e(pj.get("status", "")), " · ", _e(pj.get("stage", "")),
+                "<div class='bar' style='margin-top:6px'><i style='width:", str(prog), "%'></i></div><div class='mut'>", str(prog),
+                "% (real, do servidor) · começou há ", _ago(pj.get("started")), "</div></div>"]
+    rep = sp.report()
+    if rep:
+        w = rep.get("winner")
+        best = (rep.get("profiles") or {}).get(w or "B") or {}
+        if best.get("final"):
+            out += ["<div class='mut' style='margin-top:8px'>Curva de patrimônio (histórico, perfil ", _e(w or "B"), ", teste independente):</div>",
+                    _sparkline(best["final"].get("curve") or [])]
+        out += ["<pre>", _e(sp.text(rep)), "</pre>"]
+        tl = (best.get("final") or {}).get("trade_list") or []
+        if tl:
+            out.append("<div class='tw'><table><tr><th>Quando</th><th>Idade</th><th>Resultado</th><th>Líquido</th><th>Saída</th></tr>")
+            for t in tl[-40:][::-1]:
+                out += ["<tr><td>", time.strftime("%d/%m %H:%M", time.gmtime(t["opened"])), "</td><td>", str(t["age"]), " min</td><td>",
+                        format(t["pct"], "+.1f"), "%</td><td>", _usd(t["pnl"], True), "</td><td>", _e(t["exit"]), "</td></tr>"]
+            out.append("</table></div>")
+    out.append("<div class='mut'>Histórico = backtest com dados reais da blockchain; simulação = dinheiro de mentira ao vivo; real = carteira.</div></div>")
     j = sbt.job()
     if j:
         prog = int(j.get("progress") or 0)
