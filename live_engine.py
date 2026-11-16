@@ -334,6 +334,7 @@ def sell_message(symbol, signal, settled):
     pct = pnl / settled["cost_usd"] * 100 if settled.get("cost_usd") else 0.0
     why = {"take_profit": "🚀 Stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)",
            "time_stop": "⏱️ Tempo esgotado (não andou a tempo)",
+           "liquidity_drained": "💧 Liquidez sumiu (venderam tudo na pool)",
            "candle_close": "🕯️ Vela de 1 min fechou",
            "candle_peak": "🎯 Alvo da vela atingido",
            "launch_profit": "💰 Alvo de lucro atingido",
@@ -482,7 +483,7 @@ def exit_cycle(send, chat):
             state.set_position_amount(mint, held)  # transfer-fee tokens: sell what we really hold
             amount = held
         label = {"take_profit": "🚀 STOP MÓVEL ACIONADO", "time_stop": "⏱️ TEMPO ESGOTADO",
-                 "copy_breakeven": "🛡️ STOP NA ENTRADA ACIONADO"}.get(signal["reason"], "🛑 STOP LOSS ACIONADO")
+                 "liquidity_drained": "💧 SEM LIQUIDEZ", "copy_breakeven": "🛡️ STOP NA ENTRADA ACIONADO"}.get(signal["reason"], "🛑 STOP LOSS ACIONADO")
         send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO " + symbol + "\n" + mint)
         try:
             state.mark_exit_reason(mint, signal["reason"])
