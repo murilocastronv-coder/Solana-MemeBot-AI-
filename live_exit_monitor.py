@@ -155,6 +155,14 @@ def position_signal(position, cost, proceeds):
         held = time.time() - float(position.get("opened_at") or time.time())
         action, reason = snipe_bot.exit_signal(ratio, peak, held)
         return {"action": action, "reason": reason or "snipe_hold", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
+    if position.get("mode") == "grad":
+        # Graduados: same rule as the graduation backtest (grad_bot.exit_signal)
+        import grad_bot
+        ratio = float(proceeds) / float(cost) if cost else 0.0
+        peak = max(ratio, float(position.get("peak_ratio") or 0))
+        held = time.time() - float(position.get("opened_at") or time.time())
+        action, reason = grad_bot.exit_signal(ratio, peak, held)
+        return {"action": action, "reason": reason or "grad_hold", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") == "dev":
         # DEV robot: its own exits (dev sells, -8%, +15% / trailing) run in dev_bot; this is only a safety
         # stop in case its loop stops (-20%)

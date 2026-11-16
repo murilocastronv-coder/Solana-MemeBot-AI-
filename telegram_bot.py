@@ -152,6 +152,8 @@ def keyboard():
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
  return [[{"text":"🎓 BACKTEST: MOEDA QUE GRADUOU (3 meses)","callback_data":"gr_bt"}],
+  [{"text":"🎓 Graduados: LIGAR REAL","callback_data":"gd_on"},{"text":"⏸️ Graduados: desligar","callback_data":"gd_off"}],
+  [{"text":"🎓 Graduados: status","callback_data":"gd_status"}],
   [{"text":"🎯 BACKTEST SNIPER (3 meses, ~3 min)","callback_data":"sn_bt"}],
   [{"text":"🎯 BACKTEST SNIPER — moedas com 1h30+","callback_data":"sn_bt_old"}],
   [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Ligar sniper vencedor","callback_data":"sn_apply"}],
@@ -354,6 +356,15 @@ def handle(update):
      format(ci[0]*100,".0f")+"–"+format(ci[1]*100,".0f")+"%) · "+str(x["trades"])+" ops · PF "+format(x["pf"] or 0,".1f")+" · US$ "+format(x["pnl"] or 0,"+,.0f"))
    for part in split_message("\n".join(lines)):send(chat,part,keyboard())
   except Exception as exc:send(chat,"⛔ DEV Hunter: "+str(exc)[:200],keyboard())
+  return
+ if action in ("gd_on","gd_off","gd_status"):
+  import grad_bot
+  try:
+   pre=""
+   if action=="gd_on":live_engine.start();grad_bot.set_enabled(True);pre="▶️ Robô GRADUADOS ligado com dinheiro real (US$ "+format(grad_bot.USD,"g")+" por compra, máx. "+str(grad_bot.MAX_OPEN)+", para no dia em que perder US$ "+format(grad_bot.DAILY_LOSS,"g")+").\n\n"
+   elif action=="gd_off":grad_bot.set_enabled(False);pre="⏸️ Robô GRADUADOS desligado: não compra mais; as posições abertas continuam com stop e stop móvel.\n\n"
+   send(chat,pre+grad_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Graduados: "+str(exc)[:200],keyboard())
   return
  if action=="gr_bt":
   import grad_backtest,snipe_backtest
@@ -1212,6 +1223,18 @@ def snipe_loop():
     else:snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
+def grad_loop():
+ """Owner (Nov 16): buys coins that graduate from pump.fun to PumpSwap (real money, grad_bot)."""
+ import grad_bot,snipe_backtest
+ time.sleep(70)
+ rpc=None
+ while True:
+  try:
+   if os.getenv("SOLANA_RPC_URL"):
+    rpc=rpc or snipe_backtest.fast_rpc(rps=5)
+    grad_bot.cycle(send,active_chat(),rpc=rpc)
+  except Exception as exc:logging.exception("grad cycle failed: %s",type(exc).__name__)
+  time.sleep(grad_bot.CHECK_S)
 def dev_real_once():
  """Owner (Nov 15, later): the DEV robot trades real money. Once."""
  try:
@@ -1288,6 +1311,7 @@ def loop():
   threading.Thread(target=dev_audit_loop,daemon=True).start()
   threading.Thread(target=dev_follow_loop,daemon=True).start()
   threading.Thread(target=snipe_loop,daemon=True).start()
+  threading.Thread(target=grad_loop,daemon=True).start()
   threading.Thread(target=dev_fast_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()

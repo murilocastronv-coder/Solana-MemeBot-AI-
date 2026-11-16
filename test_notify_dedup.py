@@ -54,7 +54,7 @@ class MenuTests(unittest.TestCase):
     @patch("telegram_bot.OWNER_MENU", "full")     # full menu (OWNER_MENU=full)
     def test_menu_has_only_copy_trade_and_bot_wallet(self):
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
-        self.assertEqual(data, {"gr_bt", "sn_bt", "sn_bt_old", "sn_status", "sn_apply", "sn_off", "dv_status", "dv_on", "dv_off", "st_run", "st_x", "ls_run", "hunt7", "hunt30", "hunt90", "hunt_list",
+        self.assertEqual(data, {"gr_bt", "gd_on", "gd_off", "gd_status", "sn_bt", "sn_bt_old", "sn_status", "sn_apply", "sn_off", "dv_status", "dv_on", "dv_off", "st_run", "st_x", "ls_run", "hunt7", "hunt30", "hunt90", "hunt_list",
                                 "hunt_x", "dv_stop", "dv_close", "dv_real", "dv_sim"})   # owner (Nov 16): only the DEV robot   # owner (Nov 15): DEV only
 
     def test_removed_buttons_answer_removed(self):
