@@ -160,7 +160,7 @@ def keyboard():
   [{"text":"📋 DEVs encontrados","callback_data":"hunt_list"},{"text":"⏹️ Parar busca","callback_data":"hunt_x"}],
   [{"text":"▶️ Iniciar DEV","callback_data":"dv_on"},{"text":"⏸️ Pausar DEV","callback_data":"dv_off"}],
   [{"text":"🛑 PARADA DE EMERGÊNCIA DEV","callback_data":"dv_stop"}],
-  [{"text":"✅ Usar estratégia vencedora","callback_data":"dv_apply"},{"text":"↩️ Regra original (80%)","callback_data":"dv_orig"}],
+  [{"text":"✅ Usar estratégia vencedora","callback_data":"dv_apply"},{"text":"↩️ Regra original","callback_data":"dv_orig"}],
   [{"text":"▶ BACKTEST 5 MESES","callback_data":"dv_bt150"}],
   [{"text":"🧪 6 meses","callback_data":"dv_bt180"},{"text":"🧪 12 meses","callback_data":"dv_bt365"},
    {"text":"⏹️ Cancelar","callback_data":"dv_btx"}],
@@ -333,7 +333,7 @@ def handle(update):
     days=int(action[4:])
     why=dev_hunter.start(dex_rpc() if os.getenv("SOLANA_RPC_URL") else None,days,300,send=send,chat=chat)
     send(chat,("🕵️ Buscando criadores de moedas dos últimos "+str(days)+" dias (até 300 carteiras novas). Elas entram "
-     "na fila de análise com os critérios: acerto ≥ 80%, ≥ 20 operações, ≥ 10 tokens, lucro, PF ≥ 2, sem rug, mesma carteira.") if not why else "⛔ "+why,keyboard());return
+     "na fila de análise com os critérios: acerto ≥ 70%, ≥ 20 operações, ≥ 5 moedas, lucro, PF ≥ 2, sem rug, mesma carteira ≥ 2 dias, com fundo.") if not why else "⛔ "+why,keyboard());return
    r=dev_hunter.results();j=dev_hunter.job()
    lines=["🕵️ DEV HUNTER — busca: "+str(j.get("status","nunca rodou"))+" · "+str(j.get("progress",0))+"% · "+str(j.get("stage","")),
     "Achadas "+str(r["found"])+" · analisadas "+str(r["analysed"])+" · ✅ aprovadas "+str(r["approved"])+" · ❌ rejeitadas "+str(r["rejected"])+" · na fila "+str(r["queue"])]
@@ -377,7 +377,7 @@ def handle(update):
      ". US$ "+format(dev_bot.buy_usd(),"g")+" por compra, máx. "+str(dev_bot.MAX_OPEN)+" abertas.\n\n") if r else \
      "⛔ Ainda não há estratégia que deu lucro fora da amostra. Toque no 🧪 Backtest; o robô continua com a regra original.\n\n"
    elif action=="dv_orig":
-    __import__("dev_follow").clear_rule();pre="↩️ Robô DEV de volta à regra original: DEV com acerto ≥ 80%, vende só quando o DEV vende.\n\n"
+    __import__("dev_follow").clear_rule();pre="↩️ Robô DEV de volta à regra original: DEV com acerto ≥ 70%, vende só quando o DEV vende.\n\n"
    elif action=="dv_close":dev_bot.close_all();pre="🧹 Posições simuladas do robô DEV encerradas.\n\n"
    elif action=="dv_real":
     live_engine.start();dev_bot.set_real(True)

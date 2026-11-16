@@ -37,7 +37,7 @@ def set_cfg(min_win=None, min_trades=None):
         d = db._load()
         cfg = d.get("hunt_cfg") or {}
         if min_win is not None:
-            cfg["min_win"] = max(0.8, min(1.0, float(min_win)))        # never below the owner's 80%
+            cfg["min_win"] = max(0.7, min(1.0, float(min_win)))        # never below the owner's 70%
         if min_trades is not None:
             cfg["min_trades"] = max(20, int(min_trades))               # never below 20 operations
         d["hunt_cfg"] = cfg

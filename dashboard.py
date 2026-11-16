@@ -343,7 +343,7 @@ def devs_tab(order="lucro"):
            "<input type='hidden' name='csrf' value='", csrf_token(), "'><input type='hidden' name='acao' value='hunt'>",
            "Período <select name='dias'><option value='7'>7 dias</option><option value='30' selected>30 dias</option>"
            "<option value='90'>90 dias</option></select> · máx. candidatos <input name='max' type='number' value='300' "
-           "min='10' max='2000' style='width:80px'> · acerto mín. <input name='acerto' type='number' value='80' min='80' max='100' "
+           "min='10' max='2000' style='width:80px'> · acerto mín. <input name='acerto' type='number' value='70' min='70' max='100' "
            "style='width:60px'>% · operações mín. <input name='ops' type='number' value='20' min='20' style='width:60px'>",
            "<button class='btn big' style='margin-top:10px'>🔎 BUSCAR DEVS LUCRATIVOS</button></form>",
            _button("hunt_x", "⏹️ Parar busca", "stop")]
@@ -359,7 +359,7 @@ def devs_tab(order="lucro"):
     if r["reasons"]:
         out.append("<div class='mut'>Motivos das rejeições: " + _e(" · ".join(k + " " + str(v) for k, v in r["reasons"].items())) + "</div>")
     out.append("<div class='mut'>A análise de cada carteira usa os créditos da Helius com limite por hora: centenas de "
-               "carteiras levam algumas horas. Aprovado = acerto ≥ 80%, ≥ 20 ops, ≥ 10 tokens, lucro, PF ≥ 2, sem rug, mesma carteira.</div></div>")
+               "carteiras levam algumas horas. Aprovado = acerto ≥ 70%, ≥ 20 ops, ≥ 5 moedas, lucro, PF ≥ 2, sem rug, mesma carteira ≥ 2 dias, com fundo.</div></div>")
     rows = dh.table(order)
     out += ["<div class='card'><h2>📋 DEVs</h2>Ordenar: <a href='/painel?ordem=lucro#t-devs'>lucro</a> · "
             "<a href='/painel?ordem=acerto#t-devs'>acerto</a> · <a href='/painel?ordem=atividade#t-devs'>atividade</a>",

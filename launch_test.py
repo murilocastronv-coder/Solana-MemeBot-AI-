@@ -1,6 +1,6 @@
 """Launch-copy test (owner, Nov 16): would buying a good dev's NEW coin right after the launch make money?
 
-For the devs with a good record (hit rate >= 80%, >= 20 trades, approved or dropped only for an empty wallet),
+For the devs with a good record (hit rate >= 70%, >= 20 trades, approved or dropped only for an empty wallet),
 take their own launches that the bot already knows (launch mints + the dev's real buy / sell times), and replay
 them with REAL on-chain trades (Helius getTransactionsForAddress):
 - entry = price of the first trade at least DELAY seconds after the dev's buy, for DELAYS (2 s, 10 s, 30 s);
@@ -29,7 +29,7 @@ def candidates(d=None):
     d = d or db._load()
     out = []
     for dev, v in d["devs"].items():
-        if v.get("win", 0) < 0.8 or v.get("trades", 0) < 20 or v.get("linked_from"):
+        if v.get("win", 0) < 0.7 or v.get("trades", 0) < 20 or v.get("linked_from"):
             continue
         if v.get("tier") not in db.TIER_OK and not str(v.get("why") or "").startswith("carteira sem fundo"):
             continue
