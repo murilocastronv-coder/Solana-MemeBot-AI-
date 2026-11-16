@@ -170,6 +170,9 @@ def keyboard():
   [{"text":"🔁 Propostas automáticas","callback_data":"mc_auto"},{"text":"⏸️ Só quando eu pedir","callback_data":"mc_manual"}],
   [{"text":"🚀 Memecoin REAL (aprovo cada uma)","callback_data":"mc_real"},{"text":"🧪 Memecoin simulação","callback_data":"mc_sim"}],
   [{"text":"🔬 Analisar criadores","callback_data":"mc_creators"},{"text":"📈 Padrões dos criadores","callback_data":"mc_patterns"}],
+  [{"text":"🎯 INICIAR BACKTEST — 180 DIAS","callback_data":"sn_bt180"}],
+  [{"text":"🧪 INICIAR SNIPER (simulação)","callback_data":"sn_paper"},{"text":"⏹️ Parar sniper","callback_data":"sn_stop"}],
+  [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Sniper REAL (vencedor)","callback_data":"sn_apply"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -458,16 +461,30 @@ def handle(update):
   why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat,old=True)
   send(chat,("🎯 Backtest do SNIPER para moedas com 1h30+ de vida (3 meses, dados reais): olha as moedas que sobreviveram com "
    "1h30, 2h, 3h e 4h e testa as 40 combinações. Relatório em ~3 min; toque de novo se vier PARCIAL.") if not why else "⛔ "+why,keyboard());return
+ if action in ("sn_bt180","sn_paper","sn_stop"):
+  import snipe_bot,snipe_backtest
+  if action=="sn_bt180":
+   why=snipe_backtest.start_groups(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
+   send(chat,("🎯 BACKTEST 180 DIAS iniciado com lançamentos REAIS da Pump.fun (inclui os que morreram): compara os grupos "
+    "10–20, 20–40 e 40–60 min, alvo/stop, nota mínima e filtros por walk-forward. Baixar 180 dias leva várias horas; "
+    "te aviso a cada hora e mando o relatório no fim.") if not why else "⛔ "+why,keyboard());return
+  if action=="sn_paper":
+   w=snipe_backtest._get("snipe_bt_winner",{})
+   if w.get("ok"):snipe_bot._use_cfg({"entry":w["entry"],"exit":w["exit"],"window":w.get("window")})
+   snipe_bot.start_sim()
+   send(chat,"🧪 SNIPER EM SIMULAÇÃO: dinheiro de mentira, preços reais. "+("Usa o ajuste vencedor do backtest. " if w.get("ok") else
+    "Ainda sem vencedor no backtest: usa a regra inicial (US$ 3, alvo +20%, stop −8%, 10–60 min). ")+"Te aviso a cada compra e venda.\n\n"+snipe_bot.status_text(),keyboard());return
+  snipe_bot.stop_all()
+  send(chat,"⏹️ Sniper parado: não compra mais. Posições reais abertas continuam com stop; as simuladas ficam paradas.\n\n"+snipe_bot.status_text(),keyboard());return
  if action=="sn_apply":
   import snipe_bot
   r=snipe_bot.apply_winner()
   if r:
    live_engine.start()
    en,ex=r["entry"],r["exit"]
-   send(chat,"✅ SNIPER LIGADO com o ajuste que deu lucro fora da amostra: volume 5 min ≥ US$ "+format(en[0],",.0f")+", compras/vendas ≥ "+
-    format(en[1],"g")+", subiu "+format(en[2],"g")+"–"+format(en[3],"g")+"% · stop −"+format(ex[0]*100,".0f")+"%, stop móvel de +"+
-    format(ex[1]*100,".0f")+"% ("+format(ex[2]*100,".0f")+"% abaixo do topo), "+format(ex[3],"g")+" min · US$ "+format(snipe_bot.USD,"g")+
-    " por compra · máx. "+str(snipe_bot.MAX_OPEN)+" · para no dia em que perder US$ "+format(snipe_bot.DAILY_LOSS,"g")+".",keyboard())
+   send(chat,"✅ SNIPER REAL LIGADO com o grupo e o ajuste que deram lucro fora da amostra: "+__import__("snipe_backtest")._set(en,ex)+
+    " · US$ "+format(snipe_bot.USD,"g")+" por compra · máx. "+str(snipe_bot.MAX_OPEN)+" · para no dia em que perder US$ "+
+    format(snipe_bot.DAILY_LOSS,"g")+" e de vez se perder US$ "+format(snipe_bot.OPERATIONAL_USD,"g")+". Toda compra e venda é confirmada na blockchain.",keyboard())
   else:send(chat,"⛔ O backtest ainda não achou um ajuste com lucro confiável fora da amostra. Toque em 🎯 BACKTEST SNIPER; o sniper continua desligado.",keyboard())
   return
  if action in ("sn_status","sn_on","sn_off","sn_bt","sn_btx","/sniper"):
@@ -475,7 +492,7 @@ def handle(update):
   try:
    pre=""
    if action=="sn_on":live_engine.start();snipe_bot.set_enabled(True);pre="▶️ Sniper 24 h ligado (dinheiro real).\n\n"
-   elif action=="sn_off":snipe_bot.stop_live();pre="⏸️ Sniper desligado: não compra; as posições abertas continuam com stop e stop móvel.\n\n"
+   elif action=="sn_off":snipe_bot.stop_all();pre="⏸️ Sniper desligado: não compra; as posições abertas continuam com stop e stop móvel.\n\n"
    elif action=="sn_btx":snipe_backtest.cancel();pre="⏹️ Cancelando o backtest do sniper (o que já baixou fica salvo).\n\n"
    elif action=="sn_bt":
     why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
@@ -1298,10 +1315,8 @@ def snipe_loop():
  time.sleep(60)
  while True:
   try:
-   # owner (Nov 16): only the DEV robot - the sniper does not buy any more; its launch scan only finds new creators
    if os.getenv("SOLANA_RPC_URL"):
-    if snipe_bot.live_ok() and snipe_bot.enabled():snipe_bot.cycle(send,active_chat(),rpc=DEV_RPC.setdefault("rpc",dex_rpc()))
-    else:snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
+    if snipe_bot.running():snipe_bot.cycle(send,active_chat(),rpc=DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
 def liq_loop():
@@ -1480,6 +1495,7 @@ def loop():
   threading.Thread(target=audit_loop,daemon=True).start()
   threading.Thread(target=wallet_discovery_loop,daemon=True).start()
   threading.Thread(target=meme_loop,daemon=True).start()
+  threading.Thread(target=snipe_loop,daemon=True).start()       # owner (Nov 16): sniper 10-60 min (buys only after INICIAR)
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
@@ -1529,6 +1545,17 @@ def web_action(action,form=None):
  """On/off switches of the web panel (same effect as the Telegram buttons)."""
  import copy_trader as ct
  chat=active_chat()
+ if action in ("sn_bt180","sn_paper","sn_stop"):
+  import snipe_bot,snipe_backtest
+  if action=="sn_bt180":
+   why=snipe_backtest.start_groups(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,ct._sol_usd(),send,chat)
+   if why:raise ValueError(why)
+  elif action=="sn_paper":
+   w=snipe_backtest._get("snipe_bt_winner",{})
+   if w.get("ok"):snipe_bot._use_cfg({"entry":w["entry"],"exit":w["exit"],"window":w.get("window")})
+   snipe_bot.start_sim()
+  else:snipe_bot.stop_all()
+  __import__("dashboard").record("🌐 Pelo site: "+__import__("dashboard").ACTIONS[action]);return
  if action.startswith("dv_"):
   import dev_bot,dev_backtest
   if action=="ls_run":

@@ -52,7 +52,8 @@ class RuleTest(Tmp):
 
     def test_daily_loss_and_max_open_block(self):
         buy = lambda *a: True
-        with mock.patch.object(sb, "_open", return_value=["a", "b"]):
+        sb.set_paper(False)                                   # the real-money limits
+        with mock.patch.object(sb, "_open", return_value=["a", "b", "c"]):
             self.assertIsNone(sb.cycle(pairs=[pair()], now=NOW, buy=buy, safety=lambda m: ""))
         with mock.patch.object(sb, "_open", return_value=[]), mock.patch.object(sb, "day_pnl", return_value=-25):
             self.assertIsNone(sb.cycle(pairs=[pair()], now=NOW, buy=buy, safety=lambda m: ""))
@@ -395,3 +396,55 @@ class LiqBacktestTest(unittest.TestCase):
         fetch = lambda u: [{"baseToken": {"address": sol}, "liquidity": {"usd": 1e7}, "priceUsd": "150"}]
         txt = lb.report(store, NOW, final=True, fetch=fetch)
         self.assertIn("Com US$ 50:", txt)
+
+
+class Sniper1060Test(Tmp):
+    def test_score_costs_and_tp(self):
+        hi = sb.score(30_000, 25_000, 150, 50, 10)
+        lo = sb.score(6_000, 2_100, 5, 30, -10)
+        self.assertGreater(hi, 80)
+        self.assertLess(lo, 20)
+        self.assertLess(sb.score(30_000, 25_000, 150, 50, 150), hi)      # extreme spike scores lower
+        self.assertEqual(sb.exit_signal(1.21, 1.21, 60, 0.08, 9, 0, 30, 0.20), ("sell", "take_profit"))
+        self.assertEqual(sb.exit_signal(0.91, 1.0, 60, 0.08, 9, 0, 30, 0.20), ("sell", "stop_loss"))
+        self.assertEqual(sb.exit_signal(1.05, 1.1, 31 * 60, 0.08, 9, 0, 30, 0.20), ("sell", "time_stop"))
+        self.assertTrue(sb.costs_ok(3, 0.20))                              # 6% + 1.3% < 10%
+        self.assertFalse(sb.costs_ok(0.5, 0.20))                           # US$ 0.50: fees eat the target
+
+    def test_paper_buy_and_exit(self):
+        sb.start_sim()
+        self.assertTrue(sb.running())
+        msgs = []
+        send = lambda chat, text: msgs.append(text)
+        p = pair()
+        p["priceUsd"] = "0.001"
+        self.assertTrue(sb._buy_paper(p, MINT, "TOK", send, 1, now=NOW))
+        rows = [{"baseToken": {"address": MINT}, "priceUsd": "0.00125"}]
+        self.assertEqual(sb.paper_exits(send, 1, now=NOW + 60, fetch=lambda url: rows), 1)
+        h = sb._load()["paper_hist"][-1]
+        self.assertEqual(h["exit"], "take_profit")
+        self.assertAlmostEqual(h["pnl_usd"], 3 * (1.25 * 0.97 ** 2 - 1) - 0.04, places=4)
+        self.assertIn("SIMULAÇÃO", msgs[-1])
+        sb.stop_all()
+        self.assertFalse(sb.running())
+
+
+class WalkForwardTest(Tmp):
+    def test_groups_report(self):
+        c = {"points": {}, "coins": {}}
+        start = NOW - 100 * 86400
+        for i in range(400):
+            created = start + i * 20000
+            snap = {"price": 1e-5, "mcap": 20_000, "vol5": 9_000, "buys": 80, "sells": 30, "up5": 8}
+            c["coins"]["m" + str(i)] = {"created": created, "snaps": {"10": snap, "15": snap, "20": snap, "30": snap, "45": snap, "55": snap},
+                                        "after": {a: [[created + int(a) * 60 + 30, 1e-5], [created + int(a) * 60 + 90, 1.3e-5 if i % 3 else 0.8e-5]]
+                                                  for a in ("10", "15", "20", "30", "45", "55")}}
+        rep = sbt.report_groups(c, start, start + 400 * 20000)
+        self.assertEqual(set(rep["groups"]), {"A", "B", "C"})
+        g = rep["groups"]["A"]
+        self.assertGreater(g["oos"]["trades"], 30)
+        self.assertGreater(g["oos"]["pnl"], 0)                 # 2 of 3 coins +30%: wins after costs
+        self.assertIsNotNone(rep["winner"])
+        txt = sbt.text_groups(rep)
+        self.assertIn("Grupo A (10–20 min)", txt)
+        self.assertIn("fora da amostra", txt)

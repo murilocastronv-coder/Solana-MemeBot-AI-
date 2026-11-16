@@ -25,25 +25,32 @@ import signals as sg
 import snipe_bot as sb
 
 PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
-DAYS = sg._f("SNIPE_BT_DAYS", 90)          # owner (Nov 16): 3 months
-SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 180))      # 2 per day over 3 months (same 12 h grid)
-DECISION_MIN = (5, 10, 15, 20, 30, 45)
+DAYS = sg._f("SNIPE_BT_DAYS", 180)         # owner (Nov 16, 24/7 prompt): 180 days
+SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 180))      # 1 per day over 180 days
+DECISION_MIN = (5, 10, 15, 20, 30, 45, 55)
+# owner (Nov 16): age groups compared by walk-forward (decision ages inside each group)
+GROUPS = (("A", "10–20 min", (10, 15)), ("B", "20–40 min", (20, 30)), ("C", "40–60 min", (45, 55)))
+FOLDS = int(sg._f("SNIPE_BT_FOLDS", 4))
 PER_POINT = int(sg._f("SNIPE_BT_PER_POINT", 15))      # launches per sampled moment
 OLD_AGES = (90, 120, 180, 240)      # owner (Nov 16): coins that already lived 1h30+
 DELAY_S = sg._f("SNIPE_BT_DELAY_S", 20)
 COST = sg._f("SNIPE_BT_COST_PER_SIDE", 0.03)                  # swap fee + slippage on young coins
 NET_FEE = sg._f("SNIPE_BT_NET_FEE_USD", 0.02)
-CAPITAL = sg._f("SNIPE_BT_CAPITAL", 500)
+CAPITAL = sg._f("SNIPE_BT_CAPITAL", 60)
 CALLS_PER_HOUR = int(sg._f("SNIPE_BT_CALLS_PER_HOUR", 3000))   # Helius budget (~100 credits per call)
 JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 3) * 60     # owner (Nov 16): answer in ~3 min; the next tap continues
 SUPPLY = 1_000_000_000
 MIN_TRADE_USD = sg._f("SNIPE_BT_MIN_TRADE_USD", 2)
-GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60), (8000, 2.5, 5, 25),
-              (2000, 1.0, 0, 100), (4000, 1.0, 0, 60),   # looser ones too: after a few minutes sellers often outnumber buyers
-              (2000, 0.8, -20, 200),                     # very loose: up to 1.25 sellers per buyer, any move
-              (2000, 0.0, -100, 10000))                  # baseline: every coin with US$ 2k of 5-min volume
-GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 45), (0.10, 0.15, 0.08, 10),
-             (0.25, 1.00, 0.25, 60))
+GRID_ENTRY = ((3000, 1.5, 5, 40, 0), (5000, 2.0, 5, 30, 0), (2000, 1.3, 10, 60, 0), (8000, 2.5, 5, 25, 0),
+              (2000, 1.0, 0, 100, 0), (4000, 1.0, 0, 60, 0),   # looser ones too: after a few minutes sellers often outnumber buyers
+              (2000, 0.8, -20, 200, 0),                     # very loose: up to 1.25 sellers per buyer, any move
+              (2000, 0.0, -100, 10000, 0),                  # baseline: every coin with US$ 2k of 5-min volume
+              (2000, 0.0, -100, 10000, 45), (2000, 0.0, -100, 10000, 60), (2000, 0.0, -100, 10000, 75))   # score 0-100 minimums
+# (stop, trailing arm, trailing drop, max minutes, fixed take profit); arm 9 = no trailing stop
+GRID_EXIT = ((0.08, 9.0, 0.0, 30, 0.20),                     # owner's start: +20% / -8%
+             (0.08, 9.0, 0.0, 60, 0.20), (0.05, 9.0, 0.0, 20, 0.15), (0.10, 9.0, 0.0, 30, 0.30), (0.12, 9.0, 0.0, 45, 0.50),
+             (0.08, 0.20, 0.08, 30, 0.0),                    # optional trailing stop instead of a fixed target
+             (0.20, 0.30, 0.12, 30, 0.0), (0.10, 0.15, 0.08, 10, 0.0))
 _STOP = threading.Event()
 _RUNNING = threading.Lock()
 _CALLS = []
@@ -244,8 +251,8 @@ def fetch_path(rpc, mint, t, sol_usd):
 
 
 def _passes_any(snap):
-    return any(not sb.metrics_reason(snap["mcap"], snap["vol5"], snap["buys"], snap["sells"], snap["up5"], mv, mr, mu, mx)
-               for mv, mr, mu, mx in GRID_ENTRY)
+    return any(not sb.metrics_reason(snap["mcap"], snap["vol5"], snap["buys"], snap["sells"], snap["up5"], *en)
+               for en in GRID_ENTRY)
 
 
 def refill_old(rpc, c, sol_usd, began, max_s, now, should_stop=None):
@@ -327,8 +334,7 @@ def download_coin(rpc, mint, created, sol_usd):
         out["snaps"][str(age)] = snap
         if snap is None:
             break                                    # no trades any more: dead coin, no later entries
-        if not any(not sb.metrics_reason(snap["mcap"], snap["vol5"], snap["buys"], snap["sells"], snap["up5"],
-                                         mv, mr, mu, mx) for mv, mr, mu, mx in GRID_ENTRY):
+        if not _passes_any(snap):
             continue
         # some grid setting would enter here: read the path after the entry (up to ~3 pages)
         out["after"][str(age)] = fetch_path(rpc, mint, t, sol_usd)
@@ -388,8 +394,8 @@ def simulate(c, start, end, entry, exit_, usd=None, max_open=None, daily_loss=No
     usd = float(usd or sb.USD)
     max_open = int(max_open or sb.MAX_OPEN)
     daily_loss = sb.DAILY_LOSS if daily_loss is None else daily_loss
-    mv, mr, mu, mx = entry
-    stop, arm, drop, hold = exit_
+    entry = tuple(entry) + (0,) * (5 - len(entry))
+    stop, arm, drop, hold, tp = tuple(exit_) + (0,) * (5 - len(exit_))
     cands = []
     for m, coin in c["coins"].items():
         if not start <= coin["created"] < end:
@@ -398,7 +404,7 @@ def simulate(c, start, end, entry, exit_, usd=None, max_open=None, daily_loss=No
             snap = coin["snaps"].get(str(age))
             if snap is None:
                 break
-            if sb.metrics_reason(snap["mcap"], snap["vol5"], snap["buys"], snap["sells"], snap["up5"], mv, mr, mu, mx):
+            if sb.metrics_reason(snap["mcap"], snap["vol5"], snap["buys"], snap["sells"], snap["up5"], *entry):
                 continue
             t0 = coin["created"] + age * 60
             if str(age) not in coin["after"]:
@@ -412,7 +418,7 @@ def simulate(c, start, end, entry, exit_, usd=None, max_open=None, daily_loss=No
                 for t, px in path:
                     ratio = px / entry_px
                     peak = max(peak, ratio)
-                    act, reason = sb.exit_signal(ratio, peak, t - path[0][0], stop, arm, drop, hold)
+                    act, reason = sb.exit_signal(ratio, peak, t - path[0][0], stop, arm, drop, hold, tp)
                     if act == "sell":
                         res, t_exit, why = ratio - 1, t, reason
                         break
@@ -462,7 +468,7 @@ def report(c, start, end, ages=None):
             grid.append((tr, en, ex))
     ok = [g for g in grid if g[0]["trades"] >= 10]
     best = max(ok, key=lambda g: g[0]["pnl"]) if ok else None
-    live = ((sb.MIN_VOL_5M, sb.MIN_BUY_RATIO, sb.MIN_UP_5M, sb.MAX_UP_5M), (sb.STOP, sb.ARM, sb.DROP, sb.MAX_HOLD_MIN))
+    live = ((sb.MIN_VOL_5M, sb.MIN_BUY_RATIO, sb.MIN_UP_5M, sb.MAX_UP_5M, sb.MIN_SCORE), (sb.STOP, sb.ARM, sb.DROP, sb.MAX_HOLD_MIN, sb.TP))
     out = {"start": start, "end": end, "cut": cut, "coins": sum(1 for x in c["coins"].values() if start <= x["created"] < end),
            "alive": sum(1 for x in c["coins"].values() if start <= x["created"] < end and not x.get("dead")),
            "points": sum(1 for p in c["points"] if start <= int(p) < end), "total_points": len(sample_points(start, end)),
@@ -478,6 +484,86 @@ def report(c, start, end, ages=None):
     if ages:
         out["alive"] = sum(1 for x in c["coins"].values() if start <= x["created"] < end and (x["snaps"].get(str(ages[0])) or None))
     return out
+
+
+def walk_forward(c, start, end, ages, folds=None):
+    """Split the period in `folds` windows; choose the best setting on window k-1 and trade it on window k.
+    Only the results of the windows it was NOT chosen on count (out of sample)."""
+    folds = folds or FOLDS
+    edges = [start + (end - start) * i / folds for i in range(folds + 1)]
+    oos, picks = [], []
+    for k in range(1, folds):
+        grid = [(simulate(c, edges[k - 1], edges[k], en, ex, ages=ages)[0], en, ex) for en in GRID_ENTRY for ex in GRID_EXIT]
+        ok = [g for g in grid if g[0]["trades"] >= 5]
+        if not ok:
+            continue
+        best = max(ok, key=lambda g: g[0]["pnl"])
+        picks.append((best[1], best[2]))
+        oos += simulate(c, edges[k], edges[k + 1], best[1], best[2], ages=ages)[1]
+    # setting to use from now on: best on everything before the last window (validated on the last one above)
+    grid = [(simulate(c, start, edges[-2], en, ex, ages=ages)[0], en, ex) for en in GRID_ENTRY for ex in GRID_EXIT]
+    ok = [g for g in grid if g[0]["trades"] >= 10]
+    final = max(ok, key=lambda g: g[0]["pnl"]) if ok else None
+    owner = simulate(c, edges[1], end, GRID_ENTRY[7], GRID_EXIT[0], ages=ages)[0]   # owner's +20% / -8%, no other filter
+    return {"oos": _summary(oos, edges[1], end), "picks": picks, "owner_rule": owner,
+            "final": {"entry": final[1], "exit": final[2], "train": final[0]} if final else None}
+
+
+def report_groups(c, start, end):
+    out = {"start": start, "end": end, "coins": sum(1 for x in c["coins"].values() if start <= x["created"] < end),
+           "alive": sum(1 for x in c["coins"].values() if start <= x["created"] < end and not x.get("dead")),
+           "points": sum(1 for p in c["points"] if start <= int(p) < end), "total_points": len(sample_points(start, end)),
+           "groups": {}}
+    for key, label, ages in GROUPS:
+        out["groups"][key] = dict(walk_forward(c, start, end, ages), label=label, ages=list(ages))
+    good = [(k, g) for k, g in out["groups"].items() if group_ok(g)]
+    out["winner"] = max(good, key=lambda kg: kg[1]["oos"]["pnl"])[0] if good else None
+    return out
+
+
+def group_ok(g):
+    t = g["oos"]
+    return bool(g.get("final") and t["trades"] >= 30 and t["pnl"] > 0 and (t["pf"] is None or t["pf"] >= 1.3))
+
+
+def _set(en, ex):
+    en = tuple(en) + (0,) * (5 - len(en))
+    ex = tuple(ex) + (0,) * (5 - len(ex))
+    return ("vol 5 min ≥ US$ " + format(en[0], ",.0f") + (", compras/vendas ≥ " + format(en[1], "g") if en[1] else "") +
+            (", subiu " + format(en[2], "g") + "–" + format(en[3], "g") + "%" if en[3] < 10000 else "") +
+            (", nota ≥ " + format(en[4], "g") if en[4] else "") + " · " +
+            ("alvo +" + format(ex[4] * 100, ".0f") + "% · " if ex[4] else "") + "stop −" + format(ex[0] * 100, ".0f") + "%" +
+            (" · stop móvel de +" + format(ex[1] * 100, ".0f") + "% (" + format(ex[2] * 100, ".0f") + "% abaixo do topo)" if ex[1] < 9 else "") +
+            " · máx. " + format(ex[3], "g") + " min")
+
+
+def text_groups(rep):
+    L = ["🎯 BACKTEST SNIPER 10–60 MIN — " + time.strftime("%d/%m/%Y", time.gmtime(rep["start"])) + " a " +
+         time.strftime("%d/%m/%Y", time.gmtime(rep["end"])),
+         "Amostra REAL da blockchain: " + str(rep["coins"]) + " lançamentos da Pump.fun, incluindo os que morreram (" +
+         str(rep["alive"]) + " tiveram volume) em " + str(rep["points"]) + " de " + str(rep["total_points"]) + " dias · US$ " +
+         format(sb.USD, "g") + " por compra · máx. " + str(sb.MAX_OPEN) + " abertas · perda máx. US$ " + format(sb.DAILY_LOSS, "g") +
+         "/dia · custos " + format(COST * 100, ".0f") + "% por lado + US$ " + format(NET_FEE, "g") + " por transação",
+         "Walk-forward em " + str(FOLDS) + " períodos: escolhe o ajuste num período e conta só o resultado no período seguinte (fora da amostra)."]
+    for key, label, ages in GROUPS:
+        g = rep["groups"][key]
+        L.append(("🏆 " if rep.get("winner") == key else "▫️ ") + "Grupo " + key + " (" + label + ")")
+        L.append("  • fora da amostra: " + _fmt(g["oos"]))
+        L.append("  • sua regra (+20% / −8%, só volume ≥ US$ 2 mil): " + _fmt(g["owner_rule"]))
+        if g.get("final"):
+            L.append("  • ajuste atual: " + _set(g["final"]["entry"], g["final"]["exit"]))
+    if rep.get("winner"):
+        L.append("✅ Grupo " + rep["winner"] + " deu lucro FORA DA AMOSTRA (≥ 30 operações, PF ≥ 1,3). Próximo passo: 🧪 INICIAR SNIPER "
+                 "em simulação com esse ajuste; o real só com o seu ✅ depois.")
+    else:
+        L.append("❌ Nenhum grupo teve lucro confiável fora da amostra (precisa ≥ 30 operações, lucro e PF ≥ 1,3). "
+                 "Não recomendo dinheiro real com essa estratégia.")
+    left = rep["total_points"] - rep["points"]
+    if left > 0:
+        L.append("⏳ PARCIAL: faltam " + str(left) + " dias da amostra (o download continua sozinho).")
+    L.append("⚠️ Amostra (não todos os lançamentos); preço do SOL constante; falhas de transação não simuladas; moeda sem "
+             "negociação depois da entrada = perda total. Passado não garante futuro.")
+    return "\n".join(L)
 
 
 def _exits(trades):
@@ -596,6 +682,69 @@ def start(rpc, sol_usd, send=None, chat=None, now=None, old=False):
                 send(chat, txt)
         except Exception as exc:
             logging.exception("snipe backtest failed")
+            _set_job(status="erro", stage=type(exc).__name__ + ": " + str(exc)[:120])
+            if send and chat:
+                send(chat, "⛔ Backtest do sniper falhou: " + type(exc).__name__ + ": " + str(exc)[:120])
+        finally:
+            _RUNNING.release()
+
+    threading.Thread(target=work, daemon=True).start()
+    return ""
+
+
+WINDOWS = {"A": (10, 20), "B": (20, 40), "C": (40, 60)}
+FULL_MAX_H = sg._f("SNIPE_BT_FULL_MAX_HOURS", 12)
+
+
+def start_groups(rpc, sol_usd, send=None, chat=None, now=None):
+    """Owner's button INICIAR BACKTEST — 180 DIAS: downloads in the background until the whole sample is in (or
+    FULL_MAX_H hours), with a progress note every hour, then compares the 3 age groups by walk-forward."""
+    if not _RUNNING.acquire(blocking=False):
+        return "já tem um backtest do sniper rodando"
+    if rpc is None:
+        _RUNNING.release()
+        return "precisa do SOLANA_RPC_URL (Helius) no Render"
+    _STOP.clear()
+    now = now or time.time()
+    end = now - 2 * 3600
+    begin = end - DAYS * 86400
+    _set_job(status="rodando", progress=0, stage="baixando lançamentos (180 dias)", started=now)
+
+    def work():
+        try:
+            t0, last_note, c = time.time(), time.time(), None
+            while not _STOP.is_set() and time.time() - t0 < FULL_MAX_H * 3600:
+                def prog(done, total, coins):
+                    _set_job(progress=int(95 * done / max(total, 1)), stage="dias " + str(done) + "/" + str(total) +
+                             " · " + str(coins) + " moedas baixadas")
+                DEADLINE[0] = time.time() + JOB_MAX_S
+                try:
+                    c = download(rpc, sol_usd, now, begin, end, _STOP.is_set, prog)
+                except TimeoutError:
+                    c = cache()
+                finally:
+                    DEADLINE[0] = 0.0
+                left = sum(1 for p in sample_points(begin, end) if str(p) not in c["points"])
+                if not left:
+                    break
+                if send and chat and time.time() - last_note > 3600:
+                    last_note = time.time()
+                    send(chat, "⏳ Backtest 180 dias: faltam " + str(left) + " de " + str(len(sample_points(begin, end))) +
+                         " dias da amostra (" + str(len(c["coins"])) + " moedas baixadas). Continua sozinho.")
+            c = c or cache()
+            rep = report_groups(c, begin, end)
+            txt = text_groups(rep)
+            _put("snipe_bt_runs", runs()[-4:] + [{"id": str(int(now)), "created": time.time(), "text": txt}])
+            w = rep.get("winner")
+            g = rep["groups"].get(w) if w else None
+            _put("snipe_bt_winner", {"ok": bool(w), "entry": g["final"]["entry"], "exit": g["final"]["exit"], "test": g["oos"],
+                                     "window": WINDOWS[w], "group": w} if w else {"ok": False})
+            _set_job(status="cancelado" if _STOP.is_set() else "pronto", progress=100, stage="pronto", finished=time.time())
+            sb.note("backtest 180 dias: " + ("vencedor grupo " + w if w else "nenhum grupo com lucro fora da amostra"))
+            if send and chat:
+                send(chat, txt)
+        except Exception as exc:
+            logging.exception("snipe backtest 180 failed")
             _set_job(status="erro", stage=type(exc).__name__ + ": " + str(exc)[:120])
             if send and chat:
                 send(chat, "⛔ Backtest do sniper falhou: " + type(exc).__name__ + ": " + str(exc)[:120])
