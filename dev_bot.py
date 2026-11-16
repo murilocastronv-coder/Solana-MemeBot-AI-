@@ -23,7 +23,7 @@ E = lambda k, d: sg._f(k, d)   # noqa: E731 - every number configurable on Rende
 START_USD = E("DEV_SIM_START_USD", 500)
 BUY_USD = E("DEV_BUY_USD", 5)
 MIN_SCORE = E("DEV_MIN_SCORE", 0)        # owner (Nov 15, prompt criteria): no DEV SCORE minimum
-MIN_LIQ = E("DEV_MIN_LIQUIDITY_USD", 3_000)     # owner (Nov 16): minimum US$ 3 thousand
+MIN_LIQ = E("DEV_MIN_LIQUIDITY_USD", 4_000)     # owner (Nov 16): minimum US$ 4 thousand
 MIN_VOL_5M = E("DEV_MIN_VOLUME_5M", 5_000)
 MAX_OPEN = int(E("DEV_MAX_OPEN", 3))
 MAX_RUNUP_5M = E("DEV_MAX_RUNUP_5M", 30)          # % in 5 min: too late to enter
@@ -68,7 +68,7 @@ def bt_ok(h):
     cost = h.get("cost_usd")
     return r <= BT_MAX_RET and (cost is None or float(cost) >= BT_MIN_COST_USD)
 BT_PERIOD_CAPITAL = E("DEV_BT_PERIOD_CAPITAL", 500)
-CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 3_000)      # owner (Nov 16): minimum US$ 3 thousand (live and backtests)
+CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 4_000)      # owner (Nov 16): minimum US$ 4 thousand (live and backtests)
 CURVE_MIN_VOL_5M = E("DEV_CURVE_MIN_VOLUME_5M", 0)   # a coin launched seconds ago has no 5-min volume yet
 # owner (Nov 15): only pump.fun coins (launch curve, PumpSwap or a pump.fun mint)
 PUMP_ONLY = os.getenv("DEV_PUMP_ONLY", "true").strip().lower() != "false"
