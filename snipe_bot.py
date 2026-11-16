@@ -185,6 +185,14 @@ def set_enabled(on):
         _save(d)
 
 
+def _dev_on():
+    try:
+        import dev_bot
+        return dev_bot.enabled()
+    except Exception:
+        return False
+
+
 def _history():
     try:
         import live_trade_state
@@ -246,7 +254,7 @@ def scan_launches(rpc, now=None, get_tx=None):
         grad_bot.add_launches(added)          # owner (Nov 16): graduation robot watches every launch
     except Exception as exc:
         logging.info("snipe grad feed: %s", type(exc).__name__)
-    if creators:
+    if creators and _dev_on():
         try:
             import dev_bot
             dev_bot.enqueue_creators(creators, now)
