@@ -68,8 +68,8 @@ def bt_ok(h):
     cost = h.get("cost_usd")
     return r <= BT_MAX_RET and (cost is None or float(cost) >= BT_MIN_COST_USD)
 BT_PERIOD_CAPITAL = E("DEV_BT_PERIOD_CAPITAL", 500)
-CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 5_000)      # coins still on the pump.fun curve (no pool yet)
-CURVE_MIN_VOL_5M = E("DEV_CURVE_MIN_VOLUME_5M", 1_000)
+CURVE_MIN_MCAP = E("DEV_CURVE_MIN_MCAP", 1_000)      # owner (Nov 16): enter early on the pump.fun curve
+CURVE_MIN_VOL_5M = E("DEV_CURVE_MIN_VOLUME_5M", 0)   # a coin launched seconds ago has no 5-min volume yet
 # owner (Nov 15): only pump.fun coins (launch curve, PumpSwap or a pump.fun mint)
 PUMP_ONLY = os.getenv("DEV_PUMP_ONLY", "true").strip().lower() != "false"
 BT_CAPITAL = E("DEV_BT_CAPITAL", 60)
@@ -492,7 +492,7 @@ def buy_reason(p, info):
             return "liquidez US$ " + format(liq, ",.0f") + " < US$ " + format(MIN_LIQ, ",.0f")
         if vol5 < MIN_VOL_5M:
             return "volume 5 min US$ " + format(vol5, ",.0f") + " < US$ " + format(MIN_VOL_5M, ",.0f")
-    if up5 > MAX_RUNUP_5M:
+    if up5 > MAX_RUNUP_5M and p.get("dexId") != "pumpfun":   # on the curve the +15%-since-the-DEV rule decides
         return "já subiu " + format(up5, ".0f") + "% em 5 min (entrada atrasada)"
     return ""
 
@@ -961,8 +961,60 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
     return done
 
 
+def watch_approved(rpc, by_mint, sol_usd, now, send=None, chat=None, safety=None, get_tx=None):
+    """Read ALL new transactions of the approved devs (launches / buys on any pump.fun coin, sells, hidden
+    transfers, money sent to a new wallet). Returns {mint: share the dev sold}."""
+    if get_tx is None:
+        import dex_wallets
+        get_tx = dex_wallets._get_tx
+    d = _load()
+    _RULE["r"] = d.get("follow_rule")
+    dev_sells = {}
+    for dev, info in list(d["devs"].items()):
+        if not approved(info):
+            continue
+        try:
+            opts = {"limit": 25}
+            if info.get("last_sig"):
+                opts["until"] = info["last_sig"]
+            sigs = rpc("getSignaturesForAddress", [dev, opts]) or []
+        except Exception:
+            continue
+        if sigs:
+            with _LOCK:
+                dd = _load()
+                dd["devs"].setdefault(dev, {})["last_sig"] = sigs[0]["signature"]
+                _save(dd)
+        if not info.get("last_sig"):
+            continue                                 # first read: only remember where we are
+        for s in reversed(sigs):
+            if s.get("err"):
+                continue
+            try:
+                tx = get_tx(rpc, s["signature"])
+            except Exception:
+                continue
+            for mv in dev_moves(tx, dev):
+                handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send, chat, safety, dev_sells)
+            out = sol_out(tx, dev)
+            if out and info.get("tier") in TIER_OK:
+                link_wallet(dev, out[0], out[1], rpc, now, send, chat)
+    return dev_sells
+
+
+def watch_fast(send=None, chat=None, rpc=None, sol_usd=None):
+    """Owner (Nov 16): see the approved devs' buys / sells within seconds (own thread). Sells are mirrored at once."""
+    if not _load().get("enabled"):
+        return {}
+    now = time.time()
+    sells = watch_approved(rpc, {}, sol_usd, now, send, chat)
+    if sells and _load()["positions"]:
+        exits(_prices(list(_load()["positions"]), {}), time.time(), send, chat, sells)
+    return sells
+
+
 def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol_usd=None, safety=None,
-          analyze=None, prices_fn=None, do_audit=True):
+          analyze=None, prices_fn=None, do_audit=True, do_watch=True):
     """One pass: new tokens -> their dev; rate devs; watch approved devs' buys / sells; exits."""
     now = now or time.time()
     d = _load()
@@ -999,39 +1051,8 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
     # 2) rate devs (oldest rating first) - the 24/7 loop does this in its own thread (audit_devs)
     if do_audit:
         audit_devs(rpc, sol_usd, now, analyze)
-    # 3) approved devs: read ALL their new transactions (new launches / first buys on any pump.fun coin,
-    #    sells and hidden transfers of coins we hold)
-    d = _load()
-    dev_sells = {}
-    for dev, info in list(d["devs"].items()):
-        if not approved(info):
-            continue
-        try:
-            opts = {"limit": 25}
-            if info.get("last_sig"):
-                opts["until"] = info["last_sig"]
-            sigs = rpc("getSignaturesForAddress", [dev, opts]) or []
-        except Exception:
-            continue
-        if sigs:
-            with _LOCK:
-                dd = _load()
-                dd["devs"].setdefault(dev, {})["last_sig"] = sigs[0]["signature"]
-                _save(dd)
-        if not info.get("last_sig"):
-            continue                                 # first read: only remember where we are
-        for s in reversed(sigs):
-            if s.get("err"):
-                continue
-            try:
-                tx = get_tx(rpc, s["signature"])
-            except Exception:
-                continue
-            for mv in dev_moves(tx, dev):
-                handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send, chat, safety, dev_sells)
-            out = sol_out(tx, dev)
-            if out and info.get("tier") in TIER_OK:
-                link_wallet(dev, out[0], out[1], rpc, now, send, chat)
+    # 3) approved devs (the fast watcher thread does this every few seconds; do_watch=False then)
+    dev_sells = watch_approved(rpc, by_mint, sol_usd, now, send, chat, safety, get_tx) if do_watch else {}
     # 4) exits with live prices
     d = _load()
     if d["positions"]:

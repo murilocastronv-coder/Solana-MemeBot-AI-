@@ -1128,8 +1128,19 @@ def dev_loop():
   try:
    chat=active_chat()
    if not os.getenv("SOLANA_RPC_URL"):continue
-   dev_bot.cycle(send,chat,rpc=DEV_RPC.setdefault("rpc",dex_rpc()),sol_usd=__import__("copy_trader")._sol_usd(),do_audit=False)
+   dev_bot.cycle(send,chat,rpc=DEV_RPC.setdefault("rpc",dex_rpc()),sol_usd=__import__("copy_trader")._sol_usd(),do_audit=False,do_watch=False)
   except Exception as exc:logging.exception("devbot cycle failed: %s",type(exc).__name__)
+def dev_fast_loop():
+ """Owner (Nov 16): the approved devs every few seconds (own RPC limiter), so the bot buys early and sells with them."""
+ import dev_bot
+ rpc=dex_rpc()
+ gap=float(os.getenv("DEV_FAST_WATCH_S","5"))
+ time.sleep(20)
+ while True:
+  try:
+   if os.getenv("SOLANA_RPC_URL"):dev_bot.watch_fast(send,active_chat(),rpc,__import__("copy_trader")._sol_usd())
+  except Exception as exc:logging.exception("devbot fast watch failed: %s",type(exc).__name__)
+  time.sleep(gap)
 DEV_RPC={}
 def dev_audit_loop():
  """Rates the devs in line all the time, apart from the buy/sell watcher (finds approved devs faster)."""
@@ -1240,6 +1251,7 @@ def loop():
   threading.Thread(target=dev_audit_loop,daemon=True).start()
   threading.Thread(target=dev_follow_loop,daemon=True).start()
   threading.Thread(target=snipe_loop,daemon=True).start()
+  threading.Thread(target=dev_fast_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=rocket_loop,daemon=True).start()
