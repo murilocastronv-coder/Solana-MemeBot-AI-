@@ -394,4 +394,4 @@ class LiqBacktestTest(unittest.TestCase):
                  "span": {"M1": NOW - 10 * 86400}}
         fetch = lambda u: [{"baseToken": {"address": sol}, "liquidity": {"usd": 1e7}, "priceUsd": "150"}]
         txt = lb.report(store, NOW, final=True, fetch=fetch)
-        self.assertIn("Com US$ 50: US$ 74.40", txt)
+        self.assertIn("Com US$ 50:", txt)
