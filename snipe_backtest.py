@@ -37,7 +37,8 @@ CALLS_PER_HOUR = int(sg._f("SNIPE_BT_CALLS_PER_HOUR", 3000))   # Helius budget (
 JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 3) * 60     # owner (Nov 16): answer in ~3 min; the next tap continues
 SUPPLY = 1_000_000_000
 MIN_TRADE_USD = sg._f("SNIPE_BT_MIN_TRADE_USD", 2)
-GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60), (8000, 2.5, 5, 25))
+GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60), (8000, 2.5, 5, 25),
+              (2000, 1.0, 0, 100), (4000, 1.0, 0, 60))   # looser ones too: after a few minutes sellers often outnumber buyers
 GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 45), (0.10, 0.15, 0.08, 10),
              (0.25, 1.00, 0.25, 60))
 _STOP = threading.Event()
@@ -227,6 +228,47 @@ def snapshot(trades, t_end, minutes=5):
             "up5": (price / first - 1) * 100 if first else 0.0}
 
 
+def fetch_path(rpc, mint, t, sol_usd):
+    path, start = [], t + DELAY_S
+    for _ in range(3):
+        txs = history_call(rpc, mint, gte=start, lte=t + 60 * 60, order="asc", limit=100)
+        got = [x for x in (trade_of(tx, mint, sol_usd) for tx in txs) if x]
+        path += [[x[0], round(x[1], 12)] for x in got]
+        if len(txs) < 100:
+            break
+        start = int(txs[-1].get("blockTime") or start) + 1
+    return path
+
+
+def _passes_any(snap):
+    return any(not sb.metrics_reason(snap["mcap"], snap["vol5"], snap["buys"], snap["sells"], snap["up5"], mv, mr, mu, mx)
+               for mv, mr, mu, mx in GRID_ENTRY)
+
+
+def refill(rpc, c, sol_usd, began, max_s, should_stop=None):
+    """Coins downloaded before the entry grid grew: fetch only the price paths the new entries need."""
+    n = 0
+    for m, coin in c["coins"].items():
+        if coin.get("dead"):
+            continue
+        for age in DECISION_MIN:
+            snap = coin["snaps"].get(str(age))
+            if snap is None:
+                break
+            if str(age) in coin["after"] or not _passes_any(snap):
+                continue
+            if (should_stop and should_stop()) or time.time() - began > max_s:
+                return n
+            try:
+                coin["after"][str(age)] = fetch_path(rpc, m, coin["created"] + age * 60, sol_usd)
+                n += 1
+            except TimeoutError:
+                return n
+            except Exception as exc:
+                logging.warning("snipe bt refill %s: %s", m[:8], type(exc).__name__)
+    return n
+
+
 def download_coin(rpc, mint, created, sol_usd):
     """Snapshots at each decision age + the trades after each possible entry (compact, cached)."""
     out = {"created": created, "snaps": {}, "after": {}}
@@ -254,15 +296,7 @@ def download_coin(rpc, mint, created, sol_usd):
                                          mv, mr, mu, mx) for mv, mr, mu, mx in GRID_ENTRY):
             continue
         # some grid setting would enter here: read the path after the entry (up to ~3 pages)
-        path, start = [], t + DELAY_S
-        for _ in range(3):
-            txs = history_call(rpc, mint, gte=start, lte=t + 60 * 60, order="asc", limit=100)
-            got = [x for x in (trade_of(tx, mint, sol_usd) for tx in txs) if x]
-            path += [[x[0], round(x[1], 12)] for x in got]
-            if len(txs) < 100:
-                break
-            start = int(txs[-1].get("blockTime") or start) + 1
-        out["after"][str(age)] = path
+        out["after"][str(age)] = fetch_path(rpc, mint, t, sol_usd)
     return out
 
 
@@ -281,6 +315,8 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
     max_s = JOB_MAX_S if max_s is None else max_s
     began = time.time()
     c = cache()
+    if refill(rpc, c, sol_usd, began, max_s, should_stop):
+        _put("snipe_bt_cache_v3", c)
     pts = sample_points(start, end)
     todo_pts = [p for p in pts if str(p) not in c["points"]]
     total = len(pts)
@@ -330,7 +366,9 @@ def simulate(c, start, end, entry, exit_, usd=None, max_open=None, daily_loss=No
             if sb.metrics_reason(snap["mcap"], snap["vol5"], snap["buys"], snap["sells"], snap["up5"], mv, mr, mu, mx):
                 continue
             t0 = coin["created"] + age * 60
-            path = coin["after"].get(str(age)) or []
+            if str(age) not in coin["after"]:
+                continue                             # price path not downloaded yet (next run fills it): no result
+            path = coin["after"][str(age)]
             if not path:
                 res, t_exit, why = -1.0, t0 + DELAY_S, "sem negociação depois (rug / sem liquidez)"
             else:
