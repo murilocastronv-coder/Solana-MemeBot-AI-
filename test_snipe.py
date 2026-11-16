@@ -311,11 +311,14 @@ class GradBotTest(Tmp):
         flags = lambda rpc, ms: {m: m == "MintA" for m in ms}
         bought = []
         buy = lambda p, m, s, send, chat: bought.append(m) or True
-        fetch = lambda url: [{"dexId": "pumpswap", "baseToken": {"symbol": "A"}, "liquidity": {"usd": 50000}, "marketCap": 90000}]
+        fetch = lambda url: [{"dexId": "pumpswap", "baseToken": {"symbol": "X", "address": "Other"}, "liquidity": {"usd": 9e9}},
+                             {"dexId": "pumpswap", "baseToken": {"symbol": "A", "address": "MintA"}, "liquidity": {"usd": 50000}, "marketCap": 90000}]
         self.assertIsNone(gbot.cycle(rpc=object(), now=NOW, buy=buy, fetch=fetch, completed=flags))
         self.assertEqual(gbot.cycle(rpc=object(), now=NOW + 35, buy=buy, fetch=fetch, completed=flags), "MintA")
         self.assertEqual(gbot.cycle(rpc=object(), now=NOW + 50, buy=buy, fetch=fetch, completed=flags), None)
         self.assertEqual(bought, ["MintA"])
+        gbot.add_launches({"MintA": NOW})                     # a coin already graduated is not watched again
+        self.assertNotIn("MintA", gbot._load()["watch"])
         self.assertEqual(gbot.exit_signal(0.74, 1.0, 10)[1], "stop_loss")
         self.assertEqual(gbot.exit_signal(1.2, 1.6, 10)[1], "take_profit")
         self.assertEqual(gbot.exit_signal(1.1, 1.2, 10)[0], "hold")
