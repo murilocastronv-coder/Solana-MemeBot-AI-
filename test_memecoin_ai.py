@@ -101,7 +101,7 @@ class RealLaunchTest(unittest.TestCase):
         signer = FakeSigner()
         calls = []
 
-        def launcher(rpc, s, name, symbol, desc, png, lamports, simulate):
+        def launcher(rpc, s, name, symbol, desc, png, lamports, simulate, pid=None):
             calls.append((name, symbol, lamports))
             return {"mint": "MINT1", "sig": "SIG1", "uri": "u"}, ""
         orig = lb.sol_lamports
@@ -120,6 +120,43 @@ class RealLaunchTest(unittest.TestCase):
         self.assertLessEqual(rec["cost_usd"], mc.BUDGET_PER_LAUNCH)
         self.assertIn("pump.fun/coin/MINT1", mc.launched_text(rec))
         self.assertEqual(mc.launch_real("ab", 140.0, None, signer, launcher)[0], None)       # never twice
+
+
+
+class SelfHostedMetadataTest(unittest.TestCase):
+    def test_metadata_fallback(self):
+        import os
+        import pump_launch as pl
+        mc._MEM.clear()
+        mc._load()["proposals"] = [{"id": "abcd1234", "name": "Frog Lab", "symbol": "FLAB", "description": "d", "status": "launching"}]
+        old = os.environ.get("RENDER_EXTERNAL_URL")
+        os.environ["RENDER_EXTERNAL_URL"] = "https://bot.example.com"
+        try:
+            self.assertEqual(pl.self_hosted_uri("abcd1234"), "https://bot.example.com/meta/abcd1234.json")
+            meta, png = mc.metadata_for("abcd1234")
+            self.assertEqual(meta["image"], "https://bot.example.com/meta/abcd1234.png")
+            self.assertEqual(meta["symbol"], "FLAB")
+            self.assertTrue(png.startswith(b"\x89PNG"))
+            self.assertEqual(mc.metadata_for("ffffffff"), (None, None))
+
+            def bad_upload(*a, **k):
+                raise RuntimeError("403")
+            got = {}
+
+            def sim(rpc, msg):
+                got["ok"] = True
+                return False, "stop here"
+            from solders.hash import Hash
+            rpc = lambda m, p: {"value": {"blockhash": str(Hash.default())}}
+            res, why = pl.launch(rpc, __import__("solders.keypair", fromlist=["Keypair"]).Keypair(), "Frog Lab", "FLAB", "d", png,
+                                 1000, sim, upload=bad_upload, pid="abcd1234")
+            self.assertTrue(got.get("ok"))                    # went on with the self-hosted address
+            self.assertIn("simulação", why)
+        finally:
+            if old is None:
+                os.environ.pop("RENDER_EXTERNAL_URL", None)
+            else:
+                os.environ["RENDER_EXTERNAL_URL"] = old
 
 
 if __name__ == "__main__":

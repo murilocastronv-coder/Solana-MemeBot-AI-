@@ -118,7 +118,11 @@ def upload_metadata(name, symbol, description, png, website="", twitter="", tele
     post = post or requests.post
     r = post(IPFS_URL, data={"name": name, "symbol": symbol, "description": description, "twitter": twitter,
                              "telegram": telegram, "website": website, "showName": "true"},
-             files={"file": (symbol.lower() + ".png", png, "image/png")}, timeout=40)
+             files={"file": (symbol.lower() + ".png", png, "image/png")}, timeout=40,
+             headers={"Origin": "https://pump.fun", "Referer": "https://pump.fun/create", "Accept": "application/json",
+                      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
+    if r.status_code >= 400:
+        logging.warning("pump ipfs upload HTTP %s: %s", r.status_code, (r.text or "")[:150].replace("\n", " "))
     r.raise_for_status()
     uri = (r.json() or {}).get("metadataUri") or ""
     if not uri.startswith("http") or len(uri) > 200:
@@ -139,7 +143,24 @@ def build(rpc, user, mint, name, symbol, uri, buy_lamports, cu_price=50_000):
     return MessageV0.try_compile(_pk(user), ixs, [], Hash.from_string(bh))
 
 
-def launch(rpc, signer, name, symbol, description, png, buy_lamports, simulate, upload=upload_metadata, wait_s=45):
+def self_hosted_uri(pid):
+    """Fallback when the Pump.fun upload refuses the server: the bot's own public address serves the metadata JSON and
+    the logo (Render sets RENDER_EXTERNAL_URL). '' when there is no public address."""
+    import os
+    base = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+    return base + "/meta/" + pid + ".json" if base.startswith("https://") else ""
+
+
+def metadata_json(name, symbol, description, image, website="", twitter="", telegram=""):
+    d = {"name": name, "symbol": symbol, "description": description, "image": image, "showName": True,
+         "createdOn": "https://pump.fun"}
+    for k, v in (("website", website), ("twitter", twitter), ("telegram", telegram)):
+        if v:
+            d[k] = v
+    return d
+
+
+def launch(rpc, signer, name, symbol, description, png, buy_lamports, simulate, upload=upload_metadata, wait_s=45, pid=None):
     """Creates the coin for real. -> ({"mint", "sig", "uri"}, '') or (None, why). Nothing is sent if any check fails."""
     from solders.keypair import Keypair
     from solders.transaction import VersionedTransaction
@@ -150,7 +171,10 @@ def launch(rpc, signer, name, symbol, description, png, buy_lamports, simulate, 
         uri = upload(name, symbol, description, png, website=os.getenv("MEME_WEBSITE", "").strip(),
                      twitter=os.getenv("MEME_TWITTER", "").strip(), telegram=os.getenv("MEME_TELEGRAM", "").strip())
     except Exception as exc:
-        return None, "upload do logo/dados na Pump.fun falhou (" + type(exc).__name__ + ") — nada foi gasto"
+        uri = self_hosted_uri(pid) if pid else ""
+        logging.warning("pump ipfs upload failed (%s), fallback %s", type(exc).__name__, "on" if uri else "off")
+        if not uri:
+            return None, "upload do logo/dados na Pump.fun falhou (" + type(exc).__name__ + ") — nada foi gasto"
     mint_kp = Keypair()
     mint = str(mint_kp.pubkey())
     msg = build(rpc, user, mint, name, symbol, uri, buy_lamports)

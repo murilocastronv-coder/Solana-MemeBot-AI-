@@ -34,7 +34,7 @@ LAUNCH_COST_SOL = E("MEME_LAUNCH_COST_SOL", 0.02)      # Pump.fun create + rent 
 BUDGET_PER_LAUNCH = E("MEME_BUDGET_USD", 5)
 DAILY_BUDGET = E("MEME_DAILY_BUDGET_USD", 10)
 RESERVE_USD = E("MEME_RESERVE_USD", 20)
-DEV_BUY_PCT = E("MEME_DEV_BUY_PCT", 0.1)               # owner (Nov 16, "opção 2"): small public creator buy, inside US$ 5
+DEV_BUY_PCT = E("MEME_DEV_BUY_PCT", 1)                 # cap only: the real buy is set by the US$ budget per launch
 KEEP_SOL_USD = E("MEME_KEEP_SOL_USD", 3)               # owner: always leave US$ 3 in SOL in the wallet
 # Pump.fun bonding curve at creation: 30 SOL virtual / 1,073,000,000 virtual tokens, 1,000,000,000 supply
 CURVE_SOL, CURVE_TOKENS, SUPPLY = 30.0, 1_073_000_000.0, 1_000_000_000.0
@@ -323,7 +323,7 @@ def launch_real(pid, sol_usd, rpc, signer, launcher=None):
         _save()
         return None, why
     res, why = launcher(rpc, signer, prop["name"], prop["symbol"], prop["description"], logo_png(prop["name"]),
-                        int(buy * 1e9), lb.simulate)
+                        int(buy * 1e9), lb.simulate, pid=pid)
     now = time.time()
     if not res:
         prop["status"] = "unknown" if "não confirmou a tempo" in why else "failed"
@@ -343,6 +343,18 @@ def launch_real(pid, sol_usd, rpc, signer, launcher=None):
     d["launches"] = d["launches"][-99:] + [rec]
     _save()
     return rec, ""
+
+
+def metadata_for(pid):
+    """(json dict, png bytes) of a proposal, for the self-hosted metadata address; (None, None) if unknown."""
+    import pump_launch as pl
+    prop = next((p for p in _load()["proposals"] if p["id"] == pid), None)
+    if not prop:
+        return None, None
+    uri = pl.self_hosted_uri(pid)
+    meta = pl.metadata_json(prop["name"][:30], prop["symbol"][:13], prop.get("description", ""), uri[:-5] + ".png" if uri else "",
+                            os.getenv("MEME_WEBSITE", "").strip(), os.getenv("MEME_TWITTER", "").strip(), os.getenv("MEME_TELEGRAM", "").strip())
+    return meta, logo_png(prop["name"])
 
 
 def launched_text(rec):
