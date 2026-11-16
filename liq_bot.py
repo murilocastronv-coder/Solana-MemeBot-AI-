@@ -38,6 +38,19 @@ FAST_S = E("LIQ_FAST_S", 2)
 PRE_LTV = E("LIQ_PRE_LTV", 0.75)                     # step 1 of the scan (numbers of the last refresh)
 WATCH_LTV = E("LIQ_WATCH_LTV", 0.97)                 # main market: thousands of leveraged loops sit at 85-95%
 MAX_WATCH = int(E("LIQ_MAX_WATCH", 300))               # closest ones only (re-read every FAST_S)
+# owner (Nov 16): more chances = collateral that MOVES (xStocks, HYPE, ZEC, BTC...) against debt. Positions in an
+# elevation group are correlated loops (SOL vs staked SOL, stable vs stable) that sit at 99.8% for days; they get
+# only a part of the watch list, and volatile ones are watched from further away (a fast drop crosses 10% in minutes).
+VOLATILE_WATCH_LTV = E("LIQ_VOLATILE_WATCH_LTV", 0.90)
+VOLATILE_SLOTS = int(E("LIQ_VOLATILE_SLOTS", 200))
+
+
+def volatile(ob):
+    return ob.get("elevation", 0) == 0
+
+
+def watch_from(ob):
+    return VOLATILE_WATCH_LTV if volatile(ob) else WATCH_LTV
 TRIGGER_LTV = E("LIQ_TRIGGER_LTV", 0.995)
 MAX_MARKETS = int(E("LIQ_MAX_MARKETS", 20))
 CU_LIMIT = int(E("LIQ_CU_LIMIT", 1_000_000))
@@ -227,7 +240,7 @@ def scan_market(rpc, market, now=None):
         ltv = k.ltv_now(ob, res)
         if ltv is not None:
             ltv *= _CAL.get(a, 1.0)
-        if ltv is not None and ltv >= WATCH_LTV:
+        if ltv is not None and ltv >= watch_from(ob):
             ob["ltv"] = ltv
             _WATCH[a] = ob
             w += 1
@@ -237,9 +250,11 @@ def scan_market(rpc, market, now=None):
 
 def _trim_watch():
     if len(_WATCH) > MAX_WATCH:
-        keep = sorted(_WATCH.items(), key=lambda kv: -kv[1].get("ltv", 0))[:MAX_WATCH]
+        items = sorted(_WATCH.items(), key=lambda kv: -kv[1].get("ltv", 0))
+        vol = [kv for kv in items if volatile(kv[1])][:VOLATILE_SLOTS]
+        cor = [kv for kv in items if not volatile(kv[1])][:max(0, MAX_WATCH - len(vol))]
         _WATCH.clear()
-        _WATCH.update(keep)
+        _WATCH.update(vol + cor)
 
 
 def refresh_watch(rpc, now=None):
@@ -264,7 +279,7 @@ def refresh_watch(rpc, now=None):
         ltv = k.ltv_now(ob, reserves)
         if ltv is not None:
             ltv *= _CAL.get(a, 1.0)
-        if ltv is None or ltv < WATCH_LTV * 0.97:
+        if ltv is None or ltv < watch_from(ob) * 0.97:
             _WATCH.pop(a, None)
             continue
         ob["ltv"] = ltv
@@ -531,7 +546,7 @@ def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None)
     if exact is None or exact < 1.0:
         stat("saudável na conta do Kamino")
         _TRIED[ob["address"]] = now + (120 if exact is not None and exact > 0.97 else 600)
-        if exact is not None and exact < WATCH_LTV:
+        if exact is not None and exact < watch_from(ob):
             _WATCH.pop(ob["address"], None)
         if exact is None:
             _note_once("exact" + ob["address"], "não consegui a conta exata do Kamino para " + ob["address"][:6] + ": " + why, now)
@@ -652,7 +667,8 @@ def status_text():
          format(FAST_S, "g") + " s · envio Jito + RPC · para no dia com −US$ " + format(DAILY_LOSS, "g") +
          " (hoje " + format(day_pnl(), "+.2f") + ") · só envia se a simulação na rede der certo",
          "🏦 Mercados vigiados: " + str(len(d.get("markets") or _STATE.get("markets") or [])) + " · devedores lidos: " +
-         str(sum((_STATE.get("borrowers") or {}).values())) + " · perto de liquidar agora: " + str(len(_WATCH)),
+         str(sum((_STATE.get("borrowers") or {}).values())) + " · vigiados de perto: " + str(len(_WATCH)) +
+         " (garantia que oscila: " + str(sum(1 for o in _WATCH.values() if volatile(o))) + ")",
          "🩺 Descartadas pela conta exata do Kamino (ainda saudáveis): " + str(s.get("saudável na conta do Kamino", 0)),
          "📊 Oportunidades reais " + str(s.get("oportunidades", 0)) + " · puladas " + str(s.get("puladas", 0)) + " · simulação ok " +
          str(s.get("simulação ok", 0)) + " · recusadas " + str(s.get("simulação falhou", 0)) + " · perdeu disputa " +

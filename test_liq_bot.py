@@ -235,3 +235,18 @@ class CalibrationTest(unittest.TestCase):
         self.assertIsNone(lb.attempt(rpc, c.ob, c.res, 1.0, signer=Keypair()))
         self.assertAlmostEqual(lb._CAL[c.ob["address"]], 0.8, places=3)
         self.assertNotIn(c.ob["address"], lb._WATCH)
+
+
+class VolatileWatchTest(unittest.TestCase):
+    def test_volatile_get_slots_before_correlated_loops(self):
+        lb._WATCH.clear()
+        for i in range(400):
+            lb._WATCH["loop%d" % i] = {"elevation": 1, "ltv": 0.998}
+        for i in range(50):
+            lb._WATCH["vol%d" % i] = {"elevation": 0, "ltv": 0.92}
+        lb._trim_watch()
+        self.assertEqual(len(lb._WATCH), lb.MAX_WATCH)
+        self.assertEqual(sum(1 for k in lb._WATCH if k.startswith("vol")), 50)
+        self.assertEqual(lb.watch_from({"elevation": 0}), lb.VOLATILE_WATCH_LTV)
+        self.assertEqual(lb.watch_from({"elevation": 2}), lb.WATCH_LTV)
+        lb._WATCH.clear()
