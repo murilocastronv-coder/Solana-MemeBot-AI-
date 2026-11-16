@@ -195,3 +195,20 @@ class DevStrategyTestTest(Tmp):
             self.assertEqual(s["trades"], 3)
             self.assertGreater(s["pnl"], 0)
             self.assertIn("TESTE DA ESTRATÉGIA DEV", dst.text(evs, ok, c, NOW))
+
+
+class LaunchSniperTestTest(Tmp):
+    def test_variants_on_cached_real_data(self):
+        import launch_sniper_test as lst
+        e = {"opened": NOW, "dev_px": 0.0001, "sales": [[NOW + 120, 1.0]],
+             # first seconds: 4 other buyers, price 0.0001
+             "first": [[NOW + 1, 0.0001, 1]] + [[NOW + 2 + k, 0.0001, 0] for k in range(4)] + [[NOW + 11 + k, 0.0001, 0] for k in range(3)],
+             # path: up to +30% at +60 s, then the dev dumps
+             "path": [[NOW + 11, 0.0001, 0], [NOW + 60, 0.00013, 0], [NOW + 121, 0.00003, 0]],
+             "after": [[[NOW + 121 + k, 0.00003, 0] for k in range(3)]]}
+        tp = lst.trade_result(e, "tpsl", 10)
+        self.assertAlmostEqual(tp[0], 1.2 * (1 - lst.sbt.COST) ** 2 - 1, places=4)     # TP +20% hit before the dump
+        mirror = lst.trade_result(e, "mirror", 10)
+        self.assertLess(mirror[0], -0.5)                                            # sold after the dev's dump
+        no_mom = dict(e, first=[[NOW + 1, 0.0001, 1], [NOW + 12, 0.0001, 0]])
+        self.assertIn("momentum", lst.trade_result(no_mom, "momentum", 10))
