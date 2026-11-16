@@ -145,3 +145,22 @@ class LaunchTestTest(Tmp):
             self.assertLess(r[30], 0)              # in at 0.003, out at 0.002: loss
             txt = lt.text([("DEVX", MINT, r)], 1)
             self.assertIn("Entrando 2 s depois", txt)
+
+
+class LiveCreatorsTest(Tmp):
+    def test_launch_creators_go_to_dev_queue(self):
+        import dev_bot as db
+        with mock.patch.object(db, "_path", return_value=pathlib.Path(self.tmp.name) / "d.json"):
+            def rpc(method, params):
+                if method == "getSignaturesForAddress":
+                    return [{"signature": "s1", "blockTime": NOW - 600}]
+                return {"transaction": {"message": {"accountKeys": ["CREATORZ"]}},
+                        "meta": {"postTokenBalances": [{"mint": "Live1pump"}]}}
+            sb.scan_launches(rpc, NOW)
+            v = db._load()["devs"]["CREATORZ"]
+            self.assertEqual((v["tier"], v["found_by"]), ("NA FILA", "live"))
+            d = db._load()
+            d["devs"]["CREATORZ"].update(tier="MONITORADO", why="carteira com pouco histórico (3 transações)", rated=NOW)
+            db._save(d)
+            db.enqueue_creators([], NOW + db.PRUNE_S + 10)
+            self.assertNotIn("CREATORZ", db._load()["devs"])       # dismissed fresh wallets are forgotten
