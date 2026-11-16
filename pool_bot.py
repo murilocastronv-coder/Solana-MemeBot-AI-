@@ -33,7 +33,8 @@ MIN_AGE_D = E("POOL_MIN_AGE_D", 3)
 MAX_DAYS = E("POOL_MAX_DAYS", 3)
 FALL = E("POOL_YIELD_FALL", 0.5)                 # leave when the yield is under half of the entry yield
 STOP = E("POOL_PRICE_STOP", 0.15)                # leave when the coin fell 15% from entry
-MAX_DAY_YIELD = E("POOL_MAX_DAY_YIELD", 0.20)    # above 20%/day it is a pump, not a pool to sit in
+MIN_DAY_YIELD = E("POOL_MIN_DAY_YIELD", 0.15)    # owner (Nov 16): only pools paying 15% to 60% per day
+MAX_DAY_YIELD = E("POOL_MAX_DAY_YIELD", 0.60)
 METEORA = "https://dlmm-api.meteora.ag/pair/all"
 QUOTES = {"So11111111111111111111111111111111111111112": "SOL", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
           "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT"}
@@ -132,7 +133,9 @@ def dex_info(mint, fetch=None):
 def safe_reason(pool, fetch=None, safety=None):
     """'' when the pool may be used, else why not."""
     if pool["day_yield"] > MAX_DAY_YIELD:
-        return "rende " + format(pool["day_yield"] * 100, ".0f") + "%/dia: é euforia de memecoin, não pool para ficar"
+        return "rende " + format(pool["day_yield"] * 100, ".0f") + "%/dia: acima do máximo de " + format(MAX_DAY_YIELD * 100, ".0f") + "%"
+    if pool["day_yield"] < MIN_DAY_YIELD:
+        return "rende " + format(pool["day_yield"] * 100, ".1f") + "%/dia: abaixo do mínimo de " + format(MIN_DAY_YIELD * 100, ".0f") + "%"
     px, age = dex_info(pool["coin"], fetch)
     if not px:
         return "sem preço na DexScreener"
@@ -153,7 +156,7 @@ def value_now(pos, price):
 
 
 def choose(cands, fetch=None, safety=None, skip=()):
-    for p in cands[:25]:
+    for p in [c for c in cands if MIN_DAY_YIELD <= c["day_yield"] <= MAX_DAY_YIELD][:25]:
         if p["address"] in skip:
             continue
         why = safe_reason(p, fetch, safety)
@@ -223,6 +226,7 @@ def status_text():
     pos = d.get("pos")
     closed = d.get("closed") or []
     L = ["🏊 ROBÔ DE POOLS (Meteora) — " + ("🟡 LIGADO · SIMULAÇÃO (dinheiro de mentira, dados reais)" if d.get("enabled") else "⏸️ DESLIGADO"),
+         "🎯 Só pools que pagam de " + format(MIN_DAY_YIELD * 100, ".0f") + "% a " + format(MAX_DAY_YIELD * 100, ".0f") + "% ao dia",
          "⚙️ Só pools seguras: liquidez ≥ US$ " + format(MIN_LIQ / 1000, "g") + " mil, volume ≥ US$ " + format(MIN_VOL / 1000, "g") +
          " mil/24 h, moeda com ≥ " + format(MIN_AGE_D, "g") + " dias e anti-golpe · fica no máximo " + format(MAX_DAYS, "g") +
          " dias · troca se o rendimento cair à metade ou a moeda cair " + format(STOP * 100, ".0f") + "%"]

@@ -12,9 +12,9 @@ class PoolBotTest(unittest.TestCase):
 
     def test_rotates_and_respects_rules(self):
         api = [{"address": "P1", "name": "AAA-SOL", "mint_x": "AAA", "mint_y": SOL, "liquidity": "1000000",
-                "trade_volume_24h": "5000000", "fees_24h": "20000"},                        # 2%/day
+                "trade_volume_24h": "5000000", "fees_24h": "200000"},                       # 20%/day
                {"address": "P2", "name": "BBB-SOL", "mint_x": "BBB", "mint_y": SOL, "liquidity": "1000000",
-                "trade_volume_24h": "5000000", "fees_24h": "500000"},                       # 50%/day: pump, refused
+                "trade_volume_24h": "5000000", "fees_24h": "900000"},                       # 90%/day: above the max
                {"address": "P3", "name": "CCC-SOL", "mint_x": "CCC", "mint_y": SOL, "liquidity": "1000",
                 "trade_volume_24h": "5000000", "fees_24h": "900"}]                          # tiny pool
         price = {"AAA": 1.0}
@@ -24,7 +24,7 @@ class PoolBotTest(unittest.TestCase):
         pos = pb.cycle(now=t0, get=lambda u: api, fetch=fetch, safety=lambda m: "")
         self.assertEqual(pos["address"], "P1")
         pb.cycle(now=t0 + 86400, get=lambda u: api, fetch=fetch, safety=lambda m: "")
-        self.assertGreater(pb._load()["pos"]["fees"], 1.0)                                  # ~2% of 60
+        self.assertGreater(pb._load()["pos"]["fees"], 10.0)                                 # ~20% of 60
         price["AAA"] = 0.8                                                                  # coin -20%: stop
         pb.cycle(now=t0 + 90000, get=lambda u: api, fetch=fetch, safety=lambda m: "")
         closed = pb._load()["closed"]
@@ -35,7 +35,7 @@ class PoolBotTest(unittest.TestCase):
 
     def test_scam_is_refused(self):
         api = [{"address": "P1", "name": "AAA-SOL", "mint_x": "AAA", "mint_y": SOL, "liquidity": "1000000",
-                "trade_volume_24h": "5000000", "fees_24h": "20000"}]
+                "trade_volume_24h": "5000000", "fees_24h": "200000"}]
         fetch = lambda url: [{"baseToken": {"address": "AAA"}, "priceUsd": "1", "liquidity": {"usd": 1e6}, "pairCreatedAt": 1}]
         self.assertIsNone(pb.cycle(now=1_800_000_000, get=lambda u: api, fetch=fetch, safety=lambda m: "mint authority ativa"))
 
@@ -52,7 +52,7 @@ class CooldownTest(unittest.TestCase):
         pb._MEM.clear()
         pb._load().update(enabled=True, exited={"P1": 1_800_000_000})
         api = [{"address": "P1", "name": "AAA-SOL", "mint_x": "AAA", "mint_y": SOL, "liquidity": "1000000",
-                "trade_volume_24h": "5000000", "fees_24h": "20000"}]
+                "trade_volume_24h": "5000000", "fees_24h": "200000"}]
         fetch = lambda url: [{"baseToken": {"address": "AAA"}, "priceUsd": "1", "liquidity": {"usd": 1e6}, "pairCreatedAt": 1}]
         self.assertIsNone(pb.cycle(now=1_800_000_100, get=lambda u: api, fetch=fetch, safety=lambda m: ""))
         pb._MEM.clear()
