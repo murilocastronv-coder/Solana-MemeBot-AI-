@@ -61,6 +61,9 @@ MIN_RECEIVE = E("LIQ_MIN_RECEIVE", 0.995)            # receive at least 99.5% of
 MIN_BONUS_SWAP = E("LIQ_MIN_BONUS_FOR_SWAP", 0.02)   # USDT/SOL debt (needs swaps) only when the bonus is >= 2%
 SOL_RESERVE = E("LIQ_SOL_RESERVE", 0.03)              # SOL kept for fees
 KAMINO_API = "https://api.kamino.finance/v2/kamino-market"
+# Kamino's MAIN market has 50k+ borrowers: reading it at once took the 512 MB server out of memory and it restarted
+# every ~7 min (buttons dead). Off by default; set LIQ_SCAN_MAIN=1 on a bigger plan.
+SCAN_MAIN = os.getenv("LIQ_SCAN_MAIN", "0").strip() in ("1", "true", "yes")
 KEY = "liq_bot"
 _LOCK = threading.RLock()
 _MEM = {}
@@ -142,6 +145,8 @@ def markets(fetch=None):
         for m in (fetch or sg._get)(KAMINO_API) or []:
             a = m.get("lendingMarket")
             if a:
+                if m.get("isPrimary") and not SCAN_MAIN:
+                    continue
                 (main if m.get("isPrimary") else rest).append((str(m.get("name") or a[:6]), a))
     except Exception as exc:
         logging.warning("liq markets api: %s", type(exc).__name__)
@@ -645,6 +650,8 @@ def cycle(rpc, send=None, chat=None, now=None, state=None):
             try:
                 n, w = scan_market(rpc, m, now)
                 st.setdefault("borrowers", {})[m] = n
+                import gc
+                gc.collect()                               # free the big account lists right away (512 MB server)
             except BaseException as exc:                   # includes a panic of the Solana library
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise
