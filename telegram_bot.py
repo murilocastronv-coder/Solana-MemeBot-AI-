@@ -1155,7 +1155,7 @@ def snipe_loop():
  time.sleep(60)
  while True:
   try:
-   if os.getenv("SOLANA_RPC_URL") and snipe_bot.enabled():snipe_bot.cycle(send,active_chat())
+   if os.getenv("SOLANA_RPC_URL") and snipe_bot.enabled():snipe_bot.cycle(send,active_chat(),rpc=DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
 def dev_real_once():
@@ -1224,6 +1224,8 @@ def loop():
   except Exception:logging.exception("hunter state")
   try:__import__("snipe_backtest").mark_interrupted()
   except Exception:logging.exception("snipe backtest state")
+  try:__import__("dev_bot").relink_once()
+  except Exception:logging.exception("dev relink")
   try:__import__("dev_bot").retier_once()
   except Exception:logging.exception("dev retier")
   try:__import__("dev_backtest").mark_interrupted()

@@ -36,6 +36,11 @@ ARM = E("SNIPE_ARM", 0.30)
 DROP = E("SNIPE_DROP", 0.12)
 MAX_HOLD_MIN = E("SNIPE_MAX_HOLD_MIN", 30)
 CYCLE_S = E("SNIPE_CYCLE_S", 20)
+# owner (Nov 16): see EVERY new pump.fun coin, not only the few in the DexScreener lists. Every pump.fun create
+# transaction uses the pump.fun mint authority account, so its signatures are exactly the new launches.
+PUMP_MINT_AUTHORITY = "TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM"
+NEW_PER_CYCLE = int(E("SNIPE_NEW_PER_CYCLE", 40))        # launches read per cycle (1 RPC call each)
+WATCH_MAX = int(E("SNIPE_WATCH_MAX", 600))              # coins of the last hour followed on DexScreener
 _LOCK = threading.RLock()
 
 
@@ -168,17 +173,82 @@ def day_pnl(now=None):
 
 
 # ---------------------------------------------------------------- cycle
-def cycle(send=None, chat=None, pairs=None, now=None, buy=None, safety=None):
+def scan_launches(rpc, now=None, get_tx=None):
+    """Add the newest pump.fun launches (on-chain) to the watch list {mint: created}. Returns how many were added."""
+    now = now or time.time()
+    d = _load()
+    opts = {"limit": 100}
+    if d.get("auth_last"):
+        opts["until"] = d["auth_last"]
+    try:
+        sigs = rpc("getSignaturesForAddress", [PUMP_MINT_AUTHORITY, opts]) or []
+    except Exception as exc:
+        logging.info("snipe launches: %s", type(exc).__name__)
+        return 0
+    if not sigs:
+        return 0
+    added = {}
+    for sg_ in [x for x in sigs if not x.get("err")][:NEW_PER_CYCLE]:
+        try:
+            if get_tx:
+                tx = get_tx(rpc, sg_["signature"])
+            else:
+                tx = rpc("getTransaction", [sg_["signature"], {"encoding": "json", "commitment": "confirmed",
+                                                               "maxSupportedTransactionVersion": int(os.getenv("SOLANA_MAX_TX_VERSION", "1"))}])
+        except Exception:
+            continue
+        for b in ((tx or {}).get("meta") or {}).get("postTokenBalances") or []:
+            m = b.get("mint")
+            if m and m.endswith("pump"):
+                added[m] = int(sg_.get("blockTime") or now)
+                break
+    with _LOCK:
+        dd = _load()
+        dd["auth_last"] = sigs[0]["signature"]
+        w = dd.get("watch") or {}
+        w.update(added)
+        dd["watch"] = dict(sorted(((m, t) for m, t in w.items() if now - t < MAX_AGE_MIN * 60), key=lambda kv: kv[1])[-WATCH_MAX:])
+        _save(dd)
+    return len(added)
+
+
+def watched_pairs(now=None, fetch=None):
+    """DexScreener data of the watched launches that are old enough to judge (30 coins per call)."""
+    now = now or time.time()
+    w = _load().get("watch") or {}
+    mints = [m for m, t in sorted(w.items(), key=lambda kv: -kv[1]) if MIN_AGE_MIN * 60 <= now - t <= MAX_AGE_MIN * 60]
+    out = []
+    for i in range(0, len(mints), 30):
+        try:
+            rows = (fetch or sg._get)(sg.DEX + "/tokens/v1/solana/" + ",".join(mints[i:i + 30])) or []
+        except Exception:
+            break
+        best = {}
+        for p in rows if isinstance(rows, list) else []:
+            m = (p.get("baseToken") or {}).get("address")
+            if m and float((p.get("volume") or {}).get("m5") or 0) >= float((best.get(m) or {}).get("volume", {}).get("m5") or -1):
+                best[m] = p
+        out += list(best.values())
+    return out
+
+
+def cycle(send=None, chat=None, pairs=None, now=None, buy=None, safety=None, rpc=None, fetch=None):
     """One pass: pick at most one coin that passes the rule and buy it (real money). Returns the mint bought."""
     now = now or time.time()
     d = _load()
     if not d.get("enabled"):
         return None
+    if rpc is not None:
+        scan_launches(rpc, now)
     if DAILY_LOSS > 0 and day_pnl(now) <= -DAILY_LOSS:
         return None
     if len(_open()) >= MAX_OPEN:
         return None
-    pairs = sg.candidate_pairs() if pairs is None else pairs
+    if pairs is None:
+        pairs = sg.candidate_pairs()
+        if rpc is not None:
+            have = {(p.get("baseToken") or {}).get("address") for p in pairs}
+            pairs = pairs + [p for p in watched_pairs(now, fetch) if (p.get("baseToken") or {}).get("address") not in have]
     seen = d.get("seen") or {}
     for p in sorted(pairs, key=lambda x: -float((x.get("volume") or {}).get("m5") or 0)):
         mint = (p.get("baseToken") or {}).get("address")
@@ -229,7 +299,8 @@ def status_text():
              "📤 Sai: stop −" + format(STOP * 100, ".0f") + "% · de +" + format(ARM * 100, ".0f") + "% stop móvel " +
              format(DROP * 100, ".0f") + "% abaixo do topo · " + format(MAX_HOLD_MIN, "g") + " min sem decolar",
              "📊 " + str(len(h)) + " operações · " + str(len(wins)) + " no lucro · total " + format(total, "+.2f") +
-             " USD · abertas " + str(len(_open())) + "/" + str(MAX_OPEN)]
+             " USD · abertas " + str(len(_open())) + "/" + str(MAX_OPEN),
+             "👀 Vigiando " + str(len(d.get("watch") or {})) + " lançamentos da última hora (direto da blockchain)"]
     for x in (d.get("log") or [])[-5:]:
         lines.append("• " + x)
     return "\n".join(lines)

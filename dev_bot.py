@@ -624,6 +624,10 @@ DEV_FIRST_TX = int(E("DEV_FIRST_TX", 100))
 MIN_LAUNCHES = int(E("DEV_MIN_LAUNCHES", 5))
 # owner (Nov 16): only wallets WITH FUNDS (a dev with an empty wallet cannot buy, so there is nothing to copy)
 MIN_BALANCE_SOL = E("DEV_MIN_BALANCE_SOL", 0.5)
+# owner (Nov 16): profitable devs empty their wallet into a NEW wallet before the next launch - follow the money
+LINK_MIN_SOL = E("DEV_LINK_MIN_SOL", 0.5)
+LINK_MAX_SIGS = int(E("DEV_LINK_MAX_TX", 300))     # a fresh wallet (exchanges / old wallets are not followed)
+LINK_DAYS = E("DEV_LINK_DAYS", 14)
 MIN_LAUNCH_DAYS = E("DEV_MIN_LAUNCH_DAYS", 7)
 BT_TX = int(E("DEV_BT_TX", 300))
 DEV_CALLS_PER_HOUR = int(E("DEV_HISTORY_CALLS_PER_HOUR", 100))   # Helius history calls (~100 credits each)
@@ -683,6 +687,78 @@ def balance_sol(rpc, wallet):
         return None
 
 
+def sol_out(tx, dev):
+    """(destination, SOL) when the dev sent >= LINK_MIN_SOL to ONE other wallet without trading a token."""
+    meta = (tx or {}).get("meta") or {}
+    if meta.get("err"):
+        return None
+    msg = (tx.get("transaction") or {}).get("message") or {}
+    keys = [k.get("pubkey") if isinstance(k, dict) else k for k in msg.get("accountKeys") or []]
+    pre, post = meta.get("preBalances") or [], meta.get("postBalances") or []
+    if dev not in keys or len(pre) < len(keys) or len(post) < len(keys):
+        return None
+    if any(b.get("owner") == dev for b in (meta.get("preTokenBalances") or []) + (meta.get("postTokenBalances") or [])):
+        return None                                   # a trade, not a transfer of funds
+    i = keys.index(dev)
+    sent = (pre[i] - post[i]) / 1e9
+    if sent < LINK_MIN_SOL:
+        return None
+    best = max(((keys[j], (post[j] - pre[j]) / 1e9) for j in range(len(keys)) if j != i), key=lambda kv: kv[1], default=None)
+    if not best or best[1] < sent * 0.8:
+        return None
+    return best
+
+
+def link_wallet(parent, dest, sol, rpc, now=None, send=None, chat=None):
+    """Watch `dest` as the same dev (inherits the parent's numbers) when it is a fresh wallet. True when linked."""
+    now = now or time.time()
+    d = _load()
+    p = d["devs"].get(parent) or {}
+    cur = d["devs"].get(dest) or {}
+    if cur.get("tier") in TIER_OK or cur.get("tier") == "BLOQUEADO" or dest == parent:
+        return False
+    try:
+        sigs = rpc("getSignaturesForAddress", [dest, {"limit": LINK_MAX_SIGS}]) or []
+    except Exception:
+        return False
+    if len(sigs) >= LINK_MAX_SIGS:
+        return False                                  # busy old wallet / exchange: not the dev's next wallet
+    keep = {k: p[k] for k in ("tier", "win", "trades", "pnl", "pf", "score", "tokens", "rugs", "top_share", "max_dd",
+                              "launches", "launch_days", "win_ci", "win_own", "n_own", "win_other", "n_other") if k in p}
+    with _LOCK:
+        dd = _load()
+        tier_ = p.get("tier") if p.get("tier") in TIER_OK else (p.get("was_tier") or "APROVADO")
+        dd["devs"][dest] = dict(keep, tier=tier_, linked_from=parent, linked_at=now, rated=now, balance_sol=round(sol, 3),
+                                why="", tokens_seen=[], last_sig=sigs[0]["signature"] if sigs else None)
+        _save(dd)
+    note("🔗 DEV " + parent[:6] + "… mandou " + format(sol, ".2f") + " SOL para a carteira nova " + dest[:6] + "…: vigiando")
+    if send and chat:
+        try:
+            send(chat, "🔗 DEV aprovado `" + parent + "` mandou " + format(sol, ".2f") + " SOL para uma carteira nova:\n`" + dest +
+                 "`\nO robô passa a vigiar essa carteira como o mesmo DEV (copia as próximas compras, com os mesmos filtros).")
+        except Exception:
+            pass
+    return True
+
+
+def funds_destination(dev, get=None):
+    """Where an approved dev's money went: the newest transfer of >= LINK_MIN_SOL out of its wallet (Helius)."""
+    import wallet_profile as wp
+    key = wp.helius_key()
+    if not key:
+        return None
+    try:
+        page = wp._helius_get("https://api.helius.xyz/v0/addresses/" + dev + "/transactions", {"api-key": key, "limit": 50}, get) or []
+    except Exception:
+        return None
+    for tx in page:
+        for t in tx.get("nativeTransfers") or []:
+            amt = float(t.get("amount") or 0) / 1e9
+            if t.get("fromUserAccount") == dev and t.get("toUserAccount") and t["toUserAccount"] != dev and amt >= LINK_MIN_SOL:
+                return t["toUserAccount"], amt
+    return None
+
+
 def wilson(wins, n, z=1.96):
     """95% confidence interval of a hit rate (small samples get a wide interval)."""
     if not n:
@@ -737,6 +813,23 @@ def _notify_tier(dev, was, st, send=None, chat=None):
         logging.exception("devbot notice failed")
 
 
+def relink_once():
+    """Owner (Nov 16): the good devs dropped for an empty wallet go back in line once, so the audit finds where
+    their money went (follow the funds)."""
+    with _LOCK:
+        d = _load()
+        if d.get("relink_v1"):
+            return 0
+        n = 0
+        for v in d["devs"].values():
+            if str(v.get("why") or "").startswith("carteira sem fundo") and v.get("win", 0) >= 0.8:
+                v["rated"] = 0
+                n += 1
+        d["relink_v1"] = True
+        _save(d)
+    return n
+
+
 def retier_once():
     """Owner (Nov 15): prompt criteria. Devs already rated are re-classified from their stored numbers; the ones
     that pass now go back in line so the audit checks the same-wallet rule (and notifies) before they are copied."""
@@ -773,8 +866,10 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
     tiers = ("ELITE", "PREMIUM", "APROVADO")
     old_ok = [(k, v) for k, v in d["devs"].items() if v.get("tier") in tiers and ("launches" not in v or "balance_sol" not in v)
               and now - float(v.get("rated") or 0) >= 60]
+    old_ok = [(k, v) for k, v in old_ok if not v.get("linked_from")]
     queue = old_ok + [(k, v) for k, v in sorted(d["devs"].items(), key=lambda kv: kv[1].get("rated", 0))
-                      if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S and (k, v) not in old_ok]
+                      if now - float(v.get("rated") or 0) >= DEV_REAUDIT_S and (k, v) not in old_ok
+                      and not (v.get("linked_from") and now - float(v.get("linked_at") or 0) < LINK_DAYS * 86400)]
     queue = queue[:limit or DEV_AUDITS_PER_CYCLE]
     done = 0
     for dev, info in queue:
@@ -807,7 +902,17 @@ def audit_devs(rpc, sol_usd, now=None, analyze=None, limit=None, launches_fn=Non
                         stats["balance_sol"] = bal
                     stats.update(launch_stats(dev, d, launches_fn))
                     stats.update(split_stats(closed, stats.get("launch_mints")))
+                    good_tier = stats["tier"]
                     stats["tier"], stats["why"] = tier(stats)
+                    if str(stats.get("why", "")).startswith("carteira sem fundo"):
+                        stats["was_tier"] = good_tier
+                        dest = funds_destination(dev)
+                        if dest:
+                            stats["funds_to"] = dest[0]
+                            dd0 = _load()
+                            dd0["devs"].setdefault(dev, {}).update({k: v for k, v in stats.items() if k not in ("hist",)})
+                            _save(dd0)
+                            link_wallet(dev, dest[0], dest[1], rpc, now, send, chat)
                 stats["hist"] = _hist(closed)[-300:]
                 stats["hist_v2"] = True
             except Exception as exc:
@@ -898,6 +1003,9 @@ def cycle(send=None, chat=None, rpc=None, pairs=None, now=None, get_tx=None, sol
                 continue
             for mv in dev_moves(tx, dev):
                 handle_move(mv, dev, info, tx, by_mint, rpc, sol_usd, now, send, chat, safety, dev_sells)
+            out = sol_out(tx, dev)
+            if out and info.get("tier") in TIER_OK:
+                link_wallet(dev, out[0], out[1], rpc, now, send, chat)
     # 4) exits with live prices
     d = _load()
     if d["positions"]:

@@ -106,3 +106,15 @@ class BacktestTest(Tmp):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LaunchFeedTest(Tmp):
+    def test_scan_launches_and_watched_pairs(self):
+        def rpc(method, params):
+            if method == "getSignaturesForAddress":
+                return [{"signature": "s1", "blockTime": NOW - 600}, {"signature": "s2", "blockTime": NOW - 60}]
+            return {"meta": {"postTokenBalances": [{"mint": "New" + params[0] + "pump"}]}}
+        self.assertEqual(sb.scan_launches(rpc, NOW), 2)
+        self.assertEqual(sb._load()["auth_last"], "s1")
+        rows = sb.watched_pairs(NOW, fetch=lambda url: [pair(age_min=10, mint="News1pump")])
+        self.assertEqual([p["baseToken"]["address"] for p in rows], ["News1pump"])   # s2 is too young (1 min)
