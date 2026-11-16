@@ -1497,6 +1497,17 @@ def loop():
    else:logging.warning("telegram polling failed: %s",exc);time.sleep(2)
   except Exception:logging.exception("telegram worker error");time.sleep(3)
 
+@app.route("/meta/<name>")
+def meme_metadata(name):
+ """Public metadata (JSON + logo) of the owner's approved memecoins, used when the Pump.fun upload refuses the server."""
+ import memecoin_ai as mc
+ pid,_,ext=name.partition(".")
+ if not re.fullmatch(r"[0-9a-f]{8}",pid) or ext not in ("json","png"):return Response("not found",status=404)
+ meta,png=mc.metadata_for(pid)
+ if not meta:return Response("not found",status=404)
+ if ext=="png":return Response(png,mimetype="image/png")
+ return Response(json.dumps(meta),mimetype="application/json")
+
 @app.route("/exportar",methods=["GET","POST"])
 def export_page():
  """Private key export was removed from the bot (for every account)."""
