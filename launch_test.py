@@ -58,6 +58,12 @@ def _trades(rpc, mint, gte, until, sol_usd, pages=5):
     return sorted(set(out), key=lambda x: x[0])
 
 
+def _median3(prices):
+    """Median of the first 3 prices (one odd trade cannot decide the result)."""
+    xs = sorted(prices[:3])
+    return xs[len(xs) // 2] if xs else None
+
+
 def replay(rpc, mint, opened, sells, sol_usd, dev=""):
     """{delay: return} for one launch (None when there is no price at the entry). The bot reacts with the SAME delay
     to the dev's sales and sells at the first trade by someone else after that (never at the dev's own price)."""
@@ -65,13 +71,13 @@ def replay(rpc, mint, opened, sells, sol_usd, dev=""):
     sale_trades = [_trades(rpc, mint, int(t), int(t) + max(DELAYS) + 5, sol_usd, pages=2) for t, _ in sells[:4]]
     out = {}
     for delay in DELAYS:
-        entry = next((px for t, px, who in first if t >= opened + delay and who != dev), None)
+        entry = _median3([px for t, px, who in first if t >= opened + delay and who != dev])
         if not entry:
             out[delay] = None
             continue
         left, got = 1.0, 0.0
         for i, ((t_sale, frac), trades) in enumerate(zip(sells[:4], sale_trades)):
-            px = next((p for t, p, who in trades if t >= t_sale + delay and who != dev), None)
+            px = _median3([p for t, p, who in trades if t >= t_sale + delay and who != dev])
             part = left if i == len(sale_trades) - 1 else left * min(float(frac), 1.0)
             got += part * ((px or 0.0) / entry)        # no trade after the dev's sale = nothing back (rug)
             left -= part
