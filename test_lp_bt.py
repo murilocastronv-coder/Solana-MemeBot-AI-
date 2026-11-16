@@ -29,3 +29,15 @@ class LpTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SplitTest(unittest.TestCase):
+    def test_long_report_is_split(self):
+        sent = []
+        lp._send_parts(lambda c, t: sent.append(t), 1, "\n".join("x" * 100 for _ in range(100)))
+        self.assertGreater(len(sent), 1)
+        self.assertTrue(all(len(t) <= 3500 for t in sent))
+        import funding_bt as fb
+        sent.clear()
+        fb._send_parts(lambda c, t: sent.append(t), 1, "\n".join("y" * 100 for _ in range(100)))
+        self.assertGreater(len(sent), 1)

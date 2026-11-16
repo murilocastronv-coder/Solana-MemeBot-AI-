@@ -34,6 +34,18 @@ DAYS = 90
 _RUNNING = threading.Lock()
 
 
+def _send_parts(send, chat, text, limit=3500):
+    """Telegram refuses messages over ~4096 characters: send line blocks."""
+    cur = ""
+    for line in text.split("\n"):
+        if cur and len(cur) + len(line) + 1 > limit:
+            send(chat, cur)
+            cur = ""
+        cur += ("\n" if cur else "") + line
+    if cur:
+        send(chat, cur)
+
+
 # ---------------------------------------------------------------- data
 def _rate(row):
     """Hourly funding as a fraction of the price (Drift: fundingRate 1e9 precision, oracle TWAP 1e6)."""
@@ -210,7 +222,7 @@ def start(send=None, chat=None, markets=MARKETS, get=None, get_text=None, post=N
             res = {m: history(m, get=get, get_text=get_text, post=post) for m in markets}
             txt = report(res)
             if send and chat:
-                send(chat, txt)
+                _send_parts(send, chat, txt)
         except Exception as exc:
             logging.exception("funding backtest failed")
             if send and chat:
