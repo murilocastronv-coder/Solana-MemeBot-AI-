@@ -539,13 +539,17 @@ def cycle(rpc, send=None, chat=None, now=None, state=None):
             try:
                 n, w = scan_market(rpc, m, now)
                 st.setdefault("borrowers", {})[m] = n
-            except Exception as exc:
+            except BaseException as exc:                   # includes a panic of the Solana library
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
                 logging.warning("liq scan %s: %s: %s", name, type(exc).__name__, str(exc)[:150])
             break                                          # one market per pass: spreads the reads
     for ob, reserves, ltv in refresh_watch(rpc, now):
         try:
             attempt(rpc, ob, reserves, ltv, send, chat, now=now)
-        except Exception as exc:
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
             logging.exception("liq attempt failed")
             note("erro ao tentar " + ob["address"][:6] + ": " + type(exc).__name__ + ": " + str(exc)[:120])
     if now - st.get("saved", 0) > 60:
