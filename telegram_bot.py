@@ -156,7 +156,8 @@ def keyboard():
   [{"text":"💵 Liquidação: LIGAR REAL","callback_data":"lq_real"},{"text":"👀 Só observar","callback_data":"lq_obs"}],
   [{"text":"⏸️ Liquidação: desligar","callback_data":"lq_off"}],
   [{"text":"💧 BACKTEST LIQUIDAÇÃO (mercados menores, 50/60 USD)","callback_data":"lq_bt"}],
-  [{"text":"📈 BACKTEST FUNDING (Drift, US$ 60)","callback_data":"fr_bt"}]]
+  [{"text":"📈 BACKTEST FUNDING (Drift, US$ 60)","callback_data":"fr_bt"}],
+  [{"text":"🌊 BACKTEST LIQUIDEZ SOL/USDC (US$ 60)","callback_data":"lp_bt"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -372,6 +373,11 @@ def handle(update):
    send(chat,pre+liq_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
   return
+ if action=="lp_bt":
+  import lp_bt
+  why=lp_bt.start(send,chat)
+  send(chat,("🌊 Backtest de LIQUIDEZ CONCENTRADA SOL/USDC com US$ 60: faixas ±5/10/20/40%, preço real do SOL dos últimos 90 dias, "
+   "taxa das maiores pools de hoje, recentraliza quando sai da faixa. Relatório em ~1 min.") if not why else "⛔ "+why,keyboard());return
  if action=="fr_bt":
   import funding_bt
   why=funding_bt.start(send,chat)

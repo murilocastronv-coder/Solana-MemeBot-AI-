@@ -20,7 +20,13 @@ import requests
 
 CAPITAL = 60.0
 COST_SIDE = 0.001                    # 0.1% per side per leg (Jupiter swap / Drift taker), entry and exit
-MARKETS = ("SOL-PERP", "BTC-PERP", "ETH-PERP", "JUP-PERP", "HYPE-PERP")
+MARKETS = ("SOL-PERP", "BTC-PERP", "ETH-PERP", "JUP-PERP", "HYPE-PERP",
+           "WIF-PERP", "1MBONK-PERP", "POPCAT-PERP", "FARTCOIN-PERP")   # owner: the smaller coins too
+SMALL = {"WIF-PERP", "1MBONK-PERP", "POPCAT-PERP", "FARTCOIN-PERP", "JUP-PERP"}
+SMALL_COST_SIDE = 0.003              # small coins: buying/selling the coin costs more (0.3% per side)
+HL = "https://api.hyperliquid.xyz/info"
+HL_COIN = {"SOL-PERP": "SOL", "BTC-PERP": "BTC", "ETH-PERP": "ETH", "JUP-PERP": "JUP", "HYPE-PERP": "HYPE",
+           "WIF-PERP": "WIF", "1MBONK-PERP": "kBONK", "POPCAT-PERP": "POPCAT", "FARTCOIN-PERP": "FARTCOIN"}
 API = "https://data.api.drift.trade/fundingRates?marketName="
 S3 = ("https://drift-historical-data-v2.s3.eu-west-1.amazonaws.com/program/dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH"
       "/market/{m}/fundingRateRecords/{y}/{d}")
@@ -58,14 +64,19 @@ def from_s3(market, days=DAYS, now=None, get_text=None):
     get_text = get_text or (lambda u: requests.get(u, timeout=20).text)
     now = now or time.time()
     out = []
+    misses = 0
     for i in range(days, 0, -1):
+        if misses >= 5 and not out:                       # host unreachable / no files: stop early
+            break
         day = time.gmtime(now - i * 86400)
         url = S3.format(m=market, y=day.tm_year, d=time.strftime("%Y%m%d", day))
         try:
             txt = get_text(url)
         except Exception:
+            misses += 1
             continue
         if not txt or not txt[:200].count(","):
+            misses += 1
             continue
         for r in csv.DictReader(io.StringIO(txt)):
             x = _rate(r)
@@ -75,7 +86,30 @@ def from_s3(market, days=DAYS, now=None, get_text=None):
     return sorted(set(out))
 
 
-def history(market, days=DAYS, get=None, get_text=None):
+def from_hyperliquid(market, days=DAYS, now=None, post=None):
+    """Hourly funding history (public, no key). Used when Drift's data host can't be reached from the server;
+    the funding of the same coin moves together across the big perp venues (same longs paying shorts)."""
+    post = post or (lambda body: requests.post(HL, json=body, timeout=20).json())
+    coin = HL_COIN.get(market)
+    if not coin:
+        return []
+    now = now or time.time()
+    start = int((now - days * 86400) * 1000)
+    out = []
+    for _ in range(12):                                   # 500 records per call
+        rows = post({"type": "fundingHistory", "coin": coin, "startTime": start}) or []
+        if not rows:
+            break
+        for r in rows:
+            out.append((int(r["time"]) // 1000, float(r["fundingRate"])))
+        last = int(rows[-1]["time"])
+        if len(rows) < 500:
+            break
+        start = last + 1
+    return sorted(set(out))
+
+
+def history(market, days=DAYS, get=None, get_text=None, post=None):
     """(records [(ts, hourly rate)], source)."""
     try:
         rows = from_s3(market, days, get_text=get_text)
@@ -84,9 +118,17 @@ def history(market, days=DAYS, get=None, get_text=None):
     except Exception as exc:
         logging.info("funding s3 %s: %s", market, type(exc).__name__)
     try:
-        return from_api(market, get), "API da Drift (últimos ~30 dias)"
+        rows = from_api(market, get)
+        if rows:
+            return rows, "API da Drift (últimos ~30 dias)"
     except Exception as exc:
         logging.info("funding api %s: %s", market, type(exc).__name__)
+    try:
+        rows = from_hyperliquid(market, days, post=post)
+        if rows:
+            return rows, "Hyperliquid (mesma moeda; a Drift não respondeu)"
+    except Exception as exc:
+        logging.info("funding hyperliquid %s: %s", market, type(exc).__name__)
     return [], "sem dados"
 
 
@@ -130,7 +172,8 @@ def simulate(rows, notional, mode="always", cost=COST_SIDE):
 def report(results, capital=CAPITAL):
     L = ["📈 BACKTEST ARBITRAGEM DE FUNDING (Drift) — capital US$ " + format(capital, "g") + ", sem apostar na direção do preço",
          "Compra a moeda e abre um SHORT do mesmo tamanho: o preço se anula, sobra a taxa de funding de cada hora.",
-         "Custos: " + format(COST_SIDE * 100, "g") + "% por lado em cada perna (entrada e saída)."]
+         "Custos por lado em cada perna (entrada e saída): " + format(COST_SIDE * 100, "g") + "% nas grandes, " +
+         format(SMALL_COST_SIDE * 100, "g") + "% nas menores (WIF, BONK, POPCAT, FARTCOIN, JUP)."]
     best = None
     for m, (rows, src) in results.items():
         if not rows:
@@ -140,9 +183,10 @@ def report(results, capital=CAPITAL):
         pos = sum(1 for _, r in rows if r > 0) / len(rows)
         L.append("• " + m + " — " + str(len(rows)) + " horas (" + src + "), funding médio " + format(avg * 24 * 365 * 100, "+.1f") +
                  "% ao ano, positivo em " + format(pos * 100, ".0f") + "% das horas")
+        cost = SMALL_COST_SIDE if m in SMALL else COST_SIDE
         for label, notional in (("1x simples", capital * 0.5), ("moeda como garantia", capital * 0.85)):
             for mode, mlabel in (("always", "sempre ligado"), ("switch", "liga/desliga")):
-                s = simulate(rows, notional, mode)
+                s = simulate(rows, notional, mode, cost)
                 L.append("   " + label + " · " + mlabel + ": " + format(s["net"], "+.2f") + " USD em " + format(s["days"], ".0f") +
                          " dias → " + format(s["per_month"], "+.2f") + " USD/mês (" + format(s["apr"] * 100, "+.1f") +
                          "% ao ano) · taxas pagas " + format(s["fees"], ".2f"))
@@ -157,13 +201,13 @@ def report(results, capital=CAPITAL):
     return "\n".join(L)
 
 
-def start(send=None, chat=None, markets=MARKETS, get=None, get_text=None):
+def start(send=None, chat=None, markets=MARKETS, get=None, get_text=None, post=None):
     if not _RUNNING.acquire(blocking=False):
         return "o backtest já está rodando"
 
     def work():
         try:
-            res = {m: history(m, get=get, get_text=get_text) for m in markets}
+            res = {m: history(m, get=get, get_text=get_text, post=post) for m in markets}
             txt = report(res)
             if send and chat:
                 send(chat, txt)

@@ -24,3 +24,23 @@ class FundingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HyperliquidTest(unittest.TestCase):
+    def test_paginates_and_falls_back(self):
+        calls = []
+
+        def post(body):
+            calls.append(body["startTime"])
+            if len(calls) == 1:
+                return [{"time": 1_700_000_000_000 + 3_600_000 * i, "fundingRate": "0.0001"} for i in range(500)]
+            if len(calls) == 2:
+                return [{"time": 1_700_000_000_000 + 3_600_000 * (500 + i), "fundingRate": "-0.00005"} for i in range(10)]
+            return []
+
+        def boom(*a):
+            raise ConnectionError()
+        rows, src = fb.history("SOL-PERP", get=boom, get_text=boom, post=post)
+        self.assertEqual(len(rows), 510)
+        self.assertIn("Hyperliquid", src)
+        self.assertEqual(len(calls), 2)
