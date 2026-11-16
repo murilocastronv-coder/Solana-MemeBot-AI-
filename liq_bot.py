@@ -55,6 +55,7 @@ _RES = {}        # market -> {"at": t, "reserves": {address: reserve}}
 _WATCH = {}      # obligation address -> decoded obligation
 _TRIED = {}
 _TIPS = {"at": 0.0, "list": []}
+_CAL = {}        # obligation -> Kamino exact LTV / our estimate, from the last exact check (learned per borrower)
 
 
 # ---------------------------------------------------------------- state
@@ -224,6 +225,8 @@ def scan_market(rpc, market, now=None):
         if not ob or not ob["has_debt"]:
             continue
         ltv = k.ltv_now(ob, res)
+        if ltv is not None:
+            ltv *= _CAL.get(a, 1.0)
         if ltv is not None and ltv >= WATCH_LTV:
             ob["ltv"] = ltv
             _WATCH[a] = ob
@@ -259,6 +262,8 @@ def refresh_watch(rpc, now=None):
             _WATCH.pop(a, None)
             continue
         ltv = k.ltv_now(ob, reserves)
+        if ltv is not None:
+            ltv *= _CAL.get(a, 1.0)
         if ltv is None or ltv < WATCH_LTV * 0.97:
             _WATCH.pop(a, None)
             continue
@@ -519,11 +524,15 @@ def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None)
         exact, why = exact_ltv(rpc, signer.pubkey(), ob, reserves)
     except Exception as exc:
         exact, why = None, type(exc).__name__
-    if exact is not None:                                      # diagnostic: how far our estimate is from Kamino's
+    if exact is not None and ltv > 0:                          # learn this borrower's gap: next estimates use it
+        base = ltv / _CAL.get(ob["address"], 1.0)
+        _CAL[ob["address"]] = exact / base if base > 0 else 1.0
         logging.info("liq ltv estimate %.3f vs kamino %.3f (%s)", ltv, exact, ob["address"][:6])
     if exact is None or exact < 1.0:
         stat("saudável na conta do Kamino")
-        _TRIED[ob["address"]] = now + 120
+        _TRIED[ob["address"]] = now + (120 if exact is not None and exact > 0.97 else 600)
+        if exact is not None and exact < WATCH_LTV:
+            _WATCH.pop(ob["address"], None)
         if exact is None:
             _note_once("exact" + ob["address"], "não consegui a conta exata do Kamino para " + ob["address"][:6] + ": " + why, now)
         return None
