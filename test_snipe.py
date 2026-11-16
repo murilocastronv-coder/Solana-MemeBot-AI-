@@ -248,3 +248,15 @@ class DeadCoinTest(Tmp):
         out = sbt.download_coin(rpc, MINT, NOW, 150)
         self.assertTrue(out.get("dead"))
         self.assertEqual(len(calls), 1)
+
+
+class RefillTest(Tmp):
+    def test_missing_path_is_no_result_and_refill_fetches_it(self):
+        snap = {"price": 0.00001, "mcap": 10000, "vol5": 3000, "buys": 10, "sells": 10, "up5": 3}   # passes only a loose entry
+        c = {"points": {}, "coins": {MINT: {"created": NOW, "snaps": {"5": snap}, "after": {}}}}
+        s, trades, _ = sbt.simulate(c, NOW - 10, NOW + 10, (2000, 1.0, 0, 100), (0.2, 0.3, 0.12, 30))
+        self.assertEqual(trades, [])                                   # not a fake total loss
+        calls = []
+        rpc = lambda m, p: calls.append(1) or {"data": [swap_tx(NOW + 330, MINT, 1000, -int(0.1 * 1e9))]}
+        self.assertEqual(sbt.refill(rpc, c, 150, time.time(), 60), 1)
+        self.assertIn("5", c["coins"][MINT]["after"])
