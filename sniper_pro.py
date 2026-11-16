@@ -33,7 +33,10 @@ E = sg._f
 CAPITAL = E("PRO_CAPITAL", 60)
 COST = E("PRO_COST_PER_SIDE", 0.03)          # Pump.fun/PumpSwap fee ~1% + slippage on young coins
 NET_FEE = E("PRO_NET_FEE_USD", 0.02)         # base + priority fee per transaction
-SEARCH_N = int(E("PRO_SEARCH_N", 2000))      # combinations per profile
+SEARCH_N = int(E("PRO_SEARCH_N", 600))       # combinations per profile (the whole run fits in ~3 min)
+MIN_OPS = int(E("PRO_MIN_OPS", 200))         # owner: at least 200 operations over the 180 days
+DL_S = E("PRO_DOWNLOAD_SECONDS", 90)         # each tap downloads this long, then analyses everything downloaded
+ANALYSIS_S = E("PRO_ANALYSIS_SECONDS", 100)
 TOP_K = 25
 BUCKETS = (("10–15 min", (10,)), ("15–20 min", (15,)), ("20–30 min", (20,)), ("30–40 min", (30,)),
            ("40–50 min", (45,)), ("50–60 min", (55,)), ("10–60 min", (10, 15, 20, 30, 45, 55)))
@@ -220,7 +223,7 @@ def optimise(c, end, prof, n=None, rnd=None, bucket=None, should_stop=None):
         if should_stop and should_stop():
             break
         p = sample_params(rnd, prof, bucket)
-        tried.append((score_of(simulate(c, *w["dev"], p), 15), p))
+        tried.append((score_of(simulate(c, *w["dev"], p), MIN_OPS // 2), p))
     tried.sort(key=lambda x: -x[0])
     best, best_val = None, None
     for _, p in tried[:TOP_K]:
@@ -247,9 +250,13 @@ def robustness(c, end, p):
     return r
 
 
+def total_ops(o):
+    return sum(o[k]["trades"] for k in ("dev", "val", "test", "final"))
+
+
 def validated(o, rob):
     t, f = o["test"], o["final"]
-    return bool(rob["ok"] and t["pnl"] > 0 and f["pnl"] > 0 and t["trades"] + f["trades"] >= 20 and
+    return bool(rob["ok"] and t["pnl"] > 0 and f["pnl"] > 0 and total_ops(o) >= MIN_OPS and t["trades"] + f["trades"] >= 20 and
                 (t["pf"] is None or t["pf"] >= 1.2))
 
 
@@ -289,12 +296,14 @@ def run(kind, send=None, chat=None, now=None):
          progress=5, started=time.time())
     rep = {"at": time.time(), "end": end, "data": dc, "kind": kind, "profiles": {}, "ages": {}}
     n = SEARCH_N if kind != "compare" else max(60, SEARCH_N // 5)
+    deadline = time.time() + ANALYSIS_S
+    late = lambda: _STOP.is_set() or time.time() > deadline
     steps = len(PROFILES) + len(BUCKETS)
     k = 0
     for prof in PROFILES:
         if _STOP.is_set():
             break
-        o = optimise(c, end, prof, n, should_stop=_STOP.is_set)
+        o = optimise(c, end, prof, n, should_stop=late)
         if o:
             o["robust"] = robustness(c, end, o["params"])
             o["ok"] = validated(o, o["robust"])
@@ -304,7 +313,7 @@ def run(kind, send=None, chat=None, now=None):
     for i, (label, ages) in enumerate(BUCKETS):
         if _STOP.is_set():
             break
-        o = optimise(c, end, "B", max(40, n // 4), random.Random(11 + i), bucket=i, should_stop=_STOP.is_set)
+        o = optimise(c, end, "B", max(40, n // 4), random.Random(11 + i), bucket=i, should_stop=late)
         rep["ages"][label] = {"test": o["test"], "final": o["final"]} if o else None
         k += 1
         _job(progress=5 + int(90 * k / steps), stage="idade " + label + " pronta")
@@ -338,23 +347,21 @@ def start(kind, rpc=None, sol_usd=None, send=None, chat=None):
             if kind == "download":
                 if rpc is None:
                     raise ValueError("precisa do SOLANA_RPC_URL (Helius) no Render")
-                _job(status="rodando", kind=kind, stage="baixando 180 dias de lançamentos reais", progress=0, started=time.time())
-                t0 = time.time()
+                _job(status="rodando", kind=kind, stage="baixando lançamentos reais (" + format(DL_S, "g") + " s por toque)", progress=0,
+                     started=time.time())
                 end = time.time() - 2 * 3600
                 begin = end - 180 * 86400
-                while not _STOP.is_set() and time.time() - t0 < sbt.FULL_MAX_H * 3600:
-                    def prog(done, total, coins):
-                        _job(progress=int(80 * done / max(total, 1)), stage="baixando: dias " + str(done) + "/" + str(total) +
-                             " · " + str(coins) + " moedas")
-                    sbt.DEADLINE[0] = time.time() + sbt.JOB_MAX_S
-                    try:
-                        cc = sbt.download(rpc, sol_usd, None, begin, end, _STOP.is_set, prog)
-                    except TimeoutError:
-                        cc = sbt.cache()
-                    finally:
-                        sbt.DEADLINE[0] = 0.0
-                    if all(str(p) in cc["points"] for p in sbt.sample_points(begin, end)):
-                        break
+
+                def prog(done, total, coins):
+                    _job(progress=int(40 * done / max(total, 1)), stage="baixando: dias " + str(done) + "/" + str(total) +
+                         " · " + str(coins) + " moedas")
+                sbt.DEADLINE[0] = time.time() + DL_S
+                try:
+                    sbt.download(rpc, sol_usd, None, begin, end, _STOP.is_set, prog, max_s=DL_S)
+                except TimeoutError:
+                    pass
+                finally:
+                    sbt.DEADLINE[0] = 0.0
                 run("full", send, chat)
             else:
                 run(kind, send, chat)
@@ -425,7 +432,8 @@ def text(rep):
         if not o:
             L.append("  • sem operações suficientes")
             continue
-        L += ["  • ajuste: " + _pdesc(o["params"]), "  • validação: " + _fmt(o["val"]), "  • TESTE: " + _fmt(o["test"]),
+        L += ["  • ajuste: " + _pdesc(o["params"]), "  • operações nos 180 dias: " + str(total_ops(o)) + (" ✅" if total_ops(o) >= MIN_OPS else
+              " (mínimo " + str(MIN_OPS) + ": faltam dados ou o filtro é rígido)"), "  • validação: " + _fmt(o["val"]), "  • TESTE: " + _fmt(o["test"]),
               "  • TESTE INDEPENDENTE: " + _fmt(o["final"])]
         r = o.get("robust") or {}
         if r:
@@ -442,10 +450,13 @@ def text(rep):
             else:
                 L.append("  • " + label + ": sem operações suficientes")
     if rep.get("winner"):
-        L.append("✅ Perfil " + rep["winner"] + " passou: lucro nos dois testes fora da amostra, PF ≥ 1,2 e ainda positivo com taxas ×1,5, "
+        L.append("✅ Perfil " + rep["winner"] + " passou: ≥ " + str(MIN_OPS) + " operações, lucro nos dois testes fora da amostra, PF ≥ 1,2 e ainda positivo com taxas ×1,5, "
                  "atraso e 20% de vendas falhando. Próximo passo: TESTAR MELHOR ESTRATÉGIA EM SIMULAÇÃO.")
     else:
         L.append("❌ Nenhum perfil passou nos testes fora da amostra e de robustez. Não recomendo dinheiro real com esse sniper.")
+    if dc["days"] < dc["days_total"]:
+        L.append("⏳ PARCIAL: " + str(dc["days"]) + " de " + str(dc["days_total"]) + " dias da amostra nova baixados (mais os lançamentos dos "
+                 "testes antigos). Toque de novo: cada toque baixa mais ~" + format(DL_S, "g") + " s e refaz a análise.")
     L.append("⚠️ Faltam nos dados históricos: " + "; ".join(dc["missing"]) + ". Esses filtros só existem no robô ao vivo. "
              "Amostra de lançamentos (não todos); preço do SOL constante. Passado não garante futuro.")
     return "\n".join(L)

@@ -348,6 +348,18 @@ def sample_points(start, end):
     return list(range(first, int(end), step))
 
 
+def _spread(pts):
+    """Order the missing days so that a short download covers the whole period evenly (1st, middle, quarters, ...)."""
+    out, seen, step = [], set(), len(pts)
+    while step >= 1 and len(out) < len(pts):
+        for i in range(0, len(pts), step):
+            if i not in seen:
+                seen.add(i)
+                out.append(pts[i])
+        step //= 2
+    return out
+
+
 def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_progress=None, max_s=None):
     """Fill the cache: launches at the sample points, then each coin. Checkpoint after every point / coin."""
     now = now or time.time()
@@ -359,7 +371,7 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
     if refill(rpc, c, sol_usd, began, max_s, should_stop):
         _put("snipe_bt_cache_v3", c)
     pts = sample_points(start, end)
-    todo_pts = [p for p in pts if str(p) not in c["points"]]
+    todo_pts = _spread([p for p in pts if str(p) not in c["points"]])
     total = len(pts)
     for i, p in enumerate(todo_pts):
         if (should_stop and should_stop()) or time.time() - began > max_s:
