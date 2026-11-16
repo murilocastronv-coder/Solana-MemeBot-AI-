@@ -42,22 +42,45 @@ class UserWalletTests(unittest.TestCase):
         self.assertFalse(copy_trader.real_enabled())                  # a stranger can't switch trading on
 
 
-    def test_private_key_export_is_disabled_for_everyone(self):
-        sent = []
-        with patch.object(tb, "request_api"), patch.object(tb, "CHAT", "100"), \
+    def _cb(self, chat, data):
+        tb.handle({"callback_query": {"id": "1", "data": data, "message": {"chat": {"id": chat, "type": "private"}}}})
+
+    def test_owner_can_export_private_key_after_confirming(self):
+        sent, api = [], []
+        owner_addr, _ = uw.create_or_get(100)
+        with patch.object(tb, "request_api", side_effect=lambda m, **k: api.append((m, k)) or {"result": {"message_id": 9}}), \
+                patch.object(tb, "CHAT", "100"), patch.object(tb, "EXPORT_DELETE_S", 0), \
                 patch.object(tb, "send", side_effect=lambda c, t, kb=None: sent.append((t, kb))):
-            for chat in (100, 777):                                     # owner and another account
-                tb.handle({"callback_query": {"id": "1", "data": "wallet_export",
-                                              "message": {"chat": {"id": chat, "type": "private"}}}})
-        self.assertEqual(sum("exportação de chave privada foi DESATIVADA" in t for t, _ in sent), 2)
-        self.assertFalse(any("url" in b for _, kb in sent if kb for row in kb for b in row))   # no export link
-        for kb in (tb.keyboard(), tb.user_keyboard()):
-            self.assertNotIn("wallet_export", {b.get("callback_data") for row in kb for b in row})
+            self._cb(100, "wallet_export")
+            self.assertIn("Sim, mostrar a chave", str(sent[-1][1]))
+            self.assertFalse([k for m, k in api if m == "sendMessage"])     # nothing before confirming
+            self._cb(100, "wallet_export_ok")
+            import time; time.sleep(0.2)
+        msgs = [k for m, k in api if m == "sendMessage"]
+        self.assertEqual(len(msgs), 1)
+        from solders.keypair import Keypair
+        key = re.search(r"\n\n(\w{80,90})\n\n", msgs[0]["text"]).group(1)
+        self.assertEqual(str(Keypair.from_base58_string(key).pubkey()), owner_addr)
+        self.assertTrue(msgs[0]["protect_content"])
+        self.assertTrue(any(m == "deleteMessage" for m, _ in api))           # message wiped afterwards
+        self.assertFalse(any(key in t for t, _ in sent))                     # never through send()/panel
+        self.assertIn("wallet_export", {b.get("callback_data") for row in tb.keyboard() for b in row})
+
+    def test_export_needs_confirmation_and_is_owner_only(self):
+        sent, api = [], []
+        uw.create_or_get(100); uw.create_or_get(777)
+        with patch.object(tb, "request_api", side_effect=lambda m, **k: api.append((m, k)) or {}), \
+                patch.object(tb, "CHAT", "100"), \
+                patch.object(tb, "send", side_effect=lambda c, t, kb=None: sent.append((t, kb))):
+            self._cb(100, "wallet_export_ok")                                # no prior request -> expired
+            self._cb(777, "wallet_export")
+            self._cb(777, "wallet_export_ok")
+        self.assertFalse([k for m, k in api if m == "sendMessage"])
+        self.assertIn("expirada", sent[0][0])
+        self.assertIn("só para o dono", sent[1][0])
+        self.assertNotIn("wallet_export", {b.get("callback_data") for row in tb.user_keyboard() for b in row})
         client = tb.app.test_client()
-        self.assertEqual(client.get("/exportar?token=x").status_code, 410)
-        self.assertEqual(client.post("/exportar?token=x", data={"password": "x"}).status_code, 410)
-        self.assertEqual(client.get("/carteira").status_code, 404)        # key test page removed
-        self.assertFalse(hasattr(uw, "export_with_password"))
+        self.assertEqual(client.get("/exportar?token=x").status_code, 410)  # no web export page
 
 
 if __name__ == "__main__":
