@@ -309,7 +309,8 @@ def plan(ob, reserves, usdc_raw):
         return None, "dívida não é em USDC, USDT nem SOL"
     b, repay = max(debts, key=lambda x: (x[1]["mint"] == USDC, x[0]["value"]))
     cols = [(d, reserves.get(d["reserve"])) for d in ob["deposits"]]
-    cols = [(d, r) for d, r in cols if r and r["price"] > 0]
+    cols = [(d, r) for d, r in cols if r and r["price"] > 0
+            and (ob["elevation"] > 0 or r.get("threshold_pct", 1) > 0)]   # threshold 0 = Kamino refuses (error 6087)
     if not cols:
         return None, "sem garantia com preço"
     d, withdraw = max(cols, key=lambda x: x[0]["value"])
@@ -449,20 +450,69 @@ def _back_to_usdc(rpc, me, mint, token_program, decimals, price, keep_lamports=0
         return 0.0
 
 
+def exact_ltv(rpc, payer, ob, reserves):
+    """Kamino's OWN health number: simulate refresh reserves + refresh obligation and read the refreshed obligation
+    back from the simulation (no tokens needed). (ltv or None, reason)."""
+    from solders.compute_budget import set_compute_unit_limit
+    from solders.hash import Hash
+    from solders.message import MessageV0
+    from solders.pubkey import Pubkey
+    involved = list(dict.fromkeys([d["reserve"] for d in ob["deposits"]] + [b["reserve"] for b in ob["borrows"]]))
+    if any(a not in reserves for a in involved):
+        return None, "reserva desconhecida"
+    ixs = [set_compute_unit_limit(1_000_000)] + [k.ix_refresh_reserve(reserves[a]) for a in involved] + [k.ix_refresh_obligation(ob, reserves)]
+    msg = MessageV0.try_compile(Pubkey.from_string(str(payer)), ixs, [], Hash.default())
+    r = rpc("simulateTransaction", [base64.b64encode(_raw(msg)).decode(), {
+        "encoding": "base64", "sigVerify": False, "replaceRecentBlockhash": True, "commitment": "processed",
+        "accounts": {"encoding": "base64", "addresses": [ob["address"]]}}]) or {}
+    v = r.get("value") or {}
+    if v.get("err") is not None:
+        logs = [l for l in v.get("logs") or [] if "rror" in l]
+        return None, (str(v.get("err")) + " " + (logs[-1] if logs else ""))[:150]
+    acc = (v.get("accounts") or [None])[0]
+    o = k.obligation(ob["address"], base64.b64decode(acc["data"][0])) if acc else None
+    if not o or o["unhealthy"] <= 0:
+        return None, "sem dados do empréstimo"
+    return o["bf_debt"] / o["unhealthy"], ""
+
+
+_NOTED = {}
+
+
+def _note_once(key, text, now, every=3600):
+    if now - _NOTED.get(key, 0) >= every:
+        _NOTED[key] = now
+        note(text)
+
+
 def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None):
     now = now or time.time()
-    if now - _TRIED.get(ob["address"], 0) < 60:
+    if now < _TRIED.get(ob["address"], 0):
         return None
-    _TRIED[ob["address"]] = now
-    stat("oportunidades")
+    _TRIED[ob["address"]] = now + 60
+    if ob["deposited"] < 1:                                  # dust / bad debt: nothing worth receiving
+        _TRIED[ob["address"]] = now + 3600
+        return None
     signer = signer or __import__("rent_reclaim").bot_signer()
     me = str(signer.pubkey())
     usdc_before = token_balance(rpc, me, USDC)
     p, why = plan(ob, reserves, usdc_before)
     if not p:
         stat("puladas")
-        note("liquidável (LTV " + format(ltv * 100, ".1f") + "%) mas pulei: " + why + " · " + ob["address"][:6])
+        _note_once(ob["address"] + why, "liquidável (LTV ~" + format(min(ltv, 9.99) * 100, ".0f") + "%) mas pulei: " + why +
+                   " · " + ob["address"][:6], now)
         return None
+    try:                                                      # Kamino's own number before any swap or send
+        exact, why = exact_ltv(rpc, signer.pubkey(), ob, reserves)
+    except Exception as exc:
+        exact, why = None, type(exc).__name__
+    if exact is None or exact < 1.0:
+        stat("saudável na conta do Kamino")
+        _TRIED[ob["address"]] = now + 120
+        if exact is None:
+            _note_once("exact" + ob["address"], "não consegui a conta exata do Kamino para " + ob["address"][:6] + ": " + why, now)
+        return None
+    stat("oportunidades")
     repay, withdraw = p["repay"], p["withdraw"]
     if not real():
         if repay["mint"] == USDC:
@@ -572,7 +622,8 @@ def status_text():
          " (hoje " + format(day_pnl(), "+.2f") + ") · só envia se a simulação na rede der certo",
          "🏦 Mercados vigiados: " + str(len(d.get("markets") or _STATE.get("markets") or [])) + " · devedores lidos: " +
          str(sum((_STATE.get("borrowers") or {}).values())) + " · perto de liquidar agora: " + str(len(_WATCH)),
-         "📊 Oportunidades " + str(s.get("oportunidades", 0)) + " · puladas " + str(s.get("puladas", 0)) + " · simulação ok " +
+         "🩺 Descartadas pela conta exata do Kamino (ainda saudáveis): " + str(s.get("saudável na conta do Kamino", 0)),
+         "📊 Oportunidades reais " + str(s.get("oportunidades", 0)) + " · puladas " + str(s.get("puladas", 0)) + " · simulação ok " +
          str(s.get("simulação ok", 0)) + " · recusadas " + str(s.get("simulação falhou", 0)) + " · perdeu disputa " +
          str(s.get("perdeu a disputa", 0)) + " · LIQUIDOU " + str(s.get("liquidou", 0)),
          "💰 Resultado: " + str(len(tr)) + " liquidações · total " + format(sum(t.get("pnl", 0) for t in tr), "+.2f") + " USD"]

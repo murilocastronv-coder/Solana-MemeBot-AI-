@@ -45,6 +45,7 @@ def make_reserve(market, mint, price, decimals, rate=1.0):
     for o in (5160, 5192, 5224):
         put_pk(b, o, k.SYSTEM)
     b[5032:5036] = b"SOLX"
+    b[4873] = 85                                   # liquidation threshold %
     return bytes(b)
 
 
@@ -175,3 +176,42 @@ class HeadSliceTest(unittest.TestCase):
         self.assertEqual(ob["referrer"], k.SYSTEM)
         with self.assertRaises(ValueError):
             k._pk(full[:2300], 2288)
+
+
+class ExactHealthTest(unittest.TestCase):
+    def test_exact_ltv_reads_the_simulated_obligation(self):
+        import base64
+        c = KaminoTest()
+        c.setUp()
+        refreshed = make_obligation(c.market, c.rsol, 10 ** 9, 90.0, c.rusdc, 80e6, 80.0, 76.5)
+        calls = []
+
+        def rpc(method, params):
+            calls.append((method, params))
+            return {"value": {"err": None, "accounts": [{"data": [base64.b64encode(refreshed).decode(), "base64"]}]}}
+        ltv, why = lb.exact_ltv(rpc, pk(), c.ob, c.res)
+        self.assertAlmostEqual(ltv, 80 / 76.5, places=4)
+        self.assertEqual(calls[0][1][1]["accounts"]["addresses"], [c.ob["address"]])
+
+    def test_healthy_in_kamino_stops_before_any_swap(self):
+        c = KaminoTest()
+        c.setUp()
+        lb._TRIED.clear()
+        healthy = make_obligation(c.market, c.rsol, 10 ** 9, 100.0, c.rusdc, 80e6, 80.0, 85.0)
+        import base64
+
+        def rpc(method, params):
+            if method == "simulateTransaction":
+                return {"value": {"err": None, "accounts": [{"data": [base64.b64encode(healthy).decode(), "base64"]}]}}
+            if method == "getTokenAccountBalance":
+                return {"value": {"amount": str(60 * 10 ** 6)}}
+            raise AssertionError("no swap or send for a healthy obligation: " + method)
+        kp = Keypair()
+        self.assertIsNone(lb.attempt(rpc, c.ob, c.res, 1.2, signer=kp))
+
+    def test_zero_threshold_collateral_is_not_chosen(self):
+        c = KaminoTest()
+        c.setUp()
+        c.res[c.rsol]["threshold_pct"] = 0
+        p, why = lb.plan(c.ob, c.res, 100 * 10 ** 6)
+        self.assertIsNone(p)
