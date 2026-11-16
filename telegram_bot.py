@@ -168,6 +168,7 @@ def keyboard():
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
   [{"text":"🤖 Memecoin: nova proposta","callback_data":"mc_new"},{"text":"🤖 Memecoin: status","callback_data":"mc_status"}],
   [{"text":"🔁 Propostas automáticas","callback_data":"mc_auto"},{"text":"⏸️ Só quando eu pedir","callback_data":"mc_manual"}],
+  [{"text":"🚀 Memecoin REAL (aprovo cada uma)","callback_data":"mc_real"},{"text":"🧪 Memecoin simulação","callback_data":"mc_sim"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -386,17 +387,24 @@ def handle(update):
    send(chat,pre+liq_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
   return
- if action in ("mc_new","mc_status","mc_auto","mc_manual") or action.startswith(("mc_ok_","mc_no_")):
+ if action in ("mc_new","mc_status","mc_auto","mc_manual","mc_real","mc_sim") or action.startswith(("mc_ok_","mc_no_")):
   import memecoin_ai as mc
   try:
    if action=="mc_new":
     send(chat,"🤖 Lendo as tendências e criando uma proposta original…")
     send_meme_proposal(chat);return
    if action.startswith(("mc_ok_","mc_no_")):
-    p=mc.decide(action[6:],action.startswith("mc_ok_"),__import__("copy_trader")._sol_usd())
+    px=__import__("copy_trader")._sol_usd()
+    p=mc.decide(action[6:],action.startswith("mc_ok_"),px)
     if not p:send(chat,"⛔ Proposta não encontrada ou já decidida.",keyboard());return
+    if p["status"]=="launching":
+     send(chat,"🚀 Aprovada: criando "+p["name"]+" ($"+p["symbol"]+") na Pump.fun… (confiro os limites e simulo antes de enviar)")
+     rec,why=mc.launch_real(p["id"],px,__import__("pool_bot")._rpc(),__import__("rent_reclaim").bot_signer())
+     send(chat,mc.launched_text(rec) if rec else "⛔ Lançamento não feito: "+why,keyboard());return
     send(chat,(("✅ APROVADA (SIMULAÇÃO): "+p["name"]+" ($"+p["symbol"]+") registrada como lançamento simulado. Nada foi criado na blockchain; "
      "o lançamento real na Pump.fun só será ligado quando você decidir.") if p["status"]=="approved" else "❌ Proposta "+p["name"]+" rejeitada."),keyboard());return
+   if action=="mc_real":mc.set_real(True);send(chat,"💵 Criador de memecoins em MODO REAL: cada proposta só vira moeda de verdade quando você aperta APROVAR nela. Custo máx. US$ "+format(mc.BUDGET_PER_LAUNCH,"g")+" por lançamento (criação + compra pública do criador), "+str(mc.MAX_PER_DAY)+" por dia, US$ "+format(mc.DAILY_BUDGET,"g")+" por dia, US$ "+format(mc.RESERVE_USD,"g")+" no total, sempre ficam US$ "+format(mc.KEEP_SOL_USD,"g")+" em SOL. Nunca vende sozinho. Precisa de SOL na carteira (~0,06 SOL por lançamento).")
+   if action=="mc_sim":mc.set_real(False)
    if action=="mc_auto":mc.set_auto(True)
    if action=="mc_manual":mc.set_auto(False)
    send(chat,mc.status_text(),keyboard())
@@ -1322,7 +1330,7 @@ def send_meme_proposal(chat):
  p,why=mc.propose()
  if not p:send(chat,"⛔ Sem proposta agora: "+why,keyboard());return False
  send_photo(chat,mc.logo_png(p["name"]),mc.proposal_text(p),
-  [[{"text":"✅ APROVAR (simulação)","callback_data":"mc_ok_"+p["id"]},{"text":"❌ REJEITAR","callback_data":"mc_no_"+p["id"]}]])
+  [[{"text":"🚀 APROVAR E CRIAR DE VERDADE" if mc.real() else "✅ APROVAR (simulação)","callback_data":"mc_ok_"+p["id"]},{"text":"❌ REJEITAR","callback_data":"mc_no_"+p["id"]}]])
  return True
 def meme_loop():
  """Owner (Nov 16): automatic memecoin proposals for approval (simulation)."""
