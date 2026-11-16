@@ -53,7 +53,7 @@ class DevBotTest(unittest.TestCase):
     def test_sim_buy_exits_and_metrics(self):
         info = {"tier": "ELITE", "score": 90, "win": 0.9}
         self.assertEqual(db.buy_reason(pair(), info), "")
-        self.assertIn("liquidez", db.buy_reason(pair(liq=3000), info))     # owner: minimum US$ 4 thousand
+        self.assertIn("liquidez", db.buy_reason(pair(liq=9000), info))     # owner: minimum US$ 10 thousand
         self.assertIn("não aprovado", db.buy_reason(pair(), {"tier": "MONITORADO"}))
         self.assertTrue(db.sim_buy(pair(), DEV, "teste", NOW))
         self.assertFalse(db.sim_buy(pair(), DEV, "teste", NOW))            # one entry per token
