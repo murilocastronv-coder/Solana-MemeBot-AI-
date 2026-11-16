@@ -38,6 +38,15 @@ class WalkTest(unittest.TestCase):
         self.assertGreaterEqual(c["coins"]["m"]["after"]["10"][0][0], cands[0][0])   # entry after the decision moment
 
 
+class RankingTest(unittest.TestCase):
+    def test_few_trades_never_win(self):
+        few = {"trades": 2, "pf": None, "pnl": 3.0, "dd": 0.0}
+        many_losing = {"trades": 250, "pf": 0.8, "pnl": -10.0, "dd": 12.0}
+        many_winning = {"trades": 250, "pf": 1.4, "pnl": 9.0, "dd": 4.0}
+        self.assertGreater(sp.score_of(many_losing, 100), sp.score_of(few, 100))
+        self.assertGreater(sp.score_of(many_winning, 100), sp.score_of(many_losing, 100))
+
+
 class PortfolioTest(unittest.TestCase):
     def coins(self, n, ratio):
         return {"coins": {"m" + str(i): {"created": i * 100, "snaps": {"10": SNAP},
