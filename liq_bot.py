@@ -36,7 +36,8 @@ DAILY_LOSS = E("LIQ_DAILY_LOSS_USD", 10)
 SCAN_S = E("LIQ_SCAN_S", 120)
 FAST_S = E("LIQ_FAST_S", 2)
 PRE_LTV = E("LIQ_PRE_LTV", 0.75)                     # step 1 of the scan (numbers of the last refresh)
-WATCH_LTV = E("LIQ_WATCH_LTV", 0.90)
+WATCH_LTV = E("LIQ_WATCH_LTV", 0.97)                 # main market: thousands of leveraged loops sit at 85-95%
+MAX_WATCH = int(E("LIQ_MAX_WATCH", 300))               # closest ones only (re-read every FAST_S)
 TRIGGER_LTV = E("LIQ_TRIGGER_LTV", 0.995)
 MAX_MARKETS = int(E("LIQ_MAX_MARKETS", 20))
 CU_LIMIT = int(E("LIQ_CU_LIMIT", 1_000_000))
@@ -227,7 +228,15 @@ def scan_market(rpc, market, now=None):
             ob["ltv"] = ltv
             _WATCH[a] = ob
             w += 1
+    _trim_watch()
     return len(head), w
+
+
+def _trim_watch():
+    if len(_WATCH) > MAX_WATCH:
+        keep = sorted(_WATCH.items(), key=lambda kv: -kv[1].get("ltv", 0))[:MAX_WATCH]
+        _WATCH.clear()
+        _WATCH.update(keep)
 
 
 def refresh_watch(rpc, now=None):
@@ -510,6 +519,8 @@ def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None)
         exact, why = exact_ltv(rpc, signer.pubkey(), ob, reserves)
     except Exception as exc:
         exact, why = None, type(exc).__name__
+    if exact is not None:                                      # diagnostic: how far our estimate is from Kamino's
+        logging.info("liq ltv estimate %.3f vs kamino %.3f (%s)", ltv, exact, ob["address"][:6])
     if exact is None or exact < 1.0:
         stat("saudável na conta do Kamino")
         _TRIED[ob["address"]] = now + 120
