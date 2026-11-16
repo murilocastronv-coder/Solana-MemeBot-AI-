@@ -250,3 +250,19 @@ class VolatileWatchTest(unittest.TestCase):
         self.assertEqual(lb.watch_from({"elevation": 0}), lb.VOLATILE_WATCH_LTV)
         self.assertEqual(lb.watch_from({"elevation": 2}), lb.WATCH_LTV)
         lb._WATCH.clear()
+
+
+class AllMarketsTest(unittest.TestCase):
+    def test_all_kamino_markets_main_first(self):
+        import snipe_backtest as sbt
+        old = sbt._get
+        sbt._get = lambda key, d: {"markets": [("Kamino", "xStocks", "X1")], "liqs": {"X1": [1, 2]}}
+        try:
+            api = [{"lendingMarket": "A%d" % i, "name": "m%d" % i} for i in range(39)] + \
+                  [{"lendingMarket": "MAIN", "name": "Main", "isPrimary": True}]
+            got = lb.markets(fetch=lambda url: api)
+        finally:
+            sbt._get = old
+        self.assertEqual(got[0], ("Main", "MAIN"))
+        self.assertEqual(got[1], ("xStocks", "X1"))
+        self.assertEqual(len(got), 41)
