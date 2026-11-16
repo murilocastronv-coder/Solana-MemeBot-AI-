@@ -92,8 +92,9 @@ def add_launches(added):
     if not added:
         return
     with _LOCK:
-        w = _load().setdefault("watch", {})
-        w.update({m: int(t) for m, t in added.items()})
+        d = _load()
+        done = set(d.get("grads") or {}) | set(d.get("seen") or {})
+        d.setdefault("watch", {}).update({m: int(t) for m, t in added.items() if m not in done})
 
 
 def _history():
@@ -128,12 +129,15 @@ def check_graduations(rpc, now=None, completed=None):
         d["watch"] = {m: t for m, t in (d.get("watch") or {}).items() if now - t < WATCH_H * 3600}
         mints = list(d["watch"])
     flags = (completed or gb.completed)(rpc, mints) if mints else {}
-    new = [m for m, ok in flags.items() if ok]
     with _LOCK:
         d = _load()
+        new = [m for m, ok in flags.items() if ok and m not in d.get("grads", {}) and m not in d.get("seen", {})]
         for m in new:
             d["watch"].pop(m, None)
             d.setdefault("grads", {})[m] = now
+        for m, ok in flags.items():
+            if ok:
+                d["watch"].pop(m, None)
         d["grads"] = {m: t for m, t in d["grads"].items() if now - t < 3600}
     return new
 
@@ -142,8 +146,8 @@ def _pair(mint, fetch=None):
     rows = (fetch or sg._get)(sg.DEX + "/tokens/v1/solana/" + mint) or []
     best = None
     for p in rows if isinstance(rows, list) else []:
-        if str(p.get("dexId") or "").lower() == "pumpfun":
-            continue
+        if str(p.get("dexId") or "").lower() == "pumpfun" or (p.get("baseToken") or {}).get("address") != mint:
+            continue                     # only the coin's own PumpSwap pair (not a pair where it is the quote)
         if best is None or float((p.get("liquidity") or {}).get("usd") or 0) > float((best.get("liquidity") or {}).get("usd") or 0):
             best = p
     return best
