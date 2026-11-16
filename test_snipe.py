@@ -134,13 +134,14 @@ class LaunchTestTest(Tmp):
             def rpc(method, params):
                 addr, opt = params
                 gte = opt["filters"]["blockTime"]["gte"]
-                if gte >= NOW + 600:                       # price after the dev sold: 2x the launch price
-                    return {"data": [swap_tx(NOW + 601, MINT, 1000, -int(0.002 * 1e9))]}
+                if gte >= NOW + 600:                       # after the dev sold: the dev's own sale, then 2x for others
+                    return {"data": [swap_tx(NOW + 600, MINT, -1000, int(0.009 * 1e9), payer="DEVX"),
+                                     swap_tx(NOW + 650, MINT, 1000, -int(0.002 * 1e9))]}
                 # launch: price 0.001 at +3 s, 0.0015 at +12 s, 0.003 at +40 s (per 1000 tokens, in SOL)
                 return {"data": [swap_tx(NOW + 3, MINT, 1000, -int(0.001 * 1e9)),
                                  swap_tx(NOW + 12, MINT, 1000, -int(0.0015 * 1e9)),
                                  swap_tx(NOW + 40, MINT, 1000, -int(0.003 * 1e9))]}
-            r = lt.replay(rpc, MINT, NOW, [[NOW + 600, 1.0]], 150)
+            r = lt.replay(rpc, MINT, NOW, [[NOW + 600, 1.0]], 150, "DEVX")
             self.assertGreater(r[2], 0.5)          # in at 0.001, out at 0.002: about +100% minus costs
             self.assertLess(r[30], 0)              # in at 0.003, out at 0.002: loss
             txt = lt.text([("DEVX", MINT, r)], 1)
