@@ -151,7 +151,8 @@ def keyboard():
  """Owner's menu. BTC mode: only the BTC research. Full mode (OWNER_MENU=full): copy trade and wallet."""
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
- return [[{"text":"🎯 BACKTEST SNIPER (3 meses, ~3 min)","callback_data":"sn_bt"}],
+ return [[{"text":"🎓 BACKTEST: MOEDA QUE GRADUOU (3 meses)","callback_data":"gr_bt"}],
+  [{"text":"🎯 BACKTEST SNIPER (3 meses, ~3 min)","callback_data":"sn_bt"}],
   [{"text":"🎯 BACKTEST SNIPER — moedas com 1h30+","callback_data":"sn_bt_old"}],
   [{"text":"🎯 Sniper: status","callback_data":"sn_status"},{"text":"✅ Ligar sniper vencedor","callback_data":"sn_apply"}],
   [{"text":"⏸️ Desligar sniper","callback_data":"sn_off"}],
@@ -354,6 +355,12 @@ def handle(update):
    for part in split_message("\n".join(lines)):send(chat,part,keyboard())
   except Exception as exc:send(chat,"⛔ DEV Hunter: "+str(exc)[:200],keyboard())
   return
+ if action=="gr_bt":
+  import grad_backtest,snipe_backtest
+  why=grad_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
+  send(chat,("🎓 Testando comprar moedas que GRADUARAM na pump.fun (foram para a PumpSwap), 3 meses de dados reais: entrada 30 s, "
+   "2 min ou 10 min depois, 5 tipos de saída, escolha nos 70% e conferência nos 30%. Relatório em ~3 min; toque de novo se vier PARCIAL.")
+   if not why else "⛔ "+why,keyboard());return
  if action=="sn_bt_old":
   import snipe_backtest
   why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat,old=True)
