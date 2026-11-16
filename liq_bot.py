@@ -315,6 +315,12 @@ def _jupiter_swap(in_mint, out_mint, amount_raw, owner):
 
 def top_up(rpc, owner, send=None, chat=None):
     """Keep about LIQ_USD of USDC in the wallet (bought with SOL, keeping SOL_RESERVE for fees)."""
+    try:                                   # the pool robot uses the capital: never sell its SOL for liquidation USDC
+        import pool_bot
+        if pool_bot.real() and pool_bot.enabled():
+            return token_balance(rpc, owner, USDC) / 1e6
+    except Exception:
+        pass
     usdc = token_balance(rpc, owner, USDC) / 1e6
     if usdc >= LIQ_USD * 0.9:
         return usdc

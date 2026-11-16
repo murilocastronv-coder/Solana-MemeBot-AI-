@@ -30,7 +30,7 @@ CYCLE_S = E("POOL_CYCLE_S", 600)
 MIN_LIQ = E("POOL_MIN_LIQ_USD", 250_000)
 MIN_VOL = E("POOL_MIN_VOL_USD", 100_000)
 MIN_AGE_D = E("POOL_MIN_AGE_D", 3)
-MAX_DAYS = E("POOL_MAX_DAYS", 3)
+MAX_DAYS = E("POOL_MAX_DAYS", 2)                    # owner: 2 days in each pool, then change
 FALL = E("POOL_YIELD_FALL", 0.5)                 # leave when the yield is under half of the entry yield
 STOP = E("POOL_PRICE_STOP", 0.15)                # leave when the coin fell 15% from entry
 MIN_DAY_YIELD = E("POOL_MIN_DAY_YIELD", 0.15)    # owner (Nov 16): only pools paying 15% to 60% per day
@@ -84,6 +84,18 @@ def set_enabled(on):
 
 def enabled():
     return bool(_load().get("enabled"))
+
+
+def real():
+    return bool(_load().get("real"))
+
+
+def set_real(on):
+    with _LOCK:
+        d = _load()
+        d["real"] = bool(on)
+        d["enabled"] = True
+        _save()
 
 
 # ---------------------------------------------------------------- data
@@ -189,14 +201,25 @@ def cycle(send=None, chat=None, now=None, get=None, fetch=None, safety=None):
             why = "rendimento caiu de " + format(pos["entry_rate"] * 100, ".2f") + "% para " + format(rate * 100, ".2f") + "% ao dia"
         elif px <= pos["entry_price"] * (1 - STOP):
             why = "moeda caiu " + format((1 - px / pos["entry_price"]) * 100, ".0f") + "%"
+        if why and pos.get("real"):                    # real money: claim fees, remove, close, sell back to USDC
+            import pool_real
+            try:
+                res_real, err = pool_real.exit_(_rpc(), _signer(), pos["real"])
+            except Exception as exc:
+                res_real, err = None, type(exc).__name__ + ": " + str(exc)[:120]
+            if res_real is None:
+                note("não consegui sair de " + pos["name"] + " (" + err + "); tento de novo no próximo ciclo")
+                _save()
+                return pos
+            pos["real_result"] = res_real
         if why:
             v = value_now(pos, px)
-            res = v - pos["capital"]
+            res = pos["real_result"] if pos.get("real") else v - pos["capital"]
             d["cash"] = v
             d["closed"] = (d.get("closed") or [])[-49:] + [{"name": pos["name"], "days": (now - pos["opened"]) / 86400,
                                                            "fees": pos["fees"], "il": v - pos["fees"] - pos["capital"],
                                                            "result": res, "why": why}]
-            txt = ("🏊 POOL (simulação): saí de " + pos["name"] + " — " + why + " · taxas +" + format(pos["fees"], ".2f") +
+            txt = ("🏊 POOL (" + ("💵 REAL" if pos.get("real") else "simulação") + "): saí de " + pos["name"] + " — " + why + " · taxas +" + format(pos["fees"], ".2f") +
                    " · perda impermanente " + format(v - pos["fees"] - pos["capital"], "+.2f") + " → " + format(res, "+.2f") + " USD")
             note(txt)
             if send and chat:
@@ -208,11 +231,24 @@ def cycle(send=None, chat=None, now=None, get=None, fetch=None, safety=None):
         pick = choose(cands, fetch, safety, skip=recent)
         if pick:
             px, _ = dex_info(pick["coin"], fetch)
-            cap = float(d.get("cash") or CAPITAL)
+            cap = float(d.get("cash") or CAPITAL) if not d.get("real") else CAPITAL
+            real_pos = None
+            if d.get("real"):
+                import pool_real
+                try:
+                    real_pos, err = pool_real.enter(_rpc(), _signer(), pick, CAPITAL)
+                except Exception as exc:
+                    real_pos, err = None, type(exc).__name__ + ": " + str(exc)[:120]
+                if not real_pos:
+                    d.setdefault("exited", {})[pick["address"]] = now      # try another pool next time
+                    note("não entrei em " + pick["name"] + ": " + err)
+                    _save()
+                    return None
+                cap = real_pos["usdc_used"]
             d["pos"] = {"address": pick["address"], "name": pick["name"], "coin": pick["coin"], "opened": now, "last": now,
                         "entry_price": px, "last_price": px, "entry_rate": pick["day_yield"], "rate_now": pick["day_yield"],
-                        "capital": cap, "fees": 0.0}
-            txt = ("🏊 POOL (simulação): entrei em " + pick["name"] + " (Meteora) com US$ " + format(cap, ".2f") + " · rende " +
+                        "capital": cap, "fees": 0.0, "real": real_pos}
+            txt = ("🏊 POOL (" + ("💵 REAL" if real_pos else "simulação") + "): entrei em " + pick["name"] + " (Meteora) com US$ " + format(cap, ".2f") + " · rende " +
                    format(pick["day_yield"] * 100, ".2f") + "% ao dia · liquidez US$ " + format(pick["liq"] / 1e6, ".1f") + " mi")
             note(txt)
             if send and chat:
@@ -221,11 +257,21 @@ def cycle(send=None, chat=None, now=None, get=None, fetch=None, safety=None):
     return d.get("pos")
 
 
+def _rpc():
+    import snipe_backtest
+    return snipe_backtest.fast_rpc(rps=5)
+
+
+def _signer():
+    return __import__("rent_reclaim").bot_signer()
+
+
 def status_text():
     d = _load()
     pos = d.get("pos")
     closed = d.get("closed") or []
-    L = ["🏊 ROBÔ DE POOLS (Meteora) — " + ("🟡 LIGADO · SIMULAÇÃO (dinheiro de mentira, dados reais)" if d.get("enabled") else "⏸️ DESLIGADO"),
+    L = ["🏊 ROBÔ DE POOLS (Meteora) — " + (("🟢 LIGADO · 💵 DINHEIRO REAL (até US$ " + format(CAPITAL, "g") + ")") if d.get("enabled") and d.get("real")
+                                          else "🟡 LIGADO · SIMULAÇÃO (dinheiro de mentira, dados reais)" if d.get("enabled") else "⏸️ DESLIGADO"),
          "🎯 Só pools que pagam de " + format(MIN_DAY_YIELD * 100, ".0f") + "% a " + format(MAX_DAY_YIELD * 100, ".0f") + "% ao dia",
          "⚙️ Só pools seguras: liquidez ≥ US$ " + format(MIN_LIQ / 1000, "g") + " mil, volume ≥ US$ " + format(MIN_VOL / 1000, "g") +
          " mil/24 h, moeda com ≥ " + format(MIN_AGE_D, "g") + " dias e anti-golpe · fica no máximo " + format(MAX_DAYS, "g") +
