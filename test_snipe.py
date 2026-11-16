@@ -260,3 +260,23 @@ class RefillTest(Tmp):
         rpc = lambda m, p: calls.append(1) or {"data": [swap_tx(NOW + 330, MINT, 1000, -int(0.1 * 1e9))]}
         self.assertEqual(sbt.refill(rpc, c, 150, time.time(), 60), 1)
         self.assertIn("5", c["coins"][MINT]["after"])
+
+
+class OldCoinsTest(Tmp):
+    def test_old_ages_snapshots_and_report(self):
+        created = NOW - 30 * 86400
+        c = {"points": {}, "coins": {MINT: {"created": created, "snaps": {}, "after": {}},
+                                     "DeadCoinpump": {"created": created, "snaps": {}, "after": {}, "dead": True}}}
+
+        def rpc(method, params):
+            addr, opt = params
+            f = opt["filters"]["blockTime"]
+            if opt["sortOrder"] == "desc":                 # busy 5-min window, more buyers
+                return {"data": [swap_tx(f["lte"] - 250 + i * 10, addr, 1000, -int(0.3 * 1e9)) for i in range(20)]}
+            return {"data": [swap_tx(f["gte"] + i * 60, addr, 1000, -int((0.3 + 0.05 * i) * 1e9)) for i in range(30)]}
+        n = sbt.refill_old(rpc, c, 150, time.time(), 60, NOW)
+        self.assertEqual(n, 1)                                          # the dead coin is not read
+        self.assertTrue(c["coins"][MINT]["old_done"])
+        self.assertIn("90", c["coins"][MINT]["snaps"])
+        rep = sbt.report(c, created - 10, created + 10, sbt.OLD_AGES)
+        self.assertIn("1h30+", sbt.text(rep))
