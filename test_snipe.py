@@ -84,7 +84,7 @@ class BacktestTest(Tmp):
         def rpc(method, params):
             addr, opt = params
             gte = opt["filters"]["blockTime"].get("gte", 0)
-            if addr == sbt.PUMP:
+            if addr in (sbt.PUMP, sb.PUMP_MINT_AUTHORITY):
                 tx = swap_tx(gte + 1, MINT, 100, -10_000_000)
                 tx["meta"]["logMessages"] = ["Instruction: Create"]
                 return {"data": [tx]}
@@ -236,3 +236,15 @@ class SniperWinnerTest(Tmp):
         self.assertFalse(sbt.verdict_ok({"best": {"test": {"trades": 12, "pnl": 50, "pf": 3}}}))
         self.assertTrue(sbt.verdict_ok({"best": {"test": {"trades": 40, "pnl": 50, "pf": 1.6}}}))
         self.assertFalse(sbt.verdict_ok({"best": {"test": {"trades": 40, "pnl": -5, "pf": 0.9}}}))
+
+
+class DeadCoinTest(Tmp):
+    def test_dead_coin_costs_one_read(self):
+        calls = []
+
+        def rpc(method, params):
+            calls.append(params[1])
+            return {"data": [swap_tx(NOW + 10, MINT, 1000, -int(0.01 * 1e9))]}     # one tiny trade: dead
+        out = sbt.download_coin(rpc, MINT, NOW, 150)
+        self.assertTrue(out.get("dead"))
+        self.assertEqual(len(calls), 1)

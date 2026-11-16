@@ -28,6 +28,7 @@ PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 DAYS = sg._f("SNIPE_BT_DAYS", 90)          # owner (Nov 16): 3 months
 SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 180))      # 2 per day over 3 months (same 12 h grid)
 DECISION_MIN = (5, 10, 15, 20, 30, 45)
+PER_POINT = int(sg._f("SNIPE_BT_PER_POINT", 15))      # launches per sampled moment
 DELAY_S = sg._f("SNIPE_BT_DELAY_S", 20)
 COST = sg._f("SNIPE_BT_COST_PER_SIDE", 0.03)                  # swap fee + slippage on young coins
 NET_FEE = sg._f("SNIPE_BT_NET_FEE_USD", 0.02)
@@ -95,7 +96,7 @@ def runs():
 
 
 def cache():
-    return _get("snipe_bt_cache_v2", {"points": {}, "coins": {}})
+    return _get("snipe_bt_cache_v3", {"points": {}, "coins": {}})
 
 
 # ---------------------------------------------------------------- Helius
@@ -229,6 +230,16 @@ def snapshot(trades, t_end, minutes=5):
 def download_coin(rpc, mint, created, sol_usd):
     """Snapshots at each decision age + the trades after each possible entry (compact, cached)."""
     out = {"created": created, "snaps": {}, "after": {}}
+    # 1 read: the first trades. A coin whose whole first 45 min (fewer than 100 trades) never had a 5-minute volume
+    # that ANY tested entry needs cannot be bought by any of them - stored as dead, no more reads (no bias).
+    txs = history_call(rpc, mint, gte=created, lte=created + max(DECISION_MIN) * 60, order="asc", limit=100)
+    if len(txs) < 100:
+        trades = sorted((x for x in (trade_of(tx, mint, sol_usd) for tx in txs) if x), key=lambda x: x[0])
+        need = min(g[0] for g in GRID_ENTRY)
+        best = max((sum(y[2] for y in trades if x[0] - 300 <= y[0] <= x[0]) for x in trades), default=0.0)
+        if best < need:
+            out["dead"] = True
+            return out
     for age in DECISION_MIN:
         if _STOP.is_set():
             break
@@ -277,7 +288,8 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
         if (should_stop and should_stop()) or time.time() - began > max_s:
             break
         try:
-            txs = history_call(rpc, PUMP, gte=p, lte=p + 600, order="asc", limit=100)
+            # every transaction of the pump.fun mint authority is a launch: up to PER_POINT launches per moment
+            txs = history_call(rpc, sb.PUMP_MINT_AUTHORITY, gte=p, lte=p + 600, order="asc", limit=PER_POINT * 2)
         except Exception as exc:
             logging.warning("snipe bt point %s: %s: %s", p, type(exc).__name__, str(exc)[:200])
             continue
@@ -286,15 +298,15 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
             m = created_mint(tx)
             if m:
                 mints.append([m, int(tx.get("blockTime") or p)])
-        c["points"][str(p)] = mints[:3]
-        for m, created in mints[:3]:
+        c["points"][str(p)] = mints[:PER_POINT]
+        for m, created in mints[:PER_POINT]:
             if m in c["coins"] or (should_stop and should_stop()):
                 continue
             try:
                 c["coins"][m] = download_coin(rpc, m, created, sol_usd)
             except Exception as exc:
                 logging.warning("snipe bt coin %s: %s: %s", m[:8], type(exc).__name__, str(exc)[:200])
-        _put("snipe_bt_cache_v2", c)
+        _put("snipe_bt_cache_v3", c)
         if on_progress:
             on_progress(total - len(todo_pts) + i + 1, total, len(c["coins"]))
     return c
@@ -379,6 +391,7 @@ def report(c, start, end):
     best = max(ok, key=lambda g: g[0]["pnl"]) if ok else None
     live = ((sb.MIN_VOL_5M, sb.MIN_BUY_RATIO, sb.MIN_UP_5M, sb.MAX_UP_5M), (sb.STOP, sb.ARM, sb.DROP, sb.MAX_HOLD_MIN))
     out = {"start": start, "end": end, "cut": cut, "coins": sum(1 for x in c["coins"].values() if start <= x["created"] < end),
+           "alive": sum(1 for x in c["coins"].values() if start <= x["created"] < end and not x.get("dead")),
            "points": sum(1 for p in c["points"] if start <= int(p) < end), "total_points": len(sample_points(start, end)),
            "best": None, "live": {}}
     lt = simulate(c, cut, end, *live)
@@ -414,7 +427,8 @@ def verdict_ok(rep):
 def text(rep):
     L = ["🎯 BACKTEST SNIPER — " + time.strftime("%d/%m/%Y", time.gmtime(rep["start"])) + " a " +
          time.strftime("%d/%m/%Y", time.gmtime(rep["end"])),
-         "Amostra REAL da blockchain: " + str(rep["coins"]) + " lançamentos da pump.fun em " + str(rep["points"]) + " de " +
+         "Amostra REAL da blockchain: " + str(rep["coins"]) + " lançamentos da pump.fun (" + str(rep.get("alive", 0)) +
+         " tiveram volume para o sniper olhar; o resto morreu logo) em " + str(rep["points"]) + " de " +
          str(rep.get("total_points", SAMPLE_POINTS)) + " momentos · US$ " + format(sb.USD, "g") + " por compra · máx. " + str(sb.MAX_OPEN) +
          " abertas · custos " + format(COST * 100, ".0f") + "% por lado + taxa · entrada " + format(DELAY_S, ".0f") + " s depois",
          "▶ Regra que está no robô real:",
