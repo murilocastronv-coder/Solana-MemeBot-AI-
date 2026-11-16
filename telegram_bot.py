@@ -152,7 +152,10 @@ def keyboard():
  if OWNER_MENU=="btc":return btc_keyboard()
  # owner (Nov 16): ONLY the DEV robot (wallet: type /saldo, /depositar, /sacar)
  # owner (Nov 16, later): ONLY the liquidation work (small lending markets); everything else removed
- return [[{"text":"💧 BACKTEST LIQUIDAÇÃO (mercados menores, 50/60 USD)","callback_data":"lq_bt"}]]
+ return [[{"text":"💧 Liquidação: status","callback_data":"lq_status"}],
+  [{"text":"💵 Liquidação: LIGAR REAL","callback_data":"lq_real"},{"text":"👀 Só observar","callback_data":"lq_obs"}],
+  [{"text":"⏸️ Liquidação: desligar","callback_data":"lq_off"}],
+  [{"text":"💧 BACKTEST LIQUIDAÇÃO (mercados menores, 50/60 USD)","callback_data":"lq_bt"}]]
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -351,6 +354,22 @@ def handle(update):
    elif action=="gd_off":grad_bot.set_enabled(False);pre="⏸️ Robô GRADUADOS desligado: não compra mais; as posições abertas continuam com stop e stop móvel.\n\n"
    send(chat,pre+grad_bot.status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Graduados: "+str(exc)[:200],keyboard())
+  return
+ if action in ("lq_status","lq_real","lq_obs","lq_off"):
+  import liq_bot
+  try:
+   pre=""
+   if action=="lq_real":
+    import snipe_backtest
+    rpc=snipe_backtest.fast_rpc(rps=5)
+    usdc=liq_bot.top_up(rpc,get_address(),send,chat)
+    liq_bot.set_enabled(True,real=True)
+    pre=("▶️ Robô de LIQUIDAÇÃO ligado com DINHEIRO REAL: até US$ "+format(liq_bot.LIQ_USD,"g")+" (USDC) por liquidação, só envia quando a "
+     "simulação na rede dá certo, para no dia com −US$ "+format(liq_bot.DAILY_LOSS,"g")+". USDC na carteira: US$ "+format(usdc,".2f")+".\n\n")
+   elif action=="lq_obs":liq_bot.set_enabled(True,real=False);pre="👀 Robô de liquidação só OBSERVANDO (não envia nada).\n\n"
+   elif action=="lq_off":liq_bot.set_enabled(False);pre="⏸️ Robô de liquidação desligado.\n\n"
+   send(chat,pre+liq_bot.status_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Liquidação: "+type(exc).__name__+": "+str(exc)[:200],keyboard())
   return
  if action=="lq_bt":
   import liq_backtest,snipe_backtest
@@ -812,7 +831,8 @@ def startup_notice():
    ("\n📦 "+str(st["positions"])+" posição(ões) antiga(s) de memecoin ainda aberta(s): a venda automática continua."
     if st["positions"] else ""),keyboard())
   return
- txt="💧 Só o backtest de liquidação (mercados menores) está no menu."
+ try:txt=__import__("liq_bot").status_text()
+ except Exception:txt=""
  send(chat,"🔄 Bot reiniciado (deploy).\n"+txt,keyboard())
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
@@ -1223,6 +1243,22 @@ def snipe_loop():
     else:snipe_bot.scan_launches(DEV_RPC.setdefault("rpc",dex_rpc()))
   except Exception as exc:logging.exception("snipe cycle failed: %s",type(exc).__name__)
   time.sleep(snipe_bot.CYCLE_S)
+def liq_loop():
+ """Owner (Nov 16): liquidation robot on Kamino's small markets (liq_bot)."""
+ import liq_bot,snipe_backtest
+ time.sleep(40)
+ rpc=None;topped=0.0
+ while True:
+  try:
+   if os.getenv("SOLANA_RPC_URL") and liq_bot.enabled():
+    rpc=rpc or snipe_backtest.fast_rpc(rps=8)
+    if liq_bot.real() and time.time()-topped>1800:
+     topped=time.time()
+     try:liq_bot.top_up(rpc,get_address(),send,active_chat())
+     except Exception as exc:logging.warning("liq top up: %s",type(exc).__name__)
+    liq_bot.cycle(rpc,send,active_chat())
+  except Exception as exc:logging.exception("liq cycle failed: %s",type(exc).__name__)
+  time.sleep(liq_bot.FAST_S)
 def liq_only_once():
  """Owner (Nov 16, later): the GRADUADOS robot is removed too (open positions keep their exits). Once."""
  try:
@@ -1321,6 +1357,7 @@ def loop():
   try:__import__("snipe_backtest").mark_interrupted()
   except Exception:logging.exception("snipe backtest state")
   threading.Thread(target=grad_loop,daemon=True).start()
+  threading.Thread(target=liq_loop,daemon=True).start()
   threading.Thread(target=btc_live_loop,daemon=True).start()     # only closes a leftover position
   threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
