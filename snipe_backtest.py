@@ -38,7 +38,9 @@ JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 3) * 60     # owner (Nov 16): answer i
 SUPPLY = 1_000_000_000
 MIN_TRADE_USD = sg._f("SNIPE_BT_MIN_TRADE_USD", 2)
 GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60), (8000, 2.5, 5, 25),
-              (2000, 1.0, 0, 100), (4000, 1.0, 0, 60))   # looser ones too: after a few minutes sellers often outnumber buyers
+              (2000, 1.0, 0, 100), (4000, 1.0, 0, 60),   # looser ones too: after a few minutes sellers often outnumber buyers
+              (2000, 0.8, -20, 200),                     # very loose: up to 1.25 sellers per buyer, any move
+              (2000, 0.0, -100, 10000))                  # baseline: every coin with US$ 2k of 5-min volume
 GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 45), (0.10, 0.15, 0.08, 10),
              (0.25, 1.00, 0.25, 60))
 _STOP = threading.Event()

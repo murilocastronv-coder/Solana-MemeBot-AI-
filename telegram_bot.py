@@ -374,7 +374,7 @@ def handle(update):
    elif action=="sn_btx":snipe_backtest.cancel();pre="⏹️ Cancelando o backtest do sniper (o que já baixou fica salvo).\n\n"
    elif action=="sn_bt":
     why=snipe_backtest.start(snipe_backtest.fast_rpc() if os.getenv("SOLANA_RPC_URL") else None,__import__("copy_trader")._sol_usd(),send,chat)
-    send(chat,("🎯 Backtest do SNIPER (3 meses, lançamentos REAIS da pump.fun): testa 20 combinações de entrada e saída, "
+    send(chat,("🎯 Backtest do SNIPER (3 meses, lançamentos REAIS da pump.fun): testa 40 combinações de entrada e saída, "
      "escolhe nos primeiros 70% do tempo e confere nos últimos 30%. O relatório chega em ~3 min; cada toque baixa mais e "
      "deixa o teste mais completo.") if not why else "⛔ "+why,keyboard());return
    j=snipe_backtest.job()
