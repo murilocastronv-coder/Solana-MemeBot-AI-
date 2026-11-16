@@ -1,20 +1,25 @@
-"""LIQUIDATION robot - Kamino isolated (small) markets, REAL money (owner, Nov 16).
+"""LIQUIDATION robot - Kamino markets (main + the small isolated ones), REAL money (owner, Nov 16).
 
 How it works:
-1. Markets: the small Kamino markets where the backtest found liquidations (liq_bt_cache), else Kamino's non-main list.
-2. Every SCAN_S each market's borrowers with debt are read (getProgramAccounts, only the bytes the bot uses) and their
-   LTV is recomputed with TODAY's reserve prices (kamino.ltv_now). Those at >= WATCH_LTV of the limit are watched.
-3. Every FAST_S the watched ones are re-read; at >= TRIGGER_LTV the bot builds Kamino's own liquidation sequence
-   (refresh reserves -> refresh obligation -> liquidate v2), SIMULATES it on the RPC and only sends it when the
-   simulation succeeds. Repays only USDC debt, with at most LIQ_USD per liquidation (the owner's capital).
-4. What it receives (the collateral, with Kamino's liquidation bonus) is sold back to USDC on Jupiter.
+1. Markets: Kamino's MAIN market + the small markets where the backtest found liquidations (liq_bt_cache).
+2. Scan (one market per pass, each every SCAN_S): the borrowers with debt are read in two steps - first only the 64
+   bytes of their debt/limit numbers (cheap, works for the big main market too), then the full account of those
+   above PRE_LTV. Their LTV is recomputed with live prices; those at >= WATCH_LTV are watched.
+3. Every FAST_S (2 s) the watched borrowers, their reserves and the LIVE ORACLE prices (Kamino's Scope feed, only the
+   entries needed) are re-read. At >= TRIGGER_LTV the bot builds Kamino's own liquidation sequence (refresh reserves ->
+   refresh obligation -> liquidate v2), SIMULATES it and only sends it when the simulation succeeds.
+4. Debt in USDC, USDT or SOL (owner): the capital stays in USDC; for USDT/SOL debt the bot swaps just the needed
+   amount on Jupiter first (SOL is wrapped inside the liquidation transaction and unwrapped at its end).
+5. Sending: Jito block engine (bundle only: the tip is paid only when the liquidation lands) + the normal RPC.
+6. What it receives (collateral + Kamino's bonus) is sold back to USDC on Jupiter; leftovers of the swapped debt token too.
 Limits: US$ LIQ_USD per liquidation, stops for the day after -LIQ_DAILY_LOSS, one try per obligation per minute,
-a minimum to receive (the program refuses to pay out less than ~what was repaid).
-Honest: the professional liquidators read the chain faster (Geyser) - this bot wins only when they are slow or absent.
+a minimum to receive (99.5% of the repaid value). Honest: professional liquidators stream the chain (Geyser) and win
+most races; this bot wins when they are slow or absent.
 """
 import base64
 import logging
 import os
+import struct
 import threading
 import time
 
@@ -23,24 +28,32 @@ import signals as sg
 
 E = sg._f
 USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 SOL = "So11111111111111111111111111111111111111112"
+DEBTS = (USDC, USDT, SOL)                              # debt the bot can repay (owner: USDC, USDT and SOL)
 LIQ_USD = E("LIQ_USD", 50)
 DAILY_LOSS = E("LIQ_DAILY_LOSS_USD", 10)
 SCAN_S = E("LIQ_SCAN_S", 120)
-FAST_S = E("LIQ_FAST_S", 8)
+FAST_S = E("LIQ_FAST_S", 2)
+PRE_LTV = E("LIQ_PRE_LTV", 0.75)                     # step 1 of the scan (numbers of the last refresh)
 WATCH_LTV = E("LIQ_WATCH_LTV", 0.90)
 TRIGGER_LTV = E("LIQ_TRIGGER_LTV", 0.995)
-MAX_MARKETS = int(E("LIQ_MAX_MARKETS", 12))
+MAX_MARKETS = int(E("LIQ_MAX_MARKETS", 20))
 CU_LIMIT = int(E("LIQ_CU_LIMIT", 1_000_000))
 CU_PRICE = int(E("LIQ_CU_PRICE_MICROLAMPORTS", 50_000))
+JITO_TIP = int(E("LIQ_JITO_TIP_LAMPORTS", 20_000))
+JITO_URL = os.getenv("LIQ_JITO_URL", "https://mainnet.block-engine.jito.wtf/api/v1")
 MIN_RECEIVE = E("LIQ_MIN_RECEIVE", 0.995)            # receive at least 99.5% of the repaid value (bonus comes on top)
+MIN_BONUS_SWAP = E("LIQ_MIN_BONUS_FOR_SWAP", 0.02)   # USDT/SOL debt (needs swaps) only when the bonus is >= 2%
 SOL_RESERVE = E("LIQ_SOL_RESERVE", 0.03)              # SOL kept for fees
+KAMINO_API = "https://api.kamino.finance/v2/kamino-market"
 KEY = "liq_bot"
 _LOCK = threading.RLock()
 _MEM = {}
 _RES = {}        # market -> {"at": t, "reserves": {address: reserve}}
 _WATCH = {}      # obligation address -> decoded obligation
 _TRIED = {}
+_TIPS = {"at": 0.0, "list": []}
 
 
 # ---------------------------------------------------------------- state
@@ -105,15 +118,22 @@ def day_pnl(now=None):
 
 
 # ---------------------------------------------------------------- markets / scan
-def markets():
-    """[(name, address)] - the small Kamino markets where liquidations happened (backtest), most first."""
+def markets(fetch=None):
+    """[(name, address)] - Kamino's MAIN market first, then the small markets where liquidations happened."""
     import snipe_backtest as sbt
+    out = []
+    try:
+        for m in (fetch or sg._get)(KAMINO_API) or []:
+            if m.get("isPrimary") and m.get("lendingMarket"):
+                out.append((str(m.get("name") or "Main"), m["lendingMarket"]))
+    except Exception as exc:
+        logging.warning("liq markets api: %s", type(exc).__name__)
     bt = sbt._get("liq_bt_cache", {})
     names = {a: n for p, n, a in bt.get("markets") or [] if p == "Kamino"}
     ranked = sorted(((len(v), a) for a, v in (bt.get("liqs") or {}).items() if a in names), reverse=True)
-    out = [(names[a], a) for _, a in ranked]
-    if not out:
-        out = [(n, a) for n, a in names.items()]
+    small = [(names[a], a) for _, a in ranked] or list((n, a) for a, n in names.items())
+    have = {a for _, a in out}
+    out += [x for x in small if x[1] not in have]
     return out[:MAX_MARKETS]
 
 
@@ -124,6 +144,19 @@ def _gpa(rpc, size, market, extra=None, data_slice=None):
         opts["dataSlice"] = data_slice
     rows = rpc("getProgramAccounts", [k.KLEND, opts]) or []
     return [(r["pubkey"], base64.b64decode(r["account"]["data"][0])) for r in rows]
+
+
+def _multi(rpc, keys, data_slice=None):
+    out = {}
+    for i in range(0, len(keys), 100):
+        opts = {"encoding": "base64"}
+        if data_slice:
+            opts["dataSlice"] = data_slice
+        got = (rpc("getMultipleAccounts", [keys[i:i + 100], opts]) or {}).get("value") or []
+        for a, acc in zip(keys[i:i + 100], got):
+            if acc:
+                out[a] = base64.b64decode(acc["data"][0])
+    return out
 
 
 def reserves_of(rpc, market, now=None, max_age=600):
@@ -140,46 +173,77 @@ def reserves_of(rpc, market, now=None, max_age=600):
     return res
 
 
+def live_prices(rpc, reserves):
+    """Reserves with the LIVE Scope oracle price (only the needed entries are read). Falls back to the reserve price."""
+    need = {}
+    for r in reserves.values():
+        idx = k.scope_entries(r.get("chain") or [0, 0, 0, 0])
+        if idx and k._real(r["scope"]):
+            need.setdefault(r["scope"], set()).update(idx)
+    prices = {}
+    for feed, idx in need.items():
+        idx = sorted(idx)
+        groups, cur = [], [idx[0]]
+        for i in idx[1:]:
+            if i - cur[0] < 64:
+                cur.append(i)
+            else:
+                groups.append(cur)
+                cur = [i]
+        groups.append(cur)
+        for g in groups:
+            off = k.SCOPE_HEAD + g[0] * k.SCOPE_ENTRY
+            got = _multi(rpc, [feed], {"offset": off, "length": (g[-1] - g[0] + 1) * k.SCOPE_ENTRY}).get(feed)
+            if got:
+                prices.setdefault(feed, {}).update(k.scope_slice(got, g[0]))
+    out = {}
+    for a, r in reserves.items():
+        px = k.scope_price(prices.get(r["scope"], {}), r.get("chain") or [0, 0, 0, 0]) if k._real(r["scope"]) else None
+        out[a] = dict(r, price=px) if px else r
+    return out
+
+
 def scan_market(rpc, market, now=None):
     """Borrowers of the market at >= WATCH_LTV go to the watch list. Returns (borrowers, watched)."""
-    res = reserves_of(rpc, market, now, max_age=0)          # fresh prices every scan
-    rows = _gpa(rpc, k.OBLIGATION_SIZE, market, [{"memcmp": {"offset": 2287, "bytes": "2"}}],   # has_debt == 1
-                {"offset": 0, "length": k.OBLIGATION_HEAD})
-    n = w = 0
-    for a, data in rows:
-        ob = k.obligation(a, data + bytes(k.OBLIGATION_HEAD - len(data)))
+    res = live_prices(rpc, reserves_of(rpc, market, now, max_age=0))
+    head = _gpa(rpc, k.OBLIGATION_SIZE, market, [{"memcmp": {"offset": 2287, "bytes": "2"}}],   # has_debt == 1
+                {"offset": 2208, "length": 64})
+    close = []
+    for a, d in head:
+        if len(d) < 64:
+            continue
+        bf = k._u128(d, 0) / k.SF
+        unhealthy = k._u128(d, 48) / k.SF
+        if unhealthy > 0 and bf / unhealthy >= PRE_LTV:
+            close.append(a)
+    full = _multi(rpc, close, {"offset": 0, "length": k.OBLIGATION_HEAD})
+    w = 0
+    for a in close:
+        ob = k.obligation(a, full.get(a, b""))
         if not ob or not ob["has_debt"]:
             continue
-        n += 1
         ltv = k.ltv_now(ob, res)
         if ltv is not None and ltv >= WATCH_LTV:
             ob["ltv"] = ltv
             _WATCH[a] = ob
             w += 1
-        else:
-            _WATCH.pop(a, None)
-    return n, w
+    return len(head), w
 
 
 def refresh_watch(rpc, now=None):
-    """Re-read the watched obligations and their reserves. Returns [(ob, reserves, ltv)] at >= TRIGGER_LTV."""
+    """Re-read the watched obligations, their reserves and the live oracle. Returns [(ob, reserves, ltv)] to liquidate."""
     if not _WATCH:
         return []
     obs = list(_WATCH)
     res_keys = sorted({x["reserve"] for ob in _WATCH.values() for x in ob["deposits"] + ob["borrows"]})
-    out = []
-    accs = {}
-    keys = obs + res_keys
-    for i in range(0, len(keys), 100):
-        got = (rpc("getMultipleAccounts", [keys[i:i + 100], {"encoding": "base64"}]) or {}).get("value") or []
-        for a, acc in zip(keys[i:i + 100], got):
-            if acc:
-                accs[a] = base64.b64decode(acc["data"][0])
+    accs = _multi(rpc, obs + res_keys)
     reserves = {}
     for a in res_keys:
         r = k.reserve(a, accs.get(a, b""))
         if r:
             reserves[a] = r
+    reserves = live_prices(rpc, reserves)
+    out = []
     for a in obs:
         ob = k.obligation(a, accs.get(a, b""))
         if not ob or not ob["has_debt"]:
@@ -205,8 +269,8 @@ def token_balance(rpc, owner, mint, token_program=k.TOKEN):
         return 0
 
 
-def sol_balance(rpc, owner):
-    return int((rpc("getBalance", [owner]) or {}).get("value") or 0) / 1e9
+def sol_lamports(rpc, owner):
+    return int((rpc("getBalance", [owner]) or {}).get("value") or 0)
 
 
 def _jupiter_swap(in_mint, out_mint, amount_raw, owner):
@@ -224,7 +288,7 @@ def top_up(rpc, owner, send=None, chat=None):
     need = LIQ_USD - usdc
     import copy_trader
     px = float(copy_trader._sol_usd() or 0)
-    sol = sol_balance(rpc, owner)
+    sol = sol_lamports(rpc, owner) / 1e9
     if px <= 0 or sol - SOL_RESERVE < need / px:
         note("saldo baixo: USDC " + format(usdc, ".2f") + " e SOL " + format(sol, ".4f") + " (precisa ~US$ " +
              format(LIQ_USD, "g") + " + " + format(SOL_RESERVE, "g") + " SOL para taxas)")
@@ -238,49 +302,108 @@ def top_up(rpc, owner, send=None, chat=None):
 
 # ---------------------------------------------------------------- one liquidation
 def plan(ob, reserves, usdc_raw):
-    """(repay reserve, withdraw reserve, amount, min_receive, repay USD) or (None, why)."""
+    """(dict with repay, withdraw, amount, min_receive, usd) or (None, why). Prefers USDC debt (no swap)."""
     debts = [(b, reserves.get(b["reserve"])) for b in ob["borrows"]]
-    debts = [(b, r) for b, r in debts if r and r["mint"] == USDC]
+    debts = [(b, r) for b, r in debts if r and r["mint"] in DEBTS and r["price"] > 0]
     if not debts:
-        return None, "dívida não é em USDC"
-    b, repay = max(debts, key=lambda x: x[0]["value"])
+        return None, "dívida não é em USDC, USDT nem SOL"
+    b, repay = max(debts, key=lambda x: (x[1]["mint"] == USDC, x[0]["value"]))
     cols = [(d, reserves.get(d["reserve"])) for d in ob["deposits"]]
     cols = [(d, r) for d, r in cols if r and r["price"] > 0]
     if not cols:
         return None, "sem garantia com preço"
     d, withdraw = max(cols, key=lambda x: x[0]["value"])
-    amount = int(min(usdc_raw, LIQ_USD * 1e6, b["amount"]))
-    if amount < 1_000_000:
+    cap_usd = min(usdc_raw / 1e6, LIQ_USD)
+    if repay["mint"] != USDC:
+        if withdraw["min_bonus_bps"] / 1e4 < MIN_BONUS_SWAP:
+            return None, "bônus " + format(withdraw["min_bonus_bps"] / 100, ".1f") + "% pequeno para trocar moeda"
+        cap_usd *= 0.98                                   # room for the swap cost
+    amount = int(min(cap_usd / repay["price"] * 10 ** repay["decimals"], b["amount"]))
+    usd = amount / 10 ** repay["decimals"] * repay["price"]
+    if usd < 1:
         return None, "sem USDC suficiente"
-    usd = amount / 1e6 * repay["price"]
     min_receive = int(usd / withdraw["price"] * 10 ** withdraw["decimals"] * MIN_RECEIVE)
-    return (repay, withdraw, amount, min_receive, usd), ""
+    return {"repay": repay, "withdraw": withdraw, "amount": amount, "min_receive": min_receive, "usd": usd}, ""
 
 
-def build_tx(rpc, signer_pub, ob, reserves, repay, withdraw, amount, min_receive, blockhash=None):
+def acquire(rpc, me, p):
+    """USDT/SOL debt: buy the amount on Jupiter with USDC. Returns the amount really available (base units)."""
+    mint = p["repay"]["mint"]
+    if mint == USDC:
+        return p["amount"]
+    have = sol_lamports(rpc, me) - int(SOL_RESERVE * 1e9) if mint == SOL else token_balance(rpc, me, mint)
+    if have >= p["amount"]:
+        return p["amount"]
+    r = _jupiter_swap(USDC, mint, int(p["usd"] * 1.004 * 1e6), me)
+    note("troquei US$ " + format(r["total_input_amount"] / 1e6, ".2f") + " USDC por " + p["repay"]["name"] + " para pagar a dívida")
+    have = sol_lamports(rpc, me) - int(SOL_RESERVE * 1e9) if mint == SOL else token_balance(rpc, me, mint)
+    return max(0, min(p["amount"], have))
+
+
+def _ix_transfer(src, dst, lamports):
+    from solders.instruction import AccountMeta, Instruction
+    from solders.pubkey import Pubkey
+    return Instruction(Pubkey.from_string(k.SYSTEM), struct.pack("<IQ", 2, int(lamports)),
+                       [AccountMeta(Pubkey.from_string(src), True, True), AccountMeta(Pubkey.from_string(dst), False, True)])
+
+
+def _ix_token(data, metas):
+    from solders.instruction import AccountMeta, Instruction
+    from solders.pubkey import Pubkey
+    return Instruction(Pubkey.from_string(k.TOKEN), bytes(data),
+                       [AccountMeta(Pubkey.from_string(a), s, w) for a, s, w in metas])
+
+
+def tip_account():
+    if time.time() - _TIPS["at"] > 3600 or not _TIPS["list"]:
+        try:
+            import requests
+            r = requests.post(JITO_URL + "/bundles", json={"jsonrpc": "2.0", "id": 1, "method": "getTipAccounts", "params": []}, timeout=8)
+            _TIPS["list"] = list(r.json().get("result") or [])
+        except Exception:
+            _TIPS["list"] = _TIPS["list"] or []
+        _TIPS["at"] = time.time()
+    return _TIPS["list"][int(time.time()) % len(_TIPS["list"])] if _TIPS["list"] else None
+
+
+def build_tx(rpc, signer_pub, ob, reserves, p, blockhash=None, tip=True):
     from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price
     from solders.hash import Hash
     from solders.message import MessageV0
     from solders.pubkey import Pubkey
     me = str(signer_pub)
+    repay, withdraw = p["repay"], p["withdraw"]
     ixs = [set_compute_unit_limit(CU_LIMIT), set_compute_unit_price(CU_PRICE)]
+    wsol = k.ata(me, SOL)
+    if repay["mint"] == SOL:                               # wrap the SOL to repay inside the same transaction
+        ixs += [k.ix_create_ata(me, me, SOL, k.TOKEN), _ix_transfer(me, wsol, p["amount"]), _ix_token([17], [(wsol, False, True)])]
     need = [(withdraw["c_mint"], k.TOKEN), (withdraw["mint"], withdraw["token_program"])]
-    have = (rpc("getMultipleAccounts", [[k.ata(me, m, p) for m, p in need], {"encoding": "base64"}]) or {}).get("value") or [None, None]
-    for (m, p), acc in zip(need, have):
-        if not acc:
-            ixs.append(k.ix_create_ata(me, me, m, p))
-    ixs += k.liquidation_ixs(me, ob, reserves, repay, withdraw, amount, min_receive)
+    have = _multi(rpc, [k.ata(me, m, pr) for m, pr in need], {"offset": 0, "length": 0})
+    for m, pr in need:
+        if k.ata(me, m, pr) not in have and not (m == SOL and repay["mint"] == SOL):
+            ixs.append(k.ix_create_ata(me, me, m, pr))
+    ixs += k.liquidation_ixs(me, ob, reserves, repay, withdraw, p["amount"], p["min_receive"])
+    if SOL in (repay["mint"], withdraw["mint"]):           # unwrap: WSOL left/received goes back to native SOL
+        ixs.append(_ix_token([9], [(wsol, False, True), (me, False, True), (me, True, False)]))
+    t = tip_account() if tip and JITO_TIP > 0 else None
+    if t:
+        ixs.append(_ix_transfer(me, t, JITO_TIP))
     bh = blockhash or ((rpc("getLatestBlockhash", [{"commitment": "confirmed"}]) or {}).get("value") or {}).get("blockhash")
     msg = MessageV0.try_compile(Pubkey.from_string(me), ixs, [], Hash.from_string(bh))
+    if t and len(_raw(msg)) > 1232:                        # too big with the tip: send without Jito
+        return build_tx(rpc, signer_pub, ob, reserves, p, bh, tip=False)
     return msg
+
+
+def _raw(msg):
+    from solders.signature import Signature
+    from solders.transaction import VersionedTransaction
+    return bytes(VersionedTransaction.populate(msg, [Signature.default()] * msg.header.num_required_signatures))
 
 
 def simulate(rpc, msg):
     """(ok, short reason) - the RPC runs the transaction without sending it."""
-    from solders.signature import Signature
-    from solders.transaction import VersionedTransaction
-    tx = VersionedTransaction.populate(msg, [Signature.default()] * msg.header.num_required_signatures)
-    raw = bytes(tx)
+    raw = _raw(msg)
     if len(raw) > 1232:
         return False, "transação grande demais (" + str(len(raw)) + " bytes)"
     r = rpc("simulateTransaction", [base64.b64encode(raw).decode(), {"encoding": "base64", "sigVerify": False,
@@ -295,7 +418,14 @@ def simulate(rpc, msg):
 def send_tx(rpc, msg, signer, wait_s=40):
     from solders.transaction import VersionedTransaction
     tx = VersionedTransaction(msg, [signer])
-    sig = rpc("sendTransaction", [base64.b64encode(bytes(tx)).decode(), {"encoding": "base64", "skipPreflight": True, "maxRetries": 3}])
+    b64 = base64.b64encode(bytes(tx)).decode()
+    try:                                                    # Jito: lands only if it succeeds (tip paid only then)
+        import requests
+        requests.post(JITO_URL + "/transactions?bundleOnly=true", json={"jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
+                                                                       "params": [b64, {"encoding": "base64"}]}, timeout=8)
+    except Exception as exc:
+        logging.info("liq jito: %s", type(exc).__name__)
+    sig = rpc("sendTransaction", [b64, {"encoding": "base64", "skipPreflight": True, "maxRetries": 3}])
     end = time.time() + wait_s
     while time.time() < end:
         time.sleep(2)
@@ -303,6 +433,20 @@ def send_tx(rpc, msg, signer, wait_s=40):
         if st and st.get("confirmationStatus") in ("confirmed", "finalized"):
             return sig, st.get("err") is None
     return sig, False
+
+
+def _back_to_usdc(rpc, me, mint, token_program, decimals, price, keep_lamports=0):
+    """Sell what is left of a token (SOL above the reserve) back to USDC. Returns the USDC received."""
+    if mint == USDC:
+        return 0.0
+    amt = (sol_lamports(rpc, me) - keep_lamports) if mint == SOL else token_balance(rpc, me, mint, token_program)
+    if amt <= 0 or amt / 10 ** decimals * price < 1:
+        return 0.0
+    try:
+        return _jupiter_swap(mint, USDC, amt, me)["total_output_amount"] / 1e6
+    except Exception as exc:
+        note("venda de volta para USDC falhou (" + type(exc).__name__ + "); fica na carteira")
+        return 0.0
 
 
 def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None):
@@ -313,58 +457,76 @@ def attempt(rpc, ob, reserves, ltv, send=None, chat=None, signer=None, now=None)
     stat("oportunidades")
     signer = signer or __import__("rent_reclaim").bot_signer()
     me = str(signer.pubkey())
-    usdc_raw = token_balance(rpc, me, USDC)
-    p, why = plan(ob, reserves, usdc_raw)
+    usdc_before = token_balance(rpc, me, USDC)
+    p, why = plan(ob, reserves, usdc_before)
     if not p:
         stat("puladas")
         note("liquidável (LTV " + format(ltv * 100, ".1f") + "%) mas pulei: " + why + " · " + ob["address"][:6])
         return None
-    repay, withdraw, amount, min_receive, usd = p
-    msg = build_tx(rpc, signer.pubkey(), ob, reserves, repay, withdraw, amount, min_receive)
-    ok, why = simulate(rpc, msg)
-    if not ok:
-        stat("simulação falhou")
-        note("simulação recusou " + ob["address"][:6] + " (" + withdraw["name"] + "): " + why)
-        return None
-    stat("simulação ok")
+    repay, withdraw = p["repay"], p["withdraw"]
     if not real():
-        note("SIMULAÇÃO OK (modo observação): pagaria US$ " + format(usd, ".2f") + " e receberia " + withdraw["name"])
+        if repay["mint"] == USDC:
+            ok, why = simulate(rpc, build_tx(rpc, signer.pubkey(), ob, reserves, p))
+            stat("simulação ok" if ok else "simulação falhou")
+            note(("SIMULAÇÃO OK (observando): pagaria US$ " + format(p["usd"], ".2f") + " e receberia " + withdraw["name"]) if ok
+                 else "simulação recusou " + ob["address"][:6] + " (" + withdraw["name"] + "): " + why)
+        else:
+            note("observando: liquidável com dívida em " + repay["name"] + " (no real eu trocaria USDC antes) · " + ob["address"][:6])
         return None
     if DAILY_LOSS > 0 and day_pnl(now) <= -DAILY_LOSS:
         note("limite de perda do dia atingido: não envio")
         return None
-    before = token_balance(rpc, me, withdraw["mint"], withdraw["token_program"])
+    sol_before = sol_lamports(rpc, me)
+    if repay["mint"] != USDC:
+        try:
+            p["amount"] = acquire(rpc, me, p)
+        except Exception as exc:
+            note("não consegui trocar USDC por " + repay["name"] + ": " + type(exc).__name__)
+            return None
+        if p["amount"] <= 0:
+            return None
+        p["usd"] = p["amount"] / 10 ** repay["decimals"] * repay["price"]
+        p["min_receive"] = int(p["usd"] / withdraw["price"] * 10 ** withdraw["decimals"] * MIN_RECEIVE)
+    msg = build_tx(rpc, signer.pubkey(), ob, reserves, p)
+    ok, why = simulate(rpc, msg)
+    if not ok:
+        stat("simulação falhou")
+        note("simulação recusou " + ob["address"][:6] + " (" + withdraw["name"] + "): " + why)
+        _back_to_usdc(rpc, me, repay["mint"], repay["token_program"], repay["decimals"], repay["price"], sol_before)
+        return None
+    stat("simulação ok")
     sig, done = send_tx(rpc, msg, signer)
     if not done:
         stat("perdeu a disputa")
         note("enviei mas não confirmou (outro bot foi mais rápido ou expirou) · " + str(sig)[:10])
+        _back_to_usdc(rpc, me, repay["mint"], repay["token_program"], repay["decimals"], repay["price"], sol_before)
         return None
     stat("liquidou")
-    got = token_balance(rpc, me, withdraw["mint"], withdraw["token_program"]) - before
-    out_usd = got / 10 ** withdraw["decimals"] * withdraw["price"]
-    if withdraw["mint"] != USDC and got > 0:
-        try:
-            r = _jupiter_swap(withdraw["mint"], USDC, got, me)
-            out_usd = r["total_output_amount"] / 1e6
-        except Exception as exc:
-            note("liquidou, mas a venda de " + withdraw["name"] + " falhou (" + type(exc).__name__ + "); fica na carteira")
-    pnl = out_usd - usd - (CU_LIMIT * CU_PRICE / 1e6 / 1e9 + 0.00001) * float(__import__("copy_trader")._sol_usd() or 0)
+    _back_to_usdc(rpc, me, withdraw["mint"], withdraw["token_program"], withdraw["decimals"], withdraw["price"],
+                  int(SOL_RESERVE * 1e9) if withdraw["mint"] == SOL else 0)
+    if repay["mint"] != withdraw["mint"]:
+        _back_to_usdc(rpc, me, repay["mint"], repay["token_program"], repay["decimals"], repay["price"],
+                      int(SOL_RESERVE * 1e9) if repay["mint"] == SOL else 0)
+    usdc_after = token_balance(rpc, me, USDC)
+    sol_px = float(__import__("copy_trader")._sol_usd() or 0)
+    fees = max(0, sol_before - sol_lamports(rpc, me)) / 1e9 * sol_px if SOL not in (repay["mint"], withdraw["mint"]) else 0.0
+    pnl = (usdc_after - usdc_before) / 1e6 - fees
     with _LOCK:
         d = _load()
         d["trades"] = (d.get("trades") or [])[-199:] + [{"t": now, "day": time.strftime("%Y-%m-%d", time.gmtime(now)),
-                                                         "market": ob["market"], "paid": usd, "got": out_usd, "pnl": pnl, "sig": sig}]
+                                                         "market": ob["market"], "paid": p["usd"], "pnl": pnl, "sig": sig}]
     _save()
-    msg_txt = ("💧 LIQUIDOU (dinheiro real): pagou US$ " + format(usd, ".2f") + " da dívida, recebeu " + withdraw["name"] +
-               " e vendeu por US$ " + format(out_usd, ".2f") + " → " + format(pnl, "+.2f") + " USD\nhttps://solscan.io/tx/" + str(sig))
-    note(msg_txt.split("\n")[0])
+    txt = ("💧 LIQUIDOU (dinheiro real): pagou US$ " + format(p["usd"], ".2f") + " de dívida em " + repay["name"] + ", recebeu " +
+           withdraw["name"] + " com bônus e vendeu tudo de volta para USDC → " + format(pnl, "+.2f") + " USD\nhttps://solscan.io/tx/" + str(sig))
+    note(txt.split("\n")[0])
     if send and chat:
-        send(chat, msg_txt)
+        send(chat, txt)
     return sig
 
 
 # ---------------------------------------------------------------- loop
 def cycle(rpc, send=None, chat=None, now=None, state=None):
-    """One pass: scan the markets due, check the watched borrowers, liquidate the ones that can be."""
+    """One pass: scan one market that is due, check the watched borrowers, liquidate the ones that can be."""
     now = now or time.time()
     st = state if state is not None else _STATE
     if now - st.get("markets_at", 0) > 3600 or not st.get("markets"):
@@ -398,10 +560,11 @@ def status_text():
     d = _load()
     s = d.get("stats") or {}
     tr = d.get("trades") or []
-    L = ["💧 ROBÔ DE LIQUIDAÇÃO (Kamino, mercados menores) — " +
+    L = ["💧 ROBÔ DE LIQUIDAÇÃO (Kamino: mercado principal + menores) — " +
          ("🟢 LIGADO · 💵 DINHEIRO REAL" if d.get("enabled") and d.get("real") else
           "🟡 LIGADO · só observando" if d.get("enabled") else "⏸️ DESLIGADO"),
-         "⚙️ Até US$ " + format(LIQ_USD, "g") + " por liquidação (USDC) · para no dia com −US$ " + format(DAILY_LOSS, "g") +
+         "⚙️ Até US$ " + format(LIQ_USD, "g") + " por liquidação · paga dívida em USDC, USDT ou SOL · preço do oráculo a cada " +
+         format(FAST_S, "g") + " s · envio Jito + RPC · para no dia com −US$ " + format(DAILY_LOSS, "g") +
          " (hoje " + format(day_pnl(), "+.2f") + ") · só envia se a simulação na rede der certo",
          "🏦 Mercados vigiados: " + str(len(d.get("markets") or _STATE.get("markets") or [])) + " · devedores lidos: " +
          str(sum((_STATE.get("borrowers") or {}).values())) + " · perto de liquidar agora: " + str(len(_WATCH)),

@@ -104,7 +104,45 @@ def reserve(address, data):
             "status": _u8(data, 4856), "take_rate_pct": _u8(data, 4870), "threshold_pct": _u8(data, 4873),
             "min_bonus_bps": _u16(data, 4874), "max_bonus_bps": _u16(data, 4876),
             "name": bytes(data[5032:5064]).split(b"\0")[0].decode("utf-8", "ignore"),
-            "scope": _pk(data, 5112), "sb_price": _pk(data, 5160), "sb_twap": _pk(data, 5192), "pyth": _pk(data, 5224)}
+            "scope": _pk(data, 5112), "chain": list(struct.unpack_from("<4H", data, 5144)), "sb_price": _pk(data, 5160), "sb_twap": _pk(data, 5192), "pyth": _pk(data, 5224)}
+
+
+SCOPE_ENTRY = 56                        # DatedPrice: value u64, exp u64, slot u64, ts u64, 24 bytes
+SCOPE_HEAD = 8 + 32                     # discriminator + oracle_mappings
+SCOPE_MAX = 512
+
+
+def scope_entries(chain):
+    """The Scope price indexes a reserve multiplies (Kamino stops at the first index outside the table)."""
+    out = []
+    for i in chain:
+        if i >= SCOPE_MAX:
+            break
+        out.append(i)
+    return out if chain != [0, 0, 0, 0] else []
+
+
+def scope_price(prices, chain):
+    """USD price from a Scope chain, prices = {index: (value, exp)}; None when an index is missing."""
+    idx = scope_entries(chain)
+    if not idx:
+        return None
+    px = 1.0
+    for i in idx:
+        if i not in prices or prices[i][0] == 0:
+            return None
+        v, e = prices[i]
+        px *= v / 10 ** e
+    return px
+
+
+def scope_slice(data, first):
+    """{index: (value, exp)} from a Scope account slice that starts at entry `first`."""
+    out = {}
+    for n in range(len(data) // SCOPE_ENTRY):
+        v, e = struct.unpack_from("<QQ", data, n * SCOPE_ENTRY)
+        out[first + n] = (v, e)
+    return out
 
 
 def ltv_now(ob, reserves):

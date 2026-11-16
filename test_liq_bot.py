@@ -1,4 +1,5 @@
 import struct
+import time
 import unittest
 
 from solders.keypair import Keypair
@@ -92,7 +93,7 @@ class KaminoTest(unittest.TestCase):
 
     def test_plan_and_instructions(self):
         p, why = lb.plan(self.ob, self.res, 200 * 10 ** 6)
-        repay, withdraw, amount, min_receive, usd = p
+        repay, withdraw, amount, min_receive, usd = p["repay"], p["withdraw"], p["amount"], p["min_receive"], p["usd"]
         self.assertEqual(repay["mint"], USDC)
         self.assertEqual(amount, int(lb.LIQ_USD * 1e6))
         self.assertEqual(min_receive, int(usd / 100.0 * 1e9 * lb.MIN_RECEIVE))
@@ -115,11 +116,43 @@ class KaminoTest(unittest.TestCase):
         size = len(bytes(VersionedTransaction.populate(msg, [Signature.default()])))
         self.assertLess(size, 1232)
 
-    def test_no_usdc_debt_is_skipped(self):
-        ob = dict(self.ob, borrows=[dict(self.ob["borrows"][0], reserve=self.rsol)])
+    def test_sol_debt_and_unknown_debt(self):
+        ob = dict(self.ob, borrows=[dict(self.ob["borrows"][0], reserve=self.rsol, amount=10 ** 9)],
+                  deposits=[dict(self.ob["deposits"][0], reserve=self.rusdc)])
+        self.res[self.rusdc]["min_bonus_bps"] = 500
         p, why = lb.plan(ob, self.res, 200 * 10 ** 6)
+        self.assertEqual(p["repay"]["mint"], SOLM)
+        self.assertEqual(p["amount"], int(lb.LIQ_USD * 0.98 / 100.0 * 1e9))
+        self.res[self.rusdc]["min_bonus_bps"] = 100                      # bonus too small to pay two swaps
+        self.assertIsNone(lb.plan(ob, self.res, 200 * 10 ** 6)[0])
+        other = str(pk())
+        self.res[other] = dict(self.res[self.rsol], mint=str(pk()), address=other)
+        ob2 = dict(self.ob, borrows=[dict(self.ob["borrows"][0], reserve=other)])
+        p, why = lb.plan(ob2, self.res, 200 * 10 ** 6)
         self.assertIsNone(p)
-        self.assertIn("USDC", why)
+        self.assertIn("USDT", why)
+
+    def test_scope_price_chain(self):
+        data = struct.pack("<QQ", 150_000_000, 6) + bytes(40) + struct.pack("<QQ", 2_000_000, 6) + bytes(40)
+        prices = k.scope_slice(data, 7)
+        self.assertEqual(k.scope_price(prices, [7, 65535, 65535, 65535]), 150.0)
+        self.assertAlmostEqual(k.scope_price(prices, [7, 8, 65535, 65535]), 300.0)
+        self.assertIsNone(k.scope_price(prices, [0, 0, 0, 0]))
+        self.assertIsNone(k.scope_price(prices, [9, 65535, 65535, 65535]))
+
+    def test_build_tx_with_sol_wrap_fits(self):
+        ob = dict(self.ob, borrows=[dict(self.ob["borrows"][0], reserve=self.rsol, amount=10 ** 9)],
+                  deposits=[dict(self.ob["deposits"][0], reserve=self.rusdc)])
+        self.res[self.rusdc]["min_bonus_bps"] = 500
+        p, _ = lb.plan(ob, self.res, 200 * 10 ** 6)
+        me = pk()
+        lb._TIPS.update(at=time.time(), list=[str(pk())])
+        rpc = lambda m, a: {"value": [None, None]}
+        msg = lb.build_tx(rpc, me, ob, self.res, p, blockhash=str(__import__("solders.hash", fromlist=["Hash"]).Hash.default()))
+        self.assertLessEqual(len(lb._raw(msg)), 1232)
+        progs = [str(msg.account_keys[ix.program_id_index]) for ix in msg.instructions]
+        self.assertEqual(progs.count(k.KLEND), 4)
+        self.assertEqual(progs[-1] if len(lb._raw(msg)) else None, progs[-1])
 
     def test_discriminators(self):
         import hashlib
