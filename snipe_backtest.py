@@ -25,8 +25,8 @@ import signals as sg
 import snipe_bot as sb
 
 PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
-DAYS = sg._f("SNIPE_BT_DAYS", 60)          # owner (Nov 16): 2 months
-SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 120))      # 2 per day over 2 months
+DAYS = sg._f("SNIPE_BT_DAYS", 90)          # owner (Nov 16): 3 months
+SAMPLE_POINTS = int(sg._f("SNIPE_BT_SAMPLE_POINTS", 180))      # 2 per day over 3 months (same 12 h grid)
 DECISION_MIN = (5, 10, 15, 20, 30, 45)
 DELAY_S = sg._f("SNIPE_BT_DELAY_S", 20)
 COST = sg._f("SNIPE_BT_COST_PER_SIDE", 0.03)                  # swap fee + slippage on young coins
@@ -36,8 +36,9 @@ CALLS_PER_HOUR = int(sg._f("SNIPE_BT_CALLS_PER_HOUR", 3000))   # Helius budget (
 JOB_MAX_S = sg._f("SNIPE_BT_JOB_MINUTES", 3) * 60     # owner (Nov 16): answer in ~3 min; the next tap continues
 SUPPLY = 1_000_000_000
 MIN_TRADE_USD = sg._f("SNIPE_BT_MIN_TRADE_USD", 2)
-GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60))
-GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 45))
+GRID_ENTRY = ((3000, 1.5, 5, 40), (5000, 2.0, 5, 30), (2000, 1.3, 10, 60), (8000, 2.5, 5, 25))
+GRID_EXIT = ((0.20, 0.30, 0.12, 30), (0.15, 0.20, 0.10, 20), (0.30, 0.50, 0.20, 45), (0.10, 0.15, 0.08, 10),
+             (0.25, 1.00, 0.25, 60))
 _STOP = threading.Event()
 _RUNNING = threading.Lock()
 _CALLS = []
@@ -94,10 +95,39 @@ def runs():
 
 
 def cache():
-    return _get("snipe_bt_cache", {"points": {}, "coins": {}})
+    return _get("snipe_bt_cache_v2", {"points": {}, "coins": {}})
 
 
 # ---------------------------------------------------------------- Helius
+def fast_rpc(url=None, rps=None):
+    """Own JSON-RPC caller for the backtest (15 calls/s, separate from the robot's limiter) - answers in 3 min."""
+    import requests
+    url = url or os.getenv("SOLANA_RPC_URL", "")
+    gap = 1.0 / float(rps or sg._f("SNIPE_BT_RPS", 15))
+    last = [0.0]
+    lock = threading.Lock()
+    session = requests.Session()
+
+    def rpc(method, params):
+        for attempt in range(3):
+            with lock:
+                wait = last[0] + gap - time.time()
+                if wait > 0:
+                    time.sleep(wait)
+                last[0] = time.time()
+            r = session.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=20)
+            if r.status_code == 429 or r.status_code >= 500:
+                time.sleep(0.5 * 2 ** attempt)
+                continue
+            r.raise_for_status()
+            data = r.json()
+            if data.get("error"):
+                raise ValueError(method + ": " + str((data["error"] or {}).get("message", data["error"]))[:150])
+            return data.get("result")
+        raise RuntimeError("rpc busy")
+    return rpc
+
+
 def _budget_ok():
     now = time.time()
     _CALLS[:] = [t for t in _CALLS if now - t < 3600]
@@ -264,7 +294,7 @@ def download(rpc, sol_usd, now=None, start=None, end=None, should_stop=None, on_
                 c["coins"][m] = download_coin(rpc, m, created, sol_usd)
             except Exception as exc:
                 logging.warning("snipe bt coin %s: %s: %s", m[:8], type(exc).__name__, str(exc)[:200])
-        _put("snipe_bt_cache", c)
+        _put("snipe_bt_cache_v2", c)
         if on_progress:
             on_progress(total - len(todo_pts) + i + 1, total, len(c["coins"]))
     return c
@@ -375,6 +405,12 @@ def _fmt(s):
             "% · pior " + format(s["worst"], "+.2f"))
 
 
+def verdict_ok(rep):
+    b = rep.get("best")
+    t = (b or {}).get("test") or {}
+    return bool(b and t.get("trades", 0) >= 30 and t.get("pnl", 0) > 0 and (t.get("pf") is None or t["pf"] >= 1.3))
+
+
 def text(rep):
     L = ["🎯 BACKTEST SNIPER — " + time.strftime("%d/%m/%Y", time.gmtime(rep["start"])) + " a " +
          time.strftime("%d/%m/%Y", time.gmtime(rep["end"])),
@@ -397,6 +433,13 @@ def text(rep):
               "  • treino: " + _fmt(b["train"]), "  • TESTE: " + _fmt(b["test"])]
     else:
         L.append("🏆 Nenhum ajuste teve 10+ operações no treino: amostra pequena — rode de novo para baixar mais lançamentos.")
+    if verdict_ok(rep):
+        L.append("✅ O melhor ajuste deu lucro FORA DA AMOSTRA (" + str(b["test"]["trades"]) + " ops, PF " +
+                 ("—" if b["test"]["pf"] is None else format(b["test"]["pf"], ".2f")) + "). Toque em ✅ Ligar sniper vencedor para "
+                 "o robô usar esse ajuste com dinheiro real.")
+    else:
+        L.append("❌ Ainda não há ajuste com lucro confiável fora da amostra (precisa ≥ 30 ops no teste, lucro e PF ≥ 1,3). "
+                 "O sniper fica DESLIGADO.")
     left = rep.get("total_points", SAMPLE_POINTS) - rep["points"]
     if left > 0:
         L.append("⏳ Resultado PARCIAL: faltam " + str(left) + " momentos da amostra. Toque de novo: cada toque baixa mais "
@@ -433,10 +476,17 @@ def start(rpc, sol_usd, send=None, chat=None, now=None):
             def prog(done, total, coins):
                 _set_job(progress=int(95 * done / max(total, 1)),
                          stage="momentos " + str(done) + "/" + str(total) + " · " + str(coins) + " moedas baixadas")
-            c = download(rpc, sol_usd, now, begin, end, _STOP.is_set, prog)
+            DEADLINE[0] = time.time() + JOB_MAX_S
+            try:
+                c = download(rpc, sol_usd, now, begin, end, _STOP.is_set, prog)
+            finally:
+                DEADLINE[0] = 0.0
             rep = report(c, begin, end)
             txt = text(rep)
             _put("snipe_bt_runs", runs()[-4:] + [{"id": str(int(now)), "created": time.time(), "text": txt}])
+            b = rep.get("best")
+            _put("snipe_bt_winner", {"ok": verdict_ok(rep), "entry": b["entry"], "exit": b["exit"], "test": b["test"]}
+                 if b else {"ok": False})
             _set_job(status="cancelado" if _STOP.is_set() else "pronto", progress=100 if not _STOP.is_set() else job().get("progress"),
                      stage="pronto", finished=time.time())
             sb.note("backtest: " + txt.split("\n")[3][:150])

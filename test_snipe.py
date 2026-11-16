@@ -212,3 +212,27 @@ class LaunchSniperTestTest(Tmp):
         self.assertLess(mirror[0], -0.5)                                            # sold after the dev's dump
         no_mom = dict(e, first=[[NOW + 1, 0.0001, 1], [NOW + 12, 0.0001, 0]])
         self.assertIn("momentum", lst.trade_result(no_mom, "momentum", 10))
+
+
+class SniperWinnerTest(Tmp):
+    def test_apply_only_an_out_of_sample_winner(self):
+        sbt._put("snipe_bt_winner", {"ok": False})
+        self.assertIsNone(sb.apply_winner())
+        self.assertFalse(sb.live_ok())
+        sbt._put("snipe_bt_winner", {"ok": True, "entry": [5000, 2.0, 5, 30], "exit": [0.15, 0.2, 0.1, 20]})
+        names = ("MIN_VOL_5M", "MIN_BUY_RATIO", "MIN_UP_5M", "MAX_UP_5M", "STOP", "ARM", "DROP", "MAX_HOLD_MIN")
+        old = {n: getattr(sb, n) for n in names}
+        try:
+            self.assertTrue(sb.apply_winner())
+            self.assertTrue(sb.live_ok())
+            self.assertEqual((sb.MIN_VOL_5M, sb.STOP), (5000, 0.15))
+            sb.stop_live()
+            self.assertFalse(sb.live_ok())
+        finally:
+            for n, v in old.items():
+                setattr(sb, n, v)
+
+    def test_verdict_needs_30_test_trades_profit_and_pf(self):
+        self.assertFalse(sbt.verdict_ok({"best": {"test": {"trades": 12, "pnl": 50, "pf": 3}}}))
+        self.assertTrue(sbt.verdict_ok({"best": {"test": {"trades": 40, "pnl": 50, "pf": 1.6}}}))
+        self.assertFalse(sbt.verdict_ok({"best": {"test": {"trades": 40, "pnl": -5, "pf": 0.9}}}))

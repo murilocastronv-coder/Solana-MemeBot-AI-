@@ -44,6 +44,39 @@ WATCH_MAX = int(E("SNIPE_WATCH_MAX", 600))              # coins of the last hour
 _LOCK = threading.RLock()
 
 
+def apply_winner():
+    """Owner's button: use the backtest's out-of-sample winner (only when it really won) and turn the sniper on."""
+    import snipe_backtest as sbt
+    w = sbt._get("snipe_bt_winner", {})
+    if not w.get("ok"):
+        return None
+    with _LOCK:
+        d = _load()
+        d["cfg"] = {"entry": w["entry"], "exit": w["exit"]}
+        d["enabled"], d["live_ok"] = True, True
+        _save(d)
+    _use_cfg(d["cfg"])
+    return d["cfg"]
+
+
+def stop_live():
+    with _LOCK:
+        d = _load()
+        d["live_ok"] = False
+        _save(d)
+
+
+def live_ok():
+    return bool(_load().get("live_ok"))
+
+
+def _use_cfg(cfg):
+    global MIN_VOL_5M, MIN_BUY_RATIO, MIN_UP_5M, MAX_UP_5M, STOP, ARM, DROP, MAX_HOLD_MIN
+    if cfg and cfg.get("entry") and cfg.get("exit"):
+        MIN_VOL_5M, MIN_BUY_RATIO, MIN_UP_5M, MAX_UP_5M = cfg["entry"]
+        STOP, ARM, DROP, MAX_HOLD_MIN = cfg["exit"]
+
+
 def exit_signal(ratio, peak, held_s, stop=None, arm=None, drop=None, max_hold_min=None):
     """('sell' | 'hold', reason). ratio = value now / cost, peak = best ratio so far."""
     stop = STOP if stop is None else stop
@@ -314,3 +347,9 @@ def status_text():
     for x in (d.get("log") or [])[-5:]:
         lines.append("• " + x)
     return "\n".join(lines)
+
+
+try:                                   # the owner's applied backtest winner survives restarts
+    _use_cfg((_load() or {}).get("cfg"))
+except Exception:
+    pass
