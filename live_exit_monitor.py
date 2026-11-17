@@ -150,6 +150,13 @@ def position_signal(position, cost, proceeds):
     if position.get("mode") == "consensus":
         # robot removed; its open positions keep their rules: stop -40%, from +25% trailing 10% below the top
         return trailing_exit_signal(cost, proceeds, position.get("peak_ratio", 0), **CONSENSUS_EXIT)
+    if position.get("mode") == "baixa":
+        # Robô BAIXA (owner, Nov 17): fixed target +25% and stop -40%, same as its backtest
+        import baixa_bot
+        ratio = float(proceeds) / float(cost) if cost else 0.0
+        peak = max(ratio, float(position.get("peak_ratio") or 0))
+        action, reason = baixa_bot.exit_signal(ratio)
+        return {"action": action, "reason": reason, "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") == "snipe":
         # Sniper 24 h: same rule the backtest uses (snipe_bot.exit_signal)
         import snipe_bot

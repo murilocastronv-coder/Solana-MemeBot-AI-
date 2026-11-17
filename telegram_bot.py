@@ -135,13 +135,10 @@ def split_message(text,limit=3800):
  if cur:parts.append(cur)
  return parts
 def keyboard():
- """Owner's menu: only the copy trade and the bot wallet."""
- return [[{"text":"💵 Copiar (REAL)","callback_data":"copy_real"},{"text":"⏹️ Parar cópia","callback_data":"copy_off"}],
-  [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
-  [{"text":"📋 Carteiras copiadas","callback_data":"copy_wallets"},{"text":"📦 Posições","callback_data":"copy_positions"}],
-  [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
-  [{"text":"📉 Backtest: compra na baixa (alvo 25%, stop 40%)","callback_data":"dip_bt"}],
-  [{"text":"📉 Backtest memecoins (liquidez ≥ 250 mil, 7+ dias)","callback_data":"dip_bt_meme"}],
+ """Owner's menu (Nov 17): only the robô BAIXA (real money), its backtests and the bot wallet."""
+ return [[{"text":"🟢 Ligar robô BAIXA (real)","callback_data":"bx_on"},{"text":"⏹️ Desligar","callback_data":"bx_off"}],
+  [{"text":"📉 Robô BAIXA: status","callback_data":"bx_status"},{"text":"📦 Posições","callback_data":"bx_pos"}],
+  [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -283,6 +280,26 @@ def handle(update):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
   run_async(audit_job,chat);return
+ if action in ("bx_on","bx_off","bx_status","bx_pos"):
+  import baixa_bot
+  try:
+   if action=="bx_on":
+    live_engine.start()
+    __import__("copy_trader").set_mode(False)       # owner: remove everything else, only this robot
+    baixa_bot.set_enabled(True)
+    send(chat,"🟢 ROBÔ BAIXA LIGADO COM DINHEIRO REAL. O copy trade foi desligado (só esse robô agora).\n"
+     "Ele confere a cada 15 min; quando BP, ZEC, SPCX, HYPE ou NVDAX caírem "+format(baixa_bot.DROP*100,"g")+"% do topo de 7 dias, "
+     "compra US$ "+format(baixa_bot.USD,"g")+" e vende no +"+format(baixa_bot.TP*100,"g")+"% ou no −"+format(baixa_bot.SL*100,"g")+"%. "
+     "Precisa de SOL na carteira (US$ "+format(baixa_bot.USD,"g")+" por compra + US$ "+format(baixa_bot.KEEP_SOL_USD,"g")+" de reserva).\n\n"+baixa_bot.status_text(),keyboard());return
+   if action=="bx_off":
+    baixa_bot.set_enabled(False)
+    send(chat,"⏹️ Robô BAIXA desligado: não compra mais. As posições abertas continuam com alvo e stop.\n\n"+baixa_bot.status_text(),keyboard());return
+   if action=="bx_pos":
+    import live_trade_state as st
+    ps=[(m,p) for m,p in st._load()["positions"].items() if p.get("mode")=="baixa"]
+    send(chat,"📦 Posições do robô BAIXA: "+(str(len(ps))+"\n"+"\n".join("• "+str(p.get("symbol") or m[:6])+" · custo US$ "+format(float(p.get("cost_usd") or 0),".2f") for m,p in ps) if ps else "nenhuma aberta"),keyboard());return
+   send(chat,baixa_bot.status_text(),keyboard());return
+  except Exception as exc:send(chat,"⛔ Robô BAIXA: "+type(exc).__name__+": "+str(exc)[:200],keyboard());return
  if action=="dip_bt_meme":
   import solid_dip_bt
   why=solid_dip_bt.start(send,chat,"meme")
@@ -638,6 +655,15 @@ def copy_wallet_action(chat,action,text):
    (" com dinheiro real." if ct.real_enabled() else ". ⚠️ O copy trade está DESLIGADO: toque em 💵 Copiar (REAL) para começar.")+
    "\nCompras antigas não são copiadas.",keyboard())
  except Exception as exc:send(chat,"⛔ Carteira: "+str(exc)[:200],keyboard())
+def baixa_loop():
+ """Owner (Nov 17): robô BAIXA, real money, only after the owner's LIGAR."""
+ import baixa_bot
+ time.sleep(60)
+ while True:
+  try:
+   if baixa_bot.enabled():baixa_bot.cycle(send,active_chat())
+  except Exception as exc:logging.warning("baixa cycle: %s: %s",type(exc).__name__,str(exc)[:150])
+  time.sleep(baixa_bot.CYCLE_S)
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -806,6 +832,7 @@ def loop():
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
+ threading.Thread(target=baixa_loop,daemon=True).start()       # owner (Nov 17): robô BAIXA (buys only after LIGAR)
  # removed BTC robots: only close a position they may still hold, then stop
  threading.Thread(target=btc_live_loop,daemon=True).start()
  threading.Thread(target=btc_leftover_loop,daemon=True).start()
