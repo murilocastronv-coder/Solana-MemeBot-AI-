@@ -184,3 +184,25 @@ class WalletTextTest(unittest.TestCase):
         self.assertIn("BotWallet111", txt)
         self.assertIn("0.7056 SOL", txt)
         self.assertIn("2 compra(s)", txt)
+
+
+class TrailNoticeTest(unittest.TestCase):
+    def test_trailing_armed_message_shows_where(self):
+        import live_engine
+        import live_exit_monitor as lem
+        sent = []
+        lem.ARMED.append(("MintBLOB", {"mode": "baixa", "symbol": "BLOB", "cost_usd": 23.0},
+                          {"change_pct": 12.0, "peak_ratio": 1.12, "reason": "trailing", "action": "hold"}))
+        with mock.patch.object(live_engine, "sell_signals", return_value=[]), mock.patch.object(live_engine, "_log_positions"), \
+                mock.patch.object(live_engine.bridge, "preflight", return_value=True), \
+                mock.patch.object(live_engine, "get_address", return_value="W"), \
+                mock.patch.object(live_engine, "_safe_sender", side_effect=lambda f: f):
+            try:
+                live_engine.exit_cycle(lambda chat, text, *a, **k: sent.append(text), 1)
+            except Exception:
+                pass
+        msg = "\n".join(sent)
+        self.assertIn("STOP MÓVEL ATIVADO — BLOB", msg)
+        self.assertIn("Ativou em: +12.0%", msg)
+        self.assertIn("vende se cair para +0.8%", msg)            # 1.12 x 0.90 = 1.008
+        self.assertIn("10% abaixo do topo", msg)
