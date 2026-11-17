@@ -53,8 +53,8 @@ class FillWalletsTests(unittest.TestCase):
 class MenuTests(unittest.TestCase):
     def test_menu_has_only_copy_trade_and_bot_wallet(self):
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
-        self.assertEqual(data, {"copy_real", "copy_off", "copy_status", "copy_wallets", "copy_positions", "dip_bt", "dip_bt_meme", "cw_add", "cw_eval",
-                                "unstick", "wallet_deposit", "wallet_balance", "wallet_withdraw"})   # owner: only the copy trade and the bot wallet
+        self.assertEqual(data, {"bx_on", "bx_off", "bx_status", "bx_pos", "dip_bt", "dip_bt_meme",
+                                "unstick", "wallet_deposit", "wallet_balance", "wallet_withdraw"})   # owner (Nov 17): only the robô BAIXA and the wallet
 
     def test_removed_buttons_answer_removed(self):
         tb.CTX.interactive = True
