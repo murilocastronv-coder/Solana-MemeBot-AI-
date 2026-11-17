@@ -362,9 +362,9 @@ def start_backtest(send, chat):
 
 
 # ---------------------------------------------------------------- quick backtest on ALL coins (owner, Nov 17)
-ALL_MIN_LIQ = E("BAIXA_ALL_MIN_LIQ", 200_000)
-ALL_MIN_AGE_D = 7
-ALL_DAYS = int(E("BAIXA_ALL_DAYS", 90))
+ALL_MIN_LIQ = E("BAIXA_ALL_MIN_LIQ", 70_000)          # owner (Nov 17, later): US$ 70 mil, 10+ days, longer test
+ALL_MIN_AGE_D = int(E("BAIXA_ALL_MIN_AGE_D", 10))
+ALL_DAYS = int(E("BAIXA_ALL_DAYS", 166))           # one GeckoTerminal call of 1000 4-hour candles = 166 days
 ALL_DEADLINE_S = E("BAIXA_ALL_SECONDS", 170)
 TF4 = 4 * 3600
 NOT_COINS = {"USDC", "USDT", "USDS", "PYUSD", "USDG", "EURC", "USD1", "USDE", "SUSDE", "FDUSD", "USX", "USDY", "SYRUPUSDC",
@@ -401,7 +401,7 @@ def _gecko_once(url, deadline):
     return None
 
 
-def all_coins(now, deadline, get=None, pages=3):
+def all_coins(now, deadline, get=None, pages=6):
     """Solana coins with >= ALL_MIN_LIQ liquidity and 7+ days today: GeckoTerminal top pools + the big coins."""
     import solid_dip_bt as bt
     out = {}
@@ -440,8 +440,8 @@ def backtest_all(now=None, get=None, progress=None):
     deadline = time.time() + ALL_DEADLINE_S
     coins = all_coins(now, deadline, get)
     if progress:
-        progress("🧪 Achei " + str(len(coins)) + " moedas com 7+ dias e liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") +
-                 ". Baixando 3 meses de preços (até ~3 min)…")
+        progress("🧪 Achei " + str(len(coins)) + " moedas com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") +
+                 ". Baixando ~" + format(ALL_DAYS / 30, ".1f") + " meses de preços (até ~3 min)…")
     data, skipped = {}, []
     for sym, c in sorted(coins.items(), key=lambda kv: kv[0] not in BINANCE):      # fast Binance coins first
         if time.time() > deadline:
@@ -488,18 +488,19 @@ def backtest_all_text(rep):
                 str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") + ") · drawdown " + format(s["dd"], "g") + "%")
     pc = rep["full"]["per_coin"]
     best = sorted(pc.items(), key=lambda kv: -kv[1][1])
-    L = ["🧪 BACKTEST: REGRA DO ROBÔ EM TODAS AS MOEDAS (7+ dias, liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") + ") — " +
+    L = ["🧪 BACKTEST: REGRA DO ROBÔ EM TODAS AS MOEDAS (" + str(ALL_MIN_AGE_D) + "+ dias, liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") + ") — " +
          d(rep["start"]) + " a " + d(rep["end"]),
          "Moedas testadas: " + str(len(rep["coins"])) + " de " + str(rep["found"]) + " achadas" +
          (" (sem dados a tempo: " + ", ".join(rep["skipped"][:15]) + ")" if rep["skipped"] else "") +
          " · compra US$ " + format(USD, "g") + " quando cai " + format(DROP * 100, "g") + "% do topo de 7 dias · alvo +" + format(TP * 100, "g") +
          "% · stop −" + format(SL * 100, "g") + "% · máx. 2 abertas (US$ 60) · velas de 4 h reais · custo " + format(bt.COST * 100, "g") + "% por lado",
          "• primeiros 2/3: " + f(rep["first"]), "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
-         "• 3 meses: " + f(rep["full"]), "• vendas: " + str(rep["full"]["trades"]) + " em 3 meses"]
+         "• período todo (~" + format((rep["end"] - rep["start"]) / 86400 / 30, ".1f") + " meses): " + f(rep["full"]),
+         "• vendas: " + str(rep["full"]["trades"]) + " no período"]
     if best:
         L.append("• melhores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[:6]))
         L.append("• piores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[-4:]))
-    L.append("⚠️ Só moedas que AINDA têm ≥ US$ 200 mil de liquidez hoje (as que morreram não aparecem: o real tende a ser pior). "
+    L.append("⚠️ Só moedas que AINDA têm ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") + " de liquidez hoje (as que morreram não aparecem: o real tende a ser pior). "
              "Velas de 4 h: alvo e stop na mesma vela contam como stop. Passado não garante futuro.")
     return "\n".join(L)
 
