@@ -139,6 +139,7 @@ def keyboard():
  return [[{"text":"🟢 Ligar robô BAIXA (real)","callback_data":"bx_on"},{"text":"⏹️ Desligar","callback_data":"bx_off"}],
   [{"text":"📉 Robô BAIXA: status","callback_data":"bx_status"},{"text":"📦 Posições","callback_data":"bx_pos"}],
   [{"text":"🧪 Backtest do robô (alvo 8%, stop 20%)","callback_data":"bx_bt"}],
+  [{"text":"🧪 Backtest: TODAS as moedas (7+ dias, liq. ≥ 200 mil)","callback_data":"bx_bt_all"}],
   [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -281,6 +282,11 @@ def handle(update):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
   run_async(audit_job,chat);return
+ if action=="bx_bt_all":
+  import baixa_bot
+  why=baixa_bot.start_backtest_all(send,chat)
+  send(chat,"⛔ "+why if why else "🧪 Backtest rodando: a regra do robô (cai 5% do topo de 7 dias, alvo +8%, stop −20%, US$ 23, máx. 2 abertas) em TODAS as "
+   "moedas da Solana com 7+ dias e liquidez ≥ US$ 200 mil, últimos 3 meses. Resultado em ~3 min. Só teste.",keyboard());return
  if action=="bx_bt":
   import baixa_bot
   why=baixa_bot.start_backtest(send,chat)
