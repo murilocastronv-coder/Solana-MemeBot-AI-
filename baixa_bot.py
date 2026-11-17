@@ -228,6 +228,8 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
         found = resolve(get, now)
         if found or d.get("resolve_v") != RESOLVE_V:
             with _LOCK:
+                if d.get("resolve_v") != RESOLVE_V:
+                    d["log"] = []                               # the old robot's notes go away with the old list
                 d["tokens"], d["resolved_at"], d["resolve_v"] = found, now, RESOLVE_V   # never keep an old list
                 _save()
     if DAILY_LOSS and day_pnl(now) <= -DAILY_LOSS:
@@ -278,6 +280,19 @@ def _buy(pair, mint, sym, send, chat):
     return bool(s and s.get("status") == "settled_buy")
 
 
+def coins_line(d):
+    """The coins of the CURRENT rule only (an old list from an earlier robot is never shown)."""
+    toks = d.get("tokens") or {}
+    if d.get("resolve_v") != RESOLVE_V:
+        return ("🪙 Moedas: procurando as moedas da regra nova (10+ dias, liquidez US$ " + format(ALL_MIN_LIQ / 1000, "g") + "–" +
+                format(ALL_MAX_LIQ / 1000, "g") + " mil) no próximo ciclo (até 15 min)")
+    if not toks:
+        return "🪙 Moedas: nenhuma moeda achada nessa faixa agora (procuro de novo a cada ciclo)"
+    return "🪙 Moedas (" + str(len(toks)) + "): " + ", ".join(
+        sym + " (liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil, " + format((time.time() - float(t.get("created") or 0)) / 86400, ".0f") +
+        " dias)" for sym, t in sorted(toks.items(), key=lambda kv: -kv[1]["liq"]))
+
+
 def status_text():
     """Never waits for a busy trade-state lock (the menu must answer at once)."""
     d = _load()
@@ -300,12 +315,10 @@ def status_text():
          " mil · máx. " + str(MAX_OPEN) + " abertas · deixa US$ " + format(KEEP_SOL_USD, "g") + " em SOL",
          "🛡️ Anti-golpe antes de cada compra: criador sem poder de criar/congelar, 10 maiores donos, teste de venda na Jupiter, "
          "Token-2022 sem armadilhas, RugCheck sem perigo e liquidez travada (se não der para checar, não compra)",
-         "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil, volume 24 h US$ " +
-                                    format(t.get("vol", 0) / 1000, ",.0f") + " mil)"
-                                   for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
+         coins_line(d),
          "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + n_open + "/" + str(MAX_OPEN),
          "🧪 Veja o resultado dessa regra no passado em 🧪 Backtest do robô."]
-    for x in (d.get("log") or [])[-5:]:
+    for x in ((d.get("log") or []) if d.get("resolve_v") == RESOLVE_V else [])[-5:]:      # only this robot's notes
         L.append("• " + x)
     return "\n".join(L)
 
