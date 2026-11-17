@@ -359,3 +359,162 @@ def start_backtest(send, chat):
             _BT.release()
     threading.Thread(target=go, daemon=True).start()
     return ""
+
+
+# ---------------------------------------------------------------- quick backtest on ALL coins (owner, Nov 17)
+ALL_MIN_LIQ = E("BAIXA_ALL_MIN_LIQ", 200_000)
+ALL_MIN_AGE_D = 7
+ALL_DAYS = int(E("BAIXA_ALL_DAYS", 90))
+ALL_DEADLINE_S = E("BAIXA_ALL_SECONDS", 170)
+TF4 = 4 * 3600
+NOT_COINS = {"USDC", "USDT", "USDS", "PYUSD", "USDG", "EURC", "USD1", "USDE", "SUSDE", "FDUSD", "USX", "USDY", "SYRUPUSDC",
+             "SOL", "WSOL", "MSOL", "JITOSOL", "BSOL", "INF", "JUPSOL", "BBSOL", "HSOL", "DSOL", "CBBTC", "WBTC", "ETH", "WETH",
+             "LBTC", "XBTC", "ONYC", "JLP"}
+
+
+def to_4h(cs):
+    """1-hour candles -> complete 4-hour candles."""
+    groups = {}
+    for c in cs:
+        groups.setdefault(c["t"] // TF4 * TF4, []).append(c)
+    return [{"t": t, "h": max(x["h"] for x in g), "l": min(x.get("l", x["c"]) for x in g), "c": g[-1]["c"]}
+            for t, g in sorted(groups.items()) if len(g) == 4]
+
+
+def _gecko_once(url, deadline):
+    """One GeckoTerminal call that never waits past the deadline (a 429 skips that coin)."""
+    import solid_dip_bt as bt
+    for _ in range(2):
+        if time.time() > deadline:
+            return None
+        wait = bt._gk[0] + 2.2 - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        bt._gk[0] = time.time()
+        sg._gecko_block[0] = max(sg._gecko_block[0], time.time() + 60)
+        r = bt._http.get(url, timeout=15, headers={"Accept": "application/json", "User-Agent": "DipBacktest/1.0"})
+        if r.status_code == 429:
+            time.sleep(min(10, max(0, deadline - time.time())))
+            continue
+        r.raise_for_status()
+        return r.json()
+    return None
+
+
+def all_coins(now, deadline, get=None, pages=3):
+    """Solana coins with >= ALL_MIN_LIQ liquidity and 7+ days today: GeckoTerminal top pools + the big coins."""
+    import solid_dip_bt as bt
+    out = {}
+    for page in range(1, pages + 1):
+        try:
+            d = get(bt.GECKO + "/networks/solana/pools?page=" + str(page) + "&sort=h24_volume_usd_desc") if get else \
+                _gecko_once(bt.GECKO + "/networks/solana/pools?page=" + str(page) + "&sort=h24_volume_usd_desc", deadline)
+        except Exception:
+            d = None
+        for p in ((d or {}).get("data") or []):
+            a = p.get("attributes") or {}
+            name = str(a.get("name") or "")
+            sym = name.split("/")[0].strip().upper()
+            quote = name.split("/")[-1].strip().upper() if "/" in name else ""
+            liq = float(a.get("reserve_in_usd") or 0)
+            try:
+                created = time.mktime(time.strptime(str(a.get("pool_created_at"))[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+            except Exception:
+                continue
+            if not sym or sym in NOT_COINS or quote not in ("SOL", "WSOL", "USDC", "USDT") or liq < ALL_MIN_LIQ:
+                continue
+            if now - created < ALL_MIN_AGE_D * 86400:
+                continue
+            if sym not in out or liq > out[sym]["liq"]:
+                out[sym] = {"pool": a.get("address"), "liq": liq, "created": created}
+    for sym in BINANCE:                                   # the big coins are always in (years old, deep liquidity)
+        out.setdefault(sym, {"pool": None, "liq": 0, "created": 0})
+    return out
+
+
+def backtest_all(now=None, get=None, progress=None):
+    """Robot rule on every coin found, last ALL_DAYS days, 4-hour candles (7-day top = 42 candles), US$ USD per buy,
+    US$ 60 capital (so at most 2 open), never buys a coin before 7 days of life. Stops downloading at the deadline."""
+    import solid_dip_bt as bt
+    now = now or time.time()
+    deadline = time.time() + ALL_DEADLINE_S
+    coins = all_coins(now, deadline, get)
+    if progress:
+        progress("🧪 Achei " + str(len(coins)) + " moedas com 7+ dias e liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") +
+                 ". Baixando 3 meses de preços (até ~3 min)…")
+    data, skipped = {}, []
+    for sym, c in sorted(coins.items(), key=lambda kv: kv[0] not in BINANCE):      # fast Binance coins first
+        if time.time() > deadline:
+            skipped.append(sym)
+            continue
+        cs = []
+        try:
+            if sym in BINANCE and get is None:
+                cs = to_4h(bt.fetch(sym + "USDT", None, days=ALL_DAYS, now=now))
+            elif c["pool"]:
+                url = (bt.GECKO + "/networks/solana/pools/" + c["pool"] + "/ohlcv/hour?aggregate=4&limit=1000&currency=usd&before_timestamp=" +
+                       str(int(now)))
+                d = get(url) if get else _gecko_once(url, deadline)
+                rows = ((d or {}).get("data") or {}).get("attributes", {}).get("ohlcv_list") or []
+                cs = sorted(({"t": int(r[0]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4])} for r in rows
+                             if int(r[0]) >= now - ALL_DAYS * 86400 and int(r[0]) + TF4 <= now), key=lambda x: x["t"])
+        except Exception as exc:
+            logging.info("baixa all %s: %s", sym, type(exc).__name__)
+        cs = [x for x in cs if x["t"] >= c["created"] + ALL_MIN_AGE_D * 86400]
+        if len(cs) > 42 + 6:
+            data[sym] = cs
+        else:
+            skipped.append(sym)
+    if not data:
+        return None
+    start = min(x[0]["t"] for x in data.values())
+    end = max(x[-1]["t"] for x in data.values()) + TF4
+    cut = start + (end - start) * 2 // 3
+    run = lambda a, b: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, target=TP, stop=SL)
+    return {"start": start, "end": end, "cut": cut, "coins": sorted(data), "skipped": skipped, "found": len(coins),
+            "first": run(start, cut), "last": run(cut, end), "full": run(start, end)}
+
+
+def backtest_all_text(rep):
+    import solid_dip_bt as bt
+    if not rep:
+        return "⛔ Backtest de todas as moedas: não consegui baixar os preços agora. Tente de novo em alguns minutos."
+    d = lambda t: time.strftime("%d/%m/%Y", time.gmtime(t))
+
+    def f(s):
+        n = s["trades"]
+        return ("US$ 60 → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " + str(s["wins"]) + " no alvo · " +
+                str(s["stops"]) + " no stop · acerto " + (format(s["wins"] / n * 100, ".0f") if n else "0") + "% · abertas " +
+                str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") + ") · drawdown " + format(s["dd"], "g") + "%")
+    pc = rep["full"]["per_coin"]
+    best = sorted(pc.items(), key=lambda kv: -kv[1][1])
+    L = ["🧪 BACKTEST: REGRA DO ROBÔ EM TODAS AS MOEDAS (7+ dias, liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") + ") — " +
+         d(rep["start"]) + " a " + d(rep["end"]),
+         "Moedas testadas: " + str(len(rep["coins"])) + " de " + str(rep["found"]) + " achadas" +
+         (" (sem dados a tempo: " + ", ".join(rep["skipped"][:15]) + ")" if rep["skipped"] else "") +
+         " · compra US$ " + format(USD, "g") + " quando cai " + format(DROP * 100, "g") + "% do topo de 7 dias · alvo +" + format(TP * 100, "g") +
+         "% · stop −" + format(SL * 100, "g") + "% · máx. 2 abertas (US$ 60) · velas de 4 h reais · custo " + format(bt.COST * 100, "g") + "% por lado",
+         "• primeiros 2/3: " + f(rep["first"]), "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
+         "• 3 meses: " + f(rep["full"]), "• vendas: " + str(rep["full"]["trades"]) + " em 3 meses"]
+    if best:
+        L.append("• melhores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[:6]))
+        L.append("• piores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[-4:]))
+    L.append("⚠️ Só moedas que AINDA têm ≥ US$ 200 mil de liquidez hoje (as que morreram não aparecem: o real tende a ser pior). "
+             "Velas de 4 h: alvo e stop na mesma vela contam como stop. Passado não garante futuro.")
+    return "\n".join(L)
+
+
+def start_backtest_all(send, chat):
+    if not _BT.acquire(blocking=False):
+        return "já tem um backtest rodando"
+
+    def go():
+        try:
+            send(chat, backtest_all_text(backtest_all(progress=lambda m: send(chat, m))))
+        except Exception as exc:
+            logging.exception("baixa backtest all")
+            send(chat, "⛔ Backtest de todas as moedas falhou: " + type(exc).__name__)
+        finally:
+            _BT.release()
+    threading.Thread(target=go, daemon=True).start()
+    return ""
