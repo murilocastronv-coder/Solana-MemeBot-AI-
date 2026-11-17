@@ -269,15 +269,16 @@ def _gecko(url, get=None):
     """GeckoTerminal free API (~30 calls/min): spaced 2.3 s, waits and retries on 429."""
     if get:
         return get(url)
-    for _ in range(3):
-        wait = _gk[0] + 2.3 - time.time()
+    for k in range(5):
+        sg._gecko_block[0] = max(sg._gecko_block[0], time.time() + 120)   # the other loops leave GeckoTerminal to this job
+        wait = _gk[0] + 2.5 - time.time()
         if wait > 0:
             time.sleep(wait)
         _gk[0] = time.time()
         r = _http.get(url, timeout=20, headers={"Accept": "application/json", "User-Agent": "DipBacktest/1.0"})
         if r.status_code == 429:
-            logging.info("dip meme: GeckoTerminal 429, esperando 15 s")
-            time.sleep(15)
+            logging.info("dip meme: GeckoTerminal 429, esperando %s s", 20 * (k + 1))
+            time.sleep(20 * (k + 1))
             continue
         r.raise_for_status()
         return r.json()

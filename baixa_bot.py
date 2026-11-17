@@ -76,25 +76,23 @@ def enabled():
 
 # ---------------------------------------------------------------- data
 def resolve(get=None):
-    """{symbol: {mint, pool, liq}} from GeckoTerminal search (most liquid Solana pool of that symbol)."""
-    import solid_dip_bt as bt
+    """{symbol: {mint, pool, liq}}: DexScreener search (the Solana pool with the most liquidity, >= MIN_LIQ)."""
+    get = get or sg._get
     out = {}
     for sym in COINS:
         try:
-            rows = (bt._gecko(bt.GECKO + "/search/pools?query=" + sym + "&network=solana", get) or {}).get("data") or []
+            rows = (get(sg.DEX + "/latest/dex/search?q=" + sym) or {}).get("pairs") or []
         except Exception as exc:
             logging.info("baixa resolve %s: %s", sym, type(exc).__name__)
             continue
         best = None
         for p in rows:
-            a = p.get("attributes") or {}
-            base = ((((p.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id") or "")
-            name = str(a.get("name") or "")
-            if name.split("/")[0].strip().upper() != sym or not base.startswith("solana_"):
+            b = p.get("baseToken") or {}
+            if p.get("chainId") != "solana" or str(b.get("symbol") or "").upper() != sym or not b.get("address"):
                 continue
-            liq = float(a.get("reserve_in_usd") or 0)
+            liq = float((p.get("liquidity") or {}).get("usd") or 0)
             if liq >= MIN_LIQ and (best is None or liq > best["liq"]):
-                best = {"mint": base[len("solana_"):], "pool": a.get("address"), "liq": liq}
+                best = {"mint": b["address"], "pool": p.get("pairAddress"), "liq": liq}
         if best:
             out[sym] = best
     return out
@@ -197,12 +195,19 @@ def _buy(pair, mint, sym, send, chat):
 
 
 def status_text():
+    """Never waits for a busy trade-state lock (the menu must answer at once)."""
     d = _load()
+    h, n_open = [], "?"
     try:
         import live_trade_state as st
-        h = [x for x in st.history() if x.get("mode") == "baixa"]
+        if st._LOCK.acquire(timeout=0.3):
+            try:
+                h = [x for x in st.history() if x.get("mode") == "baixa"]
+                n_open = str(len(_open()))
+            finally:
+                st._LOCK.release()
     except Exception:
-        h = []
+        pass
     total = sum(float(x.get("pnl_usd") or 0) for x in h)
     L = ["📉 ROBÔ BAIXA — " + ("🟢 LIGADO (💵 DINHEIRO REAL)" if d.get("enabled") else "⏸️ DESLIGADO"),
          "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · vende no alvo +" +
@@ -210,7 +215,7 @@ def status_text():
          " em SOL · máx. " + str(MAX_OPEN) + " abertas · para no dia em que perder US$ " + format(DAILY_LOSS, "g"),
          "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil)"
                                    for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
-         "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + str(len(_open())) + "/" + str(MAX_OPEN),
+         "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + n_open + "/" + str(MAX_OPEN),
          "🧪 Veja o resultado dessa regra no passado em 🧪 Backtest do robô."]
     for x in (d.get("log") or [])[-5:]:
         L.append("• " + x)
@@ -222,15 +227,23 @@ BT_DAYS = int(E("BAIXA_BT_DAYS", 120))
 _BT = threading.Lock()
 
 
-def backtest(now=None, get=None):
+def backtest(now=None, get=None, progress=None):
     """Same coins, same entry (DROP below the 7-day top), same exits (TP / SL), US$ USD per buy, US$ 60 capital,
     hourly GeckoTerminal candles; first 2/3 of the time vs the last 1/3 (no choice is made: the rule is fixed)."""
     import solid_dip_bt as bt
     now = now or time.time()
     tokens = _load().get("tokens") or resolve(get)
+    if tokens and not _load().get("tokens"):
+        with _LOCK:
+            _load()["tokens"], _load()["resolved_at"] = tokens, now
+            _save()
+    if progress:
+        progress("🧪 Contratos achados: " + (", ".join(tokens) or "nenhum") + ". Baixando " + str(BT_DAYS) +
+                 " dias de preços (o GeckoTerminal limita as consultas; pode levar alguns minutos)…")
     data = {}
     for sym, tk in tokens.items():
         cs = bt.gecko_hours(tk["pool"], BT_DAYS, now, get)
+        logging.info("baixa backtest %s: %s velas", sym, len(cs))
         if len(cs) > LOOKBACK_H + 24:
             data[sym] = cs
     if not data:
@@ -246,7 +259,8 @@ def backtest(now=None, get=None):
 def backtest_text(rep):
     import solid_dip_bt as bt
     if not rep:
-        return "⛔ Backtest do robô BAIXA: não consegui baixar os preços (GeckoTerminal)."
+        return ("⛔ Backtest do robô BAIXA: não consegui baixar os preços (o GeckoTerminal está bloqueando consultas agora). "
+                "Tente de novo em ~10 min.")
     d = lambda t: time.strftime("%d/%m/%Y", time.gmtime(t))
 
     def f(s):
@@ -275,7 +289,7 @@ def start_backtest(send, chat):
 
     def go():
         try:
-            send(chat, backtest_text(backtest()))
+            send(chat, backtest_text(backtest(progress=lambda m: send(chat, m))))
         except Exception as exc:
             logging.exception("baixa backtest")
             send(chat, "⛔ Backtest do robô BAIXA falhou: " + type(exc).__name__)

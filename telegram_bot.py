@@ -230,7 +230,7 @@ def discovery_text():
  if not s["qualified_wallets"]:lines.append("Ainda nenhuma aprovada. A cada 2 min o bot analisa o histórico de novas carteiras que compraram moedas em alta.")
  return "\n".join(lines)
 def menu(chat):
- send(chat,status_text(),keyboard())
+ send(chat,__import__("baixa_bot").status_text(),keyboard())   # owner (Nov 17): only the robô BAIXA
 def fmt(v):
  if v == 0:return "0"
  return format(v, ".12f").rstrip("0").rstrip(".") if abs(v)<1 else format(v, ".12f").rstrip("0").rstrip(".")
@@ -548,9 +548,8 @@ def startup_notice():
  chat=active_chat()
  if not chat:return
  import baixa_bot
- if baixa_bot.enabled():
-  send(chat,"🔄 Bot reiniciado (deploy).\n"+baixa_bot.status_text(),keyboard());return
- send(chat,"🔄 Bot reiniciado (deploy).\n"+status_text(),keyboard())
+ send(chat,"🔄 Bot reiniciado (deploy).\n"+baixa_bot.status_text(),keyboard())   # owner (Nov 17): only the robô BAIXA
+ if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
@@ -665,8 +664,10 @@ def copy_wallet_action(chat,action,text):
    "\nCompras antigas não são copiadas.",keyboard())
  except Exception as exc:send(chat,"⛔ Carteira: "+str(exc)[:200],keyboard())
 def baixa_loop():
- """Owner (Nov 17): robô BAIXA, real money, only after the owner's LIGAR."""
+ """Owner (Nov 17): robô BAIXA, real money, only after the owner's LIGAR. The copy trade is switched off for good."""
  import baixa_bot
+ try:__import__("copy_trader").set_mode(False)
+ except Exception:logging.exception("copy off failed")
  time.sleep(60)
  while True:
   try:
@@ -690,7 +691,7 @@ def copy_loop():
    chat=active_chat()
    if not chat:continue
    started=time.time()
-   quiet=__import__("baixa_bot").enabled()          # owner (Nov 17): only the robô BAIXA's notifications
+   quiet=True                                       # owner (Nov 17): only the robô BAIXA's notifications
    for m in copy_trader.cycle((lambda *a,**k:None) if quiet else send,chat):
     if not quiet:send(chat,m)
    took=time.time()-started
@@ -792,7 +793,7 @@ def audit_loop():
  """Audit every followed wallet at start and every 6 h."""
  time.sleep(60)
  while True:
-  if os.getenv("SOLANA_RPC_URL") and active_chat() and not __import__("baixa_bot").enabled():audit_job()
+  pass                                             # owner (Nov 17): copy trade removed, no wallet audit messages
   time.sleep(int(os.getenv("COPY_AUDIT_EVERY_HOURS","6"))*3600)
 def run_async(fn,*args):
  interactive=getattr(CTX,"interactive",False)   # a job the owner asked for answers in full

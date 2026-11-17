@@ -41,6 +41,14 @@ class BaixaTest(unittest.TestCase):
             self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150), [])   # one per coin
         self.assertIn("Backtest do robô", bb.status_text())
 
+    def test_resolve_with_dexscreener(self):
+        rows = {"pairs": [{"chainId": "solana", "baseToken": {"symbol": "BP", "address": "MintA"}, "pairAddress": "PA", "liquidity": {"usd": 300000}},
+                          {"chainId": "solana", "baseToken": {"symbol": "BP", "address": "MintB"}, "pairAddress": "PB", "liquidity": {"usd": 900000}},
+                          {"chainId": "solana", "baseToken": {"symbol": "BPX", "address": "MintC"}, "pairAddress": "PC", "liquidity": {"usd": 9e6}},
+                          {"chainId": "base", "baseToken": {"symbol": "BP", "address": "0x1"}, "pairAddress": "PD", "liquidity": {"usd": 9e6}}]}
+        got = bb.resolve(get=lambda url: rows if "q=BP" in url else {"pairs": []})
+        self.assertEqual(got, {"BP": {"mint": "MintB", "pool": "PB", "liq": 900000.0}})
+
     def test_max_two_open_of_23(self):
         self.assertEqual((bb.USD, bb.MAX_OPEN), (23, 2))
         bb._load()["tokens"] = {s: {"mint": "M" + s, "pool": "P" + s, "liq": 1e6} for s in ("BP", "ZEC", "SPCX", "HYPE")}
