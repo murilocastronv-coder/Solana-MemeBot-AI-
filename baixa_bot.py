@@ -660,6 +660,13 @@ def backtest_text(rep):
 
 
 def start_backtest(send, chat):
+    """The robot's own coins are found again every cycle, and the saved list can hold just 1-2 coins (Nov 17: only
+    MIHAO, with no prices). So this button tests the same rule on every coin the robot can buy (Pump.fun, 10+ days,
+    US$ 70-700 mil of liquidity): the same test as 'TODAS as moedas'."""
+    return start_backtest_all(send, chat)
+
+
+def start_backtest_saved(send, chat):
     if not _BT.acquire(blocking=False):
         return "já está rodando"
 
