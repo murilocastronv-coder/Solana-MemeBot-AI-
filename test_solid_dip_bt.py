@@ -59,5 +59,38 @@ class DipTest(unittest.TestCase):
         self.assertIn("não consegui", bt.text(None))
 
 
+class MemeTest(unittest.TestCase):
+    def test_meme_pools_filters_and_run(self):
+        now = 1_800_000_000
+        iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        pools = [{"attributes": {"name": "FROG / SOL", "address": "P1", "reserve_in_usd": "900000", "pool_created_at": iso(now - 200 * 86400)}},
+                 {"attributes": {"name": "NEW / SOL", "address": "P2", "reserve_in_usd": "900000", "pool_created_at": iso(now - 3 * 86400)}},
+                 {"attributes": {"name": "SMALL / SOL", "address": "P3", "reserve_in_usd": "90000", "pool_created_at": iso(now - 99 * 86400)}},
+                 {"attributes": {"name": "USDC / SOL", "address": "P4", "reserve_in_usd": "9000000", "pool_created_at": iso(now - 900 * 86400)}}]
+        rnd = random.Random(5)
+
+        def get(url):
+            if "/pools?page=1" in url:
+                return {"data": pools}
+            if "/pools?page=" in url:
+                return {"data": []}
+            if "/ohlcv/" in url:
+                before = int(url.split("before_timestamp=")[1])
+                rows, p = [], 1.0
+                for k in range(1000):
+                    p *= rnd.uniform(0.95, 1.06)
+                    t = before - (k + 1) * H
+                    rows.append([t, p, p * 1.02, p * 0.97, p, 1])
+                return {"data": {"attributes": {"ohlcv_list": rows}}}
+            raise RuntimeError("off")
+        got = bt.meme_pools(now, get)
+        self.assertEqual([p["sym"] for p in got], ["FROG"])        # too new, too small and stablecoins left out
+        rep = bt.run_meme(now, get)
+        self.assertEqual(rep["coins"], ["FROG"])
+        txt = bt.text(rep)
+        self.assertIn("VIÉS DE SOBREVIVÊNCIA", txt)
+        self.assertIn("Memecoins da Solana", txt)
+
+
 if __name__ == "__main__":
     unittest.main()
