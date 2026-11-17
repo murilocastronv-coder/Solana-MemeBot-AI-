@@ -165,11 +165,12 @@ def candles(sym, tk, days, now=None, get=None, tries=5):
 
 
 TOP_TTL_S = E("BAIXA_TOP_TTL_S", 3600)
-_TOP = {}                       # mint -> (time, 7-day top): refreshed at most once an hour (GeckoTerminal is rate limited)
+_CHG = {}                       # mint -> prices 1 h / 6 h / 24 h ago (from DexScreener's price changes), this cycle
 
 
 def dex_prices(mints, get=None):
-    """{mint: price US$} now, from DexScreener (fast, 30 coins per call, no GeckoTerminal)."""
+    """{mint: price US$} now, from DexScreener (fast, 30 coins per call, no GeckoTerminal). Also keeps, per coin,
+    the prices 1 h, 6 h and 24 h ago implied by DexScreener's price changes (they bound the recent top)."""
     get = get or sg._get
     out = {}
     for i in range(0, len(mints), 30):
@@ -182,22 +183,54 @@ def dex_prices(mints, get=None):
             liq = float((p.get("liquidity") or {}).get("usd") or 0)
             if m and px > 0 and liq >= (out.get(m, (0, -1))[1]):
                 out[m] = (px, liq)                           # the price of the most liquid pool
+                past = []
+                for k in ("h1", "h6", "h24"):
+                    try:
+                        c = float((p.get("priceChange") or {}).get(k))
+                        if c > -100:
+                            past.append(px / (1 + c / 100))
+                    except (TypeError, ValueError):
+                        pass
+                _CHG[m] = past
     return {m: v[0] for m, v in out.items()}
 
 
-def top_7d(sym, tk, now=None, get=None):
-    """Highest price of the last LOOKBACK_H hours (closed candles), cached for TOP_TTL_S; the last known top is kept
-    when GeckoTerminal refuses."""
+def record_prices(prices, now=None):
+    """The robot's own price history (every cycle, kept 7 days in the database): its own 7-day top over time."""
     now = now or time.time()
-    hit = _TOP.get(tk["mint"])
-    if hit and now - hit[0] < TOP_TTL_S:
-        return hit[1]
-    cs = candles(sym, tk, (LOOKBACK_H + 24) // 24 + 1, now, get, tries=2)     # live: never waits minutes on a refusal
-    if len(cs) >= LOOKBACK_H:
-        top = max(c["h"] for c in cs[-LOOKBACK_H:])
-        _TOP[tk["mint"]] = (now, top)
-        return top
-    return hit[1] if hit else 0.0
+    with _LOCK:
+        d = _load()
+        hist = d.setdefault("px", {})
+        for m, px in prices.items():
+            pts = [x for x in hist.get(m, []) if now - x[0] < LOOKBACK_H * 3600] + [[int(now), px]]
+            hist[m] = pts[-800:]
+        for m in [m for m in hist if m not in prices and not any(now - x[0] < LOOKBACK_H * 3600 for x in hist[m])]:
+            del hist[m]
+        _save()
+
+
+def top_7d(sym, tk, now=None, get=None):
+    """7-day top = the highest of: the GeckoTerminal candles (read at most once an hour, saved, one quick try),
+    the robot's own saved prices of the last 7 days, and the prices 1 h / 6 h / 24 h ago from DexScreener."""
+    now = now or time.time()
+    d = _load()
+    m = tk["mint"]
+    g = (d.get("gtop") or {}).get(m)
+    if (not g or now - g[0] >= TOP_TTL_S) and now - float((d.get("gfail") or {}).get(m, -1e12)) >= TOP_TTL_S:
+        cs = candles(sym, tk, (LOOKBACK_H + 24) // 24 + 1, now, get, tries=1)
+        with _LOCK:
+            if len(cs) >= LOOKBACK_H:
+                g = [now, max(c["h"] for c in cs[-LOOKBACK_H:])]
+                d.setdefault("gtop", {})[m] = g
+            else:
+                d.setdefault("gfail", {})[m] = now            # GeckoTerminal refused: try again in an hour
+            _save()
+    cands = []
+    if g and now - g[0] < LOOKBACK_H * 3600:
+        cands.append(g[1])
+    cands += [px for t, px in (d.get("px") or {}).get(m, []) if now - t < LOOKBACK_H * 3600]
+    cands += _CHG.get(m, [])
+    return max(cands) if cands else 0.0
 
 
 def live_signal(sym, tk, now=None, get=None, prices=None):
@@ -315,6 +348,7 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
     bought = []
     try:
         prices = dex_prices([t["mint"] for t in (d.get("tokens") or {}).values()], get)
+        record_prices(prices, now)
     except Exception:
         prices = {}
     for sym, tk in (d.get("tokens") or {}).items():
