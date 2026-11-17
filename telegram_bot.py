@@ -138,6 +138,7 @@ def keyboard():
  """Owner's menu (Nov 17): only the robô BAIXA (real money), its backtests and the bot wallet."""
  return [[{"text":"🟢 Ligar robô BAIXA (real)","callback_data":"bx_on"},{"text":"⏹️ Desligar","callback_data":"bx_off"}],
   [{"text":"📉 Robô BAIXA: status","callback_data":"bx_status"},{"text":"📦 Posições","callback_data":"bx_pos"}],
+  [{"text":"💰 Saldo da carteira do robô","callback_data":"bx_wallet"}],
   [{"text":"🧪 Backtest do robô (stop móvel 10%)","callback_data":"bx_bt"}],
   [{"text":"🧪 Backtest: TODAS as moedas, stop móvel 10%","callback_data":"bx_bt_all"}],
   [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
@@ -293,6 +294,10 @@ def handle(update):
   why=baixa_bot.start_backtest(send,chat)
   send(chat,"⛔ "+why if why else "🧪 Backtest do robô BAIXA rodando: as mesmas moedas e a mesma regra do robô real (stop móvel +"+format(baixa_bot.ARM*100,"g")+
    "% / "+format(baixa_bot.TRAIL*100,"g")+"% abaixo do topo), "+str(baixa_bot.BT_DAYS)+" dias de velas reais. Resultado em ~2–3 min. Só teste.",keyboard());return
+ if action=="bx_wallet":
+  try:send(chat,__import__("baixa_bot").wallet_text(),keyboard())
+  except Exception as exc:send(chat,"⛔ Saldo do robô: "+type(exc).__name__,keyboard())
+  return
  if action in ("bx_on","bx_off","bx_status","bx_pos"):
   import baixa_bot
   try:
