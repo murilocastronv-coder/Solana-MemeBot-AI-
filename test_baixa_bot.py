@@ -19,11 +19,12 @@ class BaixaTest(unittest.TestCase):
         self.assertTrue(ok)                                       # -6% from the 7-day top
         self.assertFalse(bb.signal(candles([10] * 168 + [9.6]))[0])
         self.assertFalse(bb.signal(candles([10] * 50 + [5]))[0])  # not enough history: no buy
-        self.assertEqual(bb.exit_signal(1.26), ("sell", "take_profit"))
-        self.assertEqual(bb.exit_signal(0.59), ("sell", "stop_loss"))
+        self.assertEqual(bb.exit_signal(1.26, 1.26), ("hold", "trailing"))          # armed, still at the top
+        self.assertEqual(bb.exit_signal(1.12, 1.26), ("sell", "trailing_stop"))     # 10% below the top
+        self.assertEqual(bb.exit_signal(0.50, 1.05), ("hold", "baixa_hold"))        # no stop loss (owner's choice)
         self.assertEqual(bb.exit_signal(1.05)[0], "hold")
-        self.assertEqual(bb.exit_signal(1.08), ("sell", "take_profit"))     # owner: +8%
-        self.assertEqual(bb.exit_signal(0.80), ("sell", "stop_loss"))       # owner: -20%
+        with mock.patch.object(bb, "SL", 0.20):
+            self.assertEqual(bb.exit_signal(0.80, 1.0), ("sell", "stop_loss"))   # BAIXA_SL=0.20 puts the stop back
 
     def test_cycle_buys_only_when_on_and_with_sol(self):
         bb._load()["tokens"] = {"BP": {"mint": "MintBP", "pool": "P1", "liq": 900000}}
@@ -53,7 +54,7 @@ class BaixaTest(unittest.TestCase):
              "liquidity": {"usd": 400000}, "volume": {"h24": 300000}, "marketCap": 8e6},
             {"chainId": "solana", "baseToken": {"symbol": "BP", "address": "Odd"}, "quoteToken": {"symbol": "XYZ"}, "pairAddress": "PO",
              "liquidity": {"usd": 500000}, "volume": {"h24": 900000}, "marketCap": 8e6}]}
-        got = bb.resolve(get=lambda url: rows if "q=BP" in url else {"pairs": []})
+        got = bb.resolve_majors(get=lambda url: rows if "q=BP" in url else {"pairs": []})
         self.assertEqual(list(got), ["BP"])
         self.assertEqual(got["BP"]["mint"], "Real")
 
@@ -63,7 +64,7 @@ class BaixaTest(unittest.TestCase):
                   "liquidity": {"usd": 5e6}, "volume": {"h24": 2e6}, "marketCap": 1e9}]
         fake = {"pairs": [{"chainId": "solana", "baseToken": {"symbol": "JUP", "address": "FakeJup"}, "quoteToken": {"symbol": "SOL"},
                            "pairAddress": "PX", "liquidity": {"usd": 9e6}, "volume": {"h24": 9e6}, "marketCap": 1e9}]}
-        got = bb.resolve(get=lambda url: pairs if "/tokens/v1/" in url else fake)
+        got = bb.resolve_majors(get=lambda url: pairs if "/tokens/v1/" in url else fake)
         self.assertEqual(got["JUP"]["mint"], jup)                 # the fake copy found by name is never used
         self.assertNotIn("ZEC", bb.COINS)
 
@@ -83,8 +84,8 @@ class BaixaTest(unittest.TestCase):
     def test_exit_monitor_uses_the_rule(self):
         import live_exit_monitor as lem
         pos = {"mode": "baixa", "cost_usd": 10, "peak_ratio": 1.0}
-        self.assertEqual(lem.position_signal(pos, 10, 12.6)["reason"], "take_profit")
-        self.assertEqual(lem.position_signal(pos, 10, 5.9)["reason"], "stop_loss")
+        self.assertEqual(lem.position_signal(dict(pos, peak_ratio=1.3), 10, 11.5)["reason"], "trailing_stop")
+        self.assertEqual(lem.position_signal(pos, 10, 5.9)["action"], "hold")          # no stop loss
         self.assertEqual(lem.position_signal(pos, 10, 10.5)["action"], "hold")
 
 
@@ -100,10 +101,9 @@ class BaixaBacktestTest(unittest.TestCase):
         with mock.patch("solid_dip_bt.gecko_hours", return_value=cs):
             rep = bb.backtest(now=1_800_000_000)
         self.assertEqual(rep["coins"], ["BP"])
-        self.assertGreater(rep["full"]["wins"], 0)
         txt = bb.backtest_text(rep)
-        self.assertIn("alvo +8%", txt)
-        self.assertIn("stop −20%", txt)
+        self.assertIn("stop móvel +10%", txt)
+        self.assertIn("sem stop", txt)
 
 
 if __name__ == "__main__":

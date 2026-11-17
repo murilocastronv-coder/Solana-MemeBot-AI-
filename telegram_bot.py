@@ -138,7 +138,7 @@ def keyboard():
  """Owner's menu (Nov 17): only the robô BAIXA (real money), its backtests and the bot wallet."""
  return [[{"text":"🟢 Ligar robô BAIXA (real)","callback_data":"bx_on"},{"text":"⏹️ Desligar","callback_data":"bx_off"}],
   [{"text":"📉 Robô BAIXA: status","callback_data":"bx_status"},{"text":"📦 Posições","callback_data":"bx_pos"}],
-  [{"text":"🧪 Backtest do robô (alvo 8%, stop 20%)","callback_data":"bx_bt"}],
+  [{"text":"🧪 Backtest do robô (stop móvel 10%)","callback_data":"bx_bt"}],
   [{"text":"🧪 Backtest: TODAS as moedas, stop móvel 10%","callback_data":"bx_bt_all"}],
   [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
@@ -291,8 +291,8 @@ def handle(update):
  if action=="bx_bt":
   import baixa_bot
   why=baixa_bot.start_backtest(send,chat)
-  send(chat,"⛔ "+why if why else "🧪 Backtest do robô BAIXA rodando: as mesmas moedas e a mesma regra do robô real (alvo +"+format(baixa_bot.TP*100,"g")+
-   "%, stop −"+format(baixa_bot.SL*100,"g")+"%), "+str(baixa_bot.BT_DAYS)+" dias de velas reais. Resultado em ~2–3 min. Só teste.",keyboard());return
+  send(chat,"⛔ "+why if why else "🧪 Backtest do robô BAIXA rodando: as mesmas moedas e a mesma regra do robô real (stop móvel +"+format(baixa_bot.ARM*100,"g")+
+   "% / "+format(baixa_bot.TRAIL*100,"g")+"% abaixo do topo), "+str(baixa_bot.BT_DAYS)+" dias de velas reais. Resultado em ~2–3 min. Só teste.",keyboard());return
  if action in ("bx_on","bx_off","bx_status","bx_pos"):
   import baixa_bot
   try:
@@ -301,8 +301,9 @@ def handle(update):
     __import__("copy_trader").set_mode(False)       # owner: remove everything else, only this robot
     baixa_bot.set_enabled(True)
     send(chat,"🟢 ROBÔ BAIXA LIGADO COM DINHEIRO REAL. O copy trade foi desligado (só esse robô agora).\n"
-     "Ele confere a cada 15 min "+str(len(baixa_bot.COINS))+" moedas grandes da Solana ("+", ".join(baixa_bot.COINS)+"); quando uma cair "+format(baixa_bot.DROP*100,"g")+"% do topo de 7 dias, "
-     "compra US$ "+format(baixa_bot.USD,"g")+" e vende no +"+format(baixa_bot.TP*100,"g")+"% ou no −"+format(baixa_bot.SL*100,"g")+"%. "
+     "Ele confere a cada 15 min as moedas da Solana com "+str(baixa_bot.ALL_MIN_AGE_D)+"+ dias e liquidez de US$ 70 mil a 400 mil; quando uma cair "+format(baixa_bot.DROP*100,"g")+"% do topo de 7 dias, "
+     "compra US$ "+format(baixa_bot.USD,"g")+". Sem alvo: stop móvel liga em +"+format(baixa_bot.ARM*100,"g")+"% e vende "+format(baixa_bot.TRAIL*100,"g")+"% abaixo do topo"+
+     ("; stop −"+format(baixa_bot.SL*100,"g")+"%. " if baixa_bot.SL else "; SEM stop (moeda que despencar fica presa). ")+
      "Máx. "+str(baixa_bot.MAX_OPEN)+" ordens abertas. Precisa de SOL na carteira (US$ "+format(baixa_bot.USD,"g")+" por compra + US$ "+format(baixa_bot.KEEP_SOL_USD,"g")+" de reserva).\n\n"+baixa_bot.status_text(),keyboard());return
    if action=="bx_off":
     baixa_bot.set_enabled(False)
