@@ -100,7 +100,9 @@ def tops(cs, lookback):
     return out
 
 
-def simulate(data, start, end, drop, lookback, size=None, capital=None, target=None, stop=None, arm=0.0, trail=0.0):
+def simulate(data, start, end, drop, lookback, size=None, capital=None, target=None, stop=None, arm=0.0, trail=0.0, dca=0.0):
+    """dca (owner, Nov 17): a coin already bought that falls `dca` below its FIRST buy gets a second buy of the same
+    size (max 2 per coin); every exit then works on the average price."""
     """data: {coin: [candles]}. -> summary with trades, open positions, marked-to-market equity and drawdown."""
     target = TARGET if target is None else target
     stop = STOP if stop is None else stop
@@ -123,6 +125,16 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None, target=N
             if p:
                 low = r.get("l", r["c"])
                 exit_px, why = None, ""
+                dca_px = p["first"] * (1 - dca)
+                if dca and not p.get("dca") and low <= dca_px and cash >= size:
+                    px = r["c"] if r["h"] < dca_px else dca_px       # whole candle below: buys at its close
+                    q2 = size * (1 - COST) / px
+                    p["entry"] = (p["qty"] * p["entry"] + q2 * px) / (p["qty"] + q2)    # average price
+                    p["qty"] += q2
+                    p["cost"] += size
+                    p["dca"] = True
+                    p["peak"] = px                                   # the trailing stop arms at +arm over the average
+                    cash -= size
                 if stop and low <= p["entry"] * (1 - stop):
                     # stop first when both levels are inside the same candle (the cautious assumption); a gap sells lower
                     stop_px = p["entry"] * (1 - stop)
@@ -139,7 +151,7 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None, target=N
                 if exit_px:
                     back = p["qty"] * exit_px * (1 - COST)
                     cash += back
-                    trades.append({"coin": coin, "opened": p["t"], "closed": t, "pnl": round(back - size, 4), "exit": why,
+                    trades.append({"coin": coin, "opened": p["t"], "closed": t, "pnl": round(back - p["cost"], 4), "exit": why, "dca": bool(p.get("dca")),
                                    "days": round((t - p["t"]) / 86400, 1), "worst": round(min(p["worst"], low / p["entry"] - 1) * 100, 1)})
                     del pos[coin]
                 else:
@@ -151,19 +163,21 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None, target=N
                     no_cash += 1
                     continue
                 cash -= size
-                pos[coin] = {"t": t, "entry": r["c"], "qty": size * (1 - COST) / r["c"], "worst": 0.0, "peak": r["c"]}
+                pos[coin] = {"t": t, "entry": r["c"], "first": r["c"], "cost": size, "qty": size * (1 - COST) / r["c"], "worst": 0.0,
+                             "peak": r["c"]}
         eq = cash + sum(p["qty"] * last_px.get(c, p["entry"]) for c, p in pos.items())
         peak_eq = max(peak_eq, eq)
         dd = max(dd, (peak_eq - eq) / peak_eq if peak_eq else 0)
     for p in pos.values():
         worst_open = min(worst_open, p["worst"])
     open_val = sum(p["qty"] * last_px.get(c, p["entry"]) for c, p in pos.items())
-    open_cost = size * len(pos)
+    open_cost = sum(p["cost"] for p in pos.values())
     final = cash + open_val
     closed = sum(t["pnl"] for t in trades)
     return {"final": round(final, 2), "pnl": round(final - capital, 2), "closed_pnl": round(closed, 2), "trades": len(trades),
             "wins": sum(1 for x in trades if x.get("exit") == "alvo"), "stops": sum(1 for x in trades if x.get("exit") == "stop"),
             "trails": sum(1 for x in trades if x.get("exit") == "stop móvel"), "profit_trades": sum(1 for x in trades if x["pnl"] > 0),
+            "dca_trades": sum(1 for x in trades if x.get("dca")) + sum(1 for p in pos.values() if p.get("dca")),
             "avg_days": round(sum(t["days"] for t in trades) / len(trades), 1) if trades else 0.0,
             "max_days": max((t["days"] for t in trades), default=0.0),
             "worst_during": min((t["worst"] for t in trades), default=0.0),
