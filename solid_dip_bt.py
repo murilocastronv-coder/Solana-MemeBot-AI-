@@ -82,8 +82,11 @@ _TOPS = {}
 def tops(cs, lookback):
     """Highest high of the `lookback` candles BEFORE each candle (sliding window, computed once)."""
     key = (id(cs), lookback)
-    if key in _TOPS:
-        return _TOPS[key]
+    hit = _TOPS.get(key)
+    if hit is not None and hit[0] is cs:          # same list object (an id can be reused by a new list)
+        return hit[1]
+    if len(_TOPS) > 64:
+        _TOPS.clear()                             # small cache: never grows without limit
     from collections import deque
     out, q = [None] * len(cs), deque()
     for i in range(len(cs)):
@@ -93,7 +96,7 @@ def tops(cs, lookback):
         while q and cs[q[-1]]["h"] <= cs[i]["h"]:
             q.pop()
         q.append(i)
-    _TOPS[key] = out
+    _TOPS[key] = (cs, out)
     return out
 
 

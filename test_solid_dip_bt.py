@@ -12,6 +12,15 @@ def candles(prices, t0=0):
 
 
 class DipTest(unittest.TestCase):
+    def test_tops_cache_never_mixes_lists(self):
+        a = candles([1, 1, 1, 1, 1])
+        bt.tops(a, 2)
+        key = (id(a), 2)
+        del a
+        b = candles([9, 9, 9, 9, 9])
+        bt._TOPS[(id(b), 2)] = bt._TOPS.pop(key, (None, [1, 1, 1, 1, 1]))   # simulate an id reused by a new list
+        self.assertAlmostEqual(bt.tops(b, 2)[3], 9 * 1.001)                # recomputed for the new list
+
     def test_tops_window_excludes_current(self):
         cs = candles([1, 5, 2, 3, 1])
         self.assertEqual(bt.tops(cs, 2)[3], 5 * 1.001)          # max of candles 1 and 2

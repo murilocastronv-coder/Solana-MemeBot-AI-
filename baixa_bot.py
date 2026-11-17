@@ -268,8 +268,13 @@ def backtest(now=None, get=None, progress=None):
     end = max(c[-1]["t"] for c in data.values()) + 3600
     cut = start + (end - start) * 2 // 3
     run = lambda a, b: bt.simulate(data, a, b, DROP, LOOKBACK_H, size=USD, capital=60, target=TP, stop=SL)
+    seen = {}
+    for sym, cs in data.items():                      # how often the entry condition happened (sanity check of the data)
+        tp = bt.tops(cs, LOOKBACK_H)
+        seen[sym] = {"hours": len(cs), "dips": sum(1 for i, c in enumerate(cs) if tp[i] and c["c"] <= tp[i] * (1 - DROP)),
+                     "move": round((max(c["h"] for c in cs) / max(min(c["l"] for c in cs), 1e-18) - 1) * 100, 1)}
     return {"start": start, "end": end, "cut": cut, "coins": list(data), "first": run(start, cut), "last": run(cut, end),
-            "full": run(start, end)}
+            "full": run(start, end), "seen": seen, "tokens": {k: v.get("mint", "")[:6] for k, v in tokens.items()}}
 
 
 def backtest_text(rep):
@@ -291,6 +296,9 @@ def backtest_text(rep):
          format(bt.COST * 100, "g") + "% por lado",
          "• primeiros 2/3: " + f(rep["first"]), "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
          "• período todo: " + f(rep["full"])]
+    for sym, v in (rep.get("seen") or {}).items():
+        L.append("• dados " + sym + " (" + (rep.get("tokens") or {}).get(sym, "") + "…): " + str(v["hours"]) + " h de preços · subiu/caiu até " +
+                 format(v["move"], "g") + "% do mínimo ao máximo · " + str(v["dips"]) + " h abaixo de −" + format(DROP * 100, "g") + "% do topo")
     pc = rep["full"]["per_coin"]
     if pc:
         L.append("• por moeda (vendas, lucro): " + ", ".join(c + " " + str(n) + " / " + format(p, "+.2f") for c, (n, p) in sorted(pc.items())))
