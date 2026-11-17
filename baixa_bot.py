@@ -32,8 +32,12 @@ COINS = tuple(MAJORS) + BY_NAME
 BINANCE = {"JUP", "BONK", "WIF", "JTO", "RAY", "PYTH", "ORCA", "W", "RENDER", "PENGU", "TRUMP"}   # hourly candles from Binance
 DROP = E("BAIXA_DROP", 0.05)
 LOOKBACK_H = int(E("BAIXA_LOOKBACK_H", 168))
-TP = E("BAIXA_TP", 0.08)                    # owner (Nov 17, later): +8% target, -20% stop (was +25% / -40%)
-SL = E("BAIXA_SL", 0.20)
+# owner (Nov 17, evening): the strategy of the "all coins" backtest - no target, trailing stop armed at +10% that sells
+# 10% below the top, and NO stop loss (the owner chose the no-stop version). BAIXA_SL=0.20 puts the -20% stop back.
+TP = E("BAIXA_TP", 0)
+SL = E("BAIXA_SL", 0)
+ARM = E("BAIXA_ARM", 0.10)
+TRAIL = E("BAIXA_TRAIL", 0.10)
 USD = E("BAIXA_USD", 23)                    # owner (Nov 17, later): US$ 23 per order
 MAX_OPEN = int(E("BAIXA_MAX_OPEN", 2))       # owner: at most 2 orders open at a time
 KEEP_SOL_USD = E("BAIXA_KEEP_SOL_USD", 3)
@@ -89,10 +93,19 @@ def enabled():
 
 
 # ---------------------------------------------------------------- data
-RESOLVE_V = 3
+RESOLVE_V = 4
 
 
-def resolve(get=None):
+def resolve(get=None, now=None):
+    """Coins this robot trades (owner, Nov 17 evening): every Solana coin with 10+ days of life and US$ 70 mil to
+    400 mil of liquidity today (the same list as the "all coins" backtest), from GeckoTerminal; mint and pool kept."""
+    now = now or time.time()
+    found = all_coins(now, time.time() + 120, get)
+    return {sym: {"mint": c["mint"], "pool": c["pool"], "liq": c["liq"], "created": c["created"]}
+            for sym, c in found.items() if c.get("mint") and c.get("pool")}
+
+
+def resolve_majors(get=None):
     """{symbol: {mint, pool, liq, vol}}: DexScreener search. Fake copies of a symbol often show absurd liquidity and
     no real trading, so the pool must: be paired with SOL/USDC/USDT, have MIN_LIQ..MAX_LIQ of liquidity, liquidity not
     above 5x its market value, and >= MIN_VOL_24H of real 24 h volume; the one with the MOST VOLUME wins."""
@@ -162,12 +175,17 @@ def signal(candles, drop=None, lookback=None):
     return px <= top * (1 - drop), px, top
 
 
-def exit_signal(ratio):
-    if ratio >= 1 + TP:
-        return "sell", "take_profit"
-    if ratio <= 1 - SL:
+def exit_signal(ratio, peak=None):
+    """ratio = value now / cost; peak = best ratio since the buy. Trailing stop: once the peak reached +ARM, sells when
+    the value is TRAIL below the peak. Optional fixed target (TP) and stop loss (SL); both off by default."""
+    peak = max(ratio, peak or 0)
+    if SL and ratio <= 1 - SL:
         return "sell", "stop_loss"
-    return "hold", "baixa_hold"
+    if TRAIL and peak >= 1 + ARM and ratio <= peak * (1 - TRAIL):
+        return "sell", "trailing_stop"
+    if TP and ratio >= 1 + TP:
+        return "sell", "take_profit"
+    return "hold", ("trailing" if TRAIL and peak >= 1 + ARM else "baixa_hold")
 
 
 # ---------------------------------------------------------------- cycle
@@ -207,10 +225,11 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
     if not d.get("enabled"):
         return []
     if not d.get("tokens") or d.get("resolve_v") != RESOLVE_V or now - float(d.get("resolved_at") or 0) > 86400:
-        found = resolve(get)
-        with _LOCK:
-            d["tokens"], d["resolved_at"], d["resolve_v"] = found, now, RESOLVE_V   # never keep a possibly fake contract
-            _save()
+        found = resolve(get, now)
+        if found or d.get("resolve_v") != RESOLVE_V:
+            with _LOCK:
+                d["tokens"], d["resolved_at"], d["resolve_v"] = found, now, RESOLVE_V   # never keep an old list
+                _save()
     if DAILY_LOSS and day_pnl(now) <= -DAILY_LOSS:
         return []
     held = _open()
@@ -262,9 +281,10 @@ def status_text():
         pass
     total = sum(float(x.get("pnl_usd") or 0) for x in h)
     L = ["📉 ROBÔ BAIXA — " + ("🟢 LIGADO (💵 DINHEIRO REAL)" if d.get("enabled") else "⏸️ DESLIGADO"),
-         "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · vende no alvo +" +
-         format(TP * 100, "g") + "% ou no stop −" + format(SL * 100, "g") + "% · 1 posição por moeda · deixa US$ " + format(KEEP_SOL_USD, "g") +
-         " em SOL · máx. " + str(MAX_OPEN) + " abertas · para no dia em que perder US$ " + format(DAILY_LOSS, "g"),
+         "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · sem alvo: stop móvel liga em +" +
+         format(ARM * 100, "g") + "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · " + ("stop −" + format(SL * 100, "g") + "%" if SL else "SEM stop") +
+         " · moedas com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez US$ " + format(ALL_MIN_LIQ / 1000, "g") + "–" + format(ALL_MAX_LIQ / 1000, "g") +
+         " mil · máx. " + str(MAX_OPEN) + " abertas · deixa US$ " + format(KEEP_SOL_USD, "g") + " em SOL",
          "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil, volume 24 h US$ " +
                                     format(t.get("vol", 0) / 1000, ",.0f") + " mil)"
                                    for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
@@ -305,7 +325,7 @@ def backtest(now=None, get=None, progress=None):
     start = min(c[0]["t"] for c in data.values())
     end = max(c[-1]["t"] for c in data.values()) + 3600
     cut = start + (end - start) * 2 // 3
-    run = lambda a, b: bt.simulate(data, a, b, DROP, LOOKBACK_H, size=USD, capital=60, target=TP, stop=SL)
+    run = lambda a, b: bt.simulate(data, a, b, DROP, LOOKBACK_H, size=USD, capital=60, target=TP or 9.0, stop=SL, arm=ARM, trail=TRAIL)
     seen = {}
     for sym, cs in data.items():                      # how often the entry condition happened (sanity check of the data)
         tp = bt.tops(cs, LOOKBACK_H)
@@ -324,13 +344,13 @@ def backtest_text(rep):
 
     def f(s):
         n = s["trades"]
-        return ("US$ 60 → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " + str(s["wins"]) + " no alvo +" +
-                format(TP * 100, "g") + "% · " + str(s["stops"]) + " no stop −" + format(SL * 100, "g") + "% · acerto " +
-                (format(s["wins"] / n * 100, ".0f") if n else "0") + "% · abertas " + str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") +
-                ") · drawdown " + format(s["dd"], "g") + "%")
+        return ("US$ 60 → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " + str(s["trails"]) + " no stop móvel · " +
+                str(s["wins"]) + " no alvo · " + str(s["stops"]) + " no stop · no lucro " + (format(s["profit_trades"] / n * 100, ".0f") if n else "0") +
+                "% · abertas " + str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") + ") · drawdown " + format(s["dd"], "g") + "%")
     L = ["🧪 BACKTEST DO ROBÔ BAIXA (a regra que está no robô real) — " + d(rep["start"]) + " a " + d(rep["end"]),
          "Moedas: " + ", ".join(rep["coins"]) + " · compra US$ " + format(USD, "g") + " quando cai " + format(DROP * 100, "g") +
-         "% do topo de 7 dias · alvo +" + format(TP * 100, "g") + "% · stop −" + format(SL * 100, "g") + "% · velas de 1 h reais · custo " +
+         "% do topo de 7 dias · stop móvel +" + format(ARM * 100, "g") + "% / " + format(TRAIL * 100, "g") + "% abaixo do topo · " +
+         ("stop −" + format(SL * 100, "g") + "%" if SL else "sem stop") + " · velas de 1 h reais · custo " +
          format(bt.COST * 100, "g") + "% por lado",
          "• primeiros 2/3: " + f(rep["first"]), "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
          "• período todo: " + f(rep["full"])]
@@ -431,7 +451,9 @@ def all_coins(now, deadline, get=None, pages=6):
             if now - created < ALL_MIN_AGE_D * 86400:
                 continue
             if sym not in out or liq > out[sym]["liq"]:
-                out[sym] = {"pool": a.get("address"), "liq": liq, "created": created}
+                base = ((((p.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id") or "")
+                out[sym] = {"pool": a.get("address"), "liq": liq, "created": created,
+                            "mint": base[len("solana_"):] if base.startswith("solana_") else ""}
     return out                                            # the big coins have far more than ALL_MAX_LIQ: not in this test
 
 
@@ -474,7 +496,7 @@ def backtest_all(now=None, get=None, progress=None):
     start = min(x[0]["t"] for x in data.values())
     end = max(x[-1]["t"] for x in data.values()) + TF4
     cut = start + (end - start) * 2 // 3
-    run = lambda a, b, st=SL: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, stop=st, arm=ALL_ARM, trail=ALL_TRAIL)
+    run = lambda a, b, st=0.20: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, stop=st, arm=ALL_ARM, trail=ALL_TRAIL)
     return {"start": start, "end": end, "cut": cut, "coins": sorted(data), "skipped": skipped, "found": len(coins),
             "first": run(start, cut), "last": run(cut, end), "full": run(start, end),
             "nostop_last": run(cut, end, 0), "nostop_full": run(start, end, 0)}

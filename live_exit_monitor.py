@@ -155,7 +155,7 @@ def position_signal(position, cost, proceeds):
         import baixa_bot
         ratio = float(proceeds) / float(cost) if cost else 0.0
         peak = max(ratio, float(position.get("peak_ratio") or 0))
-        action, reason = baixa_bot.exit_signal(ratio)
+        action, reason = baixa_bot.exit_signal(ratio, peak)
         return {"action": action, "reason": reason, "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") == "snipe":
         # Sniper 24 h: same rule the backtest uses (snipe_bot.exit_signal)
