@@ -220,8 +220,35 @@ def _sol_ok(sol_usd):
         return False
 
 
+REPAIR_PREFIXES = ("8s11PkgQ",)          # BLOB, bought by this robot on Nov 17 and relabelled 'copy' by the copy trade
+
+
+def repair_positions():
+    """Positions this robot bought (its 'bought' list, or the known BLOB) that another part of the bot relabelled:
+    back to mode 'baixa', copy fields removed. The top is reset (peak = 1) so the trailing stop only arms again at
+    +ARM: the old top came while the position was under another rule and would sell it at once at a loss."""
+    import live_trade_state as st
+    d = _load()
+    mine = set(d.get("bought") or {})
+    fixed = []
+    for m, p in list(st._load()["positions"].items()):
+        if p.get("mode") == "baixa":
+            continue
+        if m in mine or m.startswith(REPAIR_PREFIXES):
+            st.set_position_fields(m, mode="baixa", copy_orphan=False, copy_recovered=False, copy_wallet=None,
+                                   peak_ratio=1.0, trail_armed=False)
+            fixed.append(str(p.get("symbol") or m[:6]))
+    if fixed:
+        note("devolvi ao robô BAIXA: " + ", ".join(fixed) + " (o copy trade tinha pegado; topo zerado)")
+    return fixed
+
+
 def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_usd=None, safety=None):
     """One pass. Returns the symbols bought."""
+    try:
+        repair_positions()
+    except Exception as exc:
+        logging.warning("baixa repair: %s", type(exc).__name__)
     import solid_dip_bt as bt
     now = now or time.time()
     d = _load()
@@ -270,6 +297,9 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
              format(top, ".6g") + ")")
         if settled:
             bought.append(sym)
+            with _LOCK:
+                d.setdefault("bought", {})[tk["mint"]] = time.time()     # this robot's own positions
+                _save()
     return bought
 
 

@@ -206,3 +206,23 @@ class TrailNoticeTest(unittest.TestCase):
         self.assertIn("Ativou em: +12.0%", msg)
         self.assertIn("vende se cair para +0.8%", msg)            # 1.12 x 0.90 = 1.008
         self.assertIn("10% abaixo do topo", msg)
+
+
+class RepairTest(unittest.TestCase):
+    def setUp(self):
+        bb._MEM.clear()
+
+    def test_copy_trade_never_takes_baixa_and_blob_is_repaired(self):
+        import copy_trader as ct
+        import live_trade_state as st
+        positions = {"8s11PkgQxyz": {"mode": "copy", "copy_orphan": True, "copy_recovered": True, "peak_ratio": 1.116, "symbol": "BLOB"},
+                     "OtherMint": {"mode": "copy", "symbol": "X"}}
+        fields = {}
+        with mock.patch.object(st, "_load", return_value={"positions": positions}), \
+                mock.patch.object(st, "set_position_fields", side_effect=lambda m, **f: fields.setdefault(m, f)):
+            self.assertEqual(bb.repair_positions(), ["BLOB"])
+        self.assertEqual(fields["8s11PkgQxyz"]["mode"], "baixa")
+        self.assertEqual(fields["8s11PkgQxyz"]["peak_ratio"], 1.0)          # no instant sale at a loss
+        self.assertNotIn("OtherMint", fields)
+        src = open(ct.__file__, encoding="utf-8").read()
+        self.assertIn('"rocket", "baixa")', src)                          # recover_real_orphans skips the robot's positions
