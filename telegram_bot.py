@@ -138,6 +138,7 @@ def keyboard():
  """Owner's menu (Nov 17): only the robô BAIXA (real money), its backtests and the bot wallet."""
  return [[{"text":"🟢 Ligar robô BAIXA (real)","callback_data":"bx_on"},{"text":"⏹️ Desligar","callback_data":"bx_off"}],
   [{"text":"📉 Robô BAIXA: status","callback_data":"bx_status"},{"text":"📦 Posições","callback_data":"bx_pos"}],
+  [{"text":"🧪 Backtest do robô (alvo 8%, stop 20%)","callback_data":"bx_bt"}],
   [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -280,6 +281,11 @@ def handle(update):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
   run_async(audit_job,chat);return
+ if action=="bx_bt":
+  import baixa_bot
+  why=baixa_bot.start_backtest(send,chat)
+  send(chat,"⛔ "+why if why else "🧪 Backtest do robô BAIXA rodando: as mesmas moedas e a mesma regra do robô real (alvo +"+format(baixa_bot.TP*100,"g")+
+   "%, stop −"+format(baixa_bot.SL*100,"g")+"%), "+str(baixa_bot.BT_DAYS)+" dias de velas reais. Resultado em ~2–3 min. Só teste.",keyboard());return
  if action in ("bx_on","bx_off","bx_status","bx_pos"):
   import baixa_bot
   try:
@@ -541,6 +547,9 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
+ import baixa_bot
+ if baixa_bot.enabled():
+  send(chat,"🔄 Bot reiniciado (deploy).\n"+baixa_bot.status_text(),keyboard());return
  send(chat,"🔄 Bot reiniciado (deploy).\n"+status_text(),keyboard())
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
@@ -681,7 +690,9 @@ def copy_loop():
    chat=active_chat()
    if not chat:continue
    started=time.time()
-   for m in copy_trader.cycle(send,chat):send(chat,m)   # also runs with copy off: sells open copies with the wallet
+   quiet=__import__("baixa_bot").enabled()          # owner (Nov 17): only the robô BAIXA's notifications
+   for m in copy_trader.cycle((lambda *a,**k:None) if quiet else send,chat):
+    if not quiet:send(chat,m)
    took=time.time()-started
    COPY_BEAT.update(at=time.time(),took=took)
    if took>30:logging.warning("copy cycle slow: %.0f s",took)
@@ -781,7 +792,7 @@ def audit_loop():
  """Audit every followed wallet at start and every 6 h."""
  time.sleep(60)
  while True:
-  if os.getenv("SOLANA_RPC_URL") and active_chat():audit_job()
+  if os.getenv("SOLANA_RPC_URL") and active_chat() and not __import__("baixa_bot").enabled():audit_job()
   time.sleep(int(os.getenv("COPY_AUDIT_EVERY_HOURS","6"))*3600)
 def run_async(fn,*args):
  interactive=getattr(CTX,"interactive",False)   # a job the owner asked for answers in full

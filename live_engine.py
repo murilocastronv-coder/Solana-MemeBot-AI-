@@ -132,8 +132,8 @@ def _write_off(send, chat, mint, symbol, no_route):
          ("\n⚠️ Isso atingiu o limite de perda do dia: robô pausado. Toque em ▶️ Iniciar para religar."
           if result["halted"] else "") + "\n📄 " + mint)
 EXIT_TEXT = {
-    "baixa": "📉 Robô BAIXA: 🎯 alvo +" + format(float(os.getenv("BAIXA_TP", "0.25")) * 100, ".0f") + "% | 🛑 stop -" +
-             format(float(os.getenv("BAIXA_SL", "0.40")) * 100, ".0f") + "%",
+    "baixa": "📉 Robô BAIXA: 🎯 alvo +" + format(float(os.getenv("BAIXA_TP", "0.08")) * 100, ".0f") + "% | 🛑 stop -" +
+             format(float(os.getenv("BAIXA_SL", "0.20")) * 100, ".0f") + "%",
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
     "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
     "copy": "👥 Vende quando a carteira copiada vender (sem alvo/stop fixo)",

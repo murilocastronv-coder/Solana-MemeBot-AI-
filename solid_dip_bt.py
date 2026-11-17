@@ -97,8 +97,10 @@ def tops(cs, lookback):
     return out
 
 
-def simulate(data, start, end, drop, lookback, size=None, capital=None):
+def simulate(data, start, end, drop, lookback, size=None, capital=None, target=None, stop=None):
     """data: {coin: [candles]}. -> summary with trades, open positions, marked-to-market equity and drawdown."""
+    target = TARGET if target is None else target
+    stop = STOP if stop is None else stop
     size = SIZE if size is None else size
     capital = CAPITAL if capital is None else capital
     idx = {c: {r["t"]: i for i, r in enumerate(cs)} for c, cs in data.items()}
@@ -118,12 +120,12 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None):
             if p:
                 low = r.get("l", r["c"])
                 exit_px, why = None, ""
-                if STOP and low <= p["entry"] * (1 - STOP):
+                if stop and low <= p["entry"] * (1 - stop):
                     # stop first when both levels are inside the same candle (the cautious assumption); a gap sells lower
-                    stop_px = p["entry"] * (1 - STOP)
+                    stop_px = p["entry"] * (1 - stop)
                     exit_px, why = (r["c"] if r["h"] < stop_px else stop_px), "stop"   # whole candle below: sells at its close
-                elif r["h"] >= p["entry"] * (1 + TARGET):
-                    exit_px, why = p["entry"] * (1 + TARGET), "alvo"
+                elif r["h"] >= p["entry"] * (1 + target):
+                    exit_px, why = p["entry"] * (1 + target), "alvo"
                 if exit_px:
                     back = p["qty"] * exit_px * (1 - COST)
                     cash += back
