@@ -28,6 +28,7 @@ class BaixaTest(unittest.TestCase):
     def test_cycle_buys_only_when_on_and_with_sol(self):
         bb._load()["tokens"] = {"BP": {"mint": "MintBP", "pool": "P1", "liq": 900000}}
         bb._load()["resolved_at"] = 1e12
+        bb._load()["resolve_v"] = bb.RESOLVE_V
         bought = []
         buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
@@ -41,18 +42,26 @@ class BaixaTest(unittest.TestCase):
             self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150), [])   # one per coin
         self.assertIn("Backtest do robô", bb.status_text())
 
-    def test_resolve_with_dexscreener(self):
-        rows = {"pairs": [{"chainId": "solana", "baseToken": {"symbol": "BP", "address": "MintA"}, "pairAddress": "PA", "liquidity": {"usd": 300000}},
-                          {"chainId": "solana", "baseToken": {"symbol": "BP", "address": "MintB"}, "pairAddress": "PB", "liquidity": {"usd": 900000}},
-                          {"chainId": "solana", "baseToken": {"symbol": "BPX", "address": "MintC"}, "pairAddress": "PC", "liquidity": {"usd": 9e6}},
-                          {"chainId": "base", "baseToken": {"symbol": "BP", "address": "0x1"}, "pairAddress": "PD", "liquidity": {"usd": 9e6}}]}
+    def test_resolve_picks_real_pool_not_fake(self):
+        sol = {"symbol": "SOL"}
+        rows = {"pairs": [
+            {"chainId": "solana", "baseToken": {"symbol": "BP", "address": "Fake"}, "quoteToken": sol, "pairAddress": "PF",
+             "liquidity": {"usd": 1.25e9}, "volume": {"h24": 900}, "marketCap": 1e6},                     # absurd liquidity
+            {"chainId": "solana", "baseToken": {"symbol": "BP", "address": "Quiet"}, "quoteToken": sol, "pairAddress": "PQ",
+             "liquidity": {"usd": 900000}, "volume": {"h24": 1000}, "marketCap": 5e6},                    # no real volume
+            {"chainId": "solana", "baseToken": {"symbol": "BP", "address": "Real"}, "quoteToken": {"symbol": "USDC"}, "pairAddress": "PR",
+             "liquidity": {"usd": 400000}, "volume": {"h24": 300000}, "marketCap": 8e6},
+            {"chainId": "solana", "baseToken": {"symbol": "BP", "address": "Odd"}, "quoteToken": {"symbol": "XYZ"}, "pairAddress": "PO",
+             "liquidity": {"usd": 500000}, "volume": {"h24": 900000}, "marketCap": 8e6}]}
         got = bb.resolve(get=lambda url: rows if "q=BP" in url else {"pairs": []})
-        self.assertEqual(got, {"BP": {"mint": "MintB", "pool": "PB", "liq": 900000.0}})
+        self.assertEqual(list(got), ["BP"])
+        self.assertEqual(got["BP"]["mint"], "Real")
 
     def test_max_two_open_of_23(self):
         self.assertEqual((bb.USD, bb.MAX_OPEN), (23, 2))
         bb._load()["tokens"] = {s: {"mint": "M" + s, "pool": "P" + s, "liq": 1e6} for s in ("BP", "ZEC", "SPCX", "HYPE")}
         bb._load()["resolved_at"] = 1e12
+        bb._load()["resolve_v"] = bb.RESOLVE_V
         bb.set_enabled(True)
         bought = []
         buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
@@ -75,6 +84,7 @@ class BaixaBacktestTest(unittest.TestCase):
 
     def test_backtest_uses_robot_rule(self):
         bb._load()["tokens"] = {"BP": {"mint": "M", "pool": "P", "liq": 1e6}}
+        bb._load()["resolve_v"] = bb.RESOLVE_V
         prices = ([10] * 170 + [9.4] + [9.6] * 5 + [10.2] + [10] * 200) * 3        # dips and +8% recoveries
         cs = [{"t": 1_700_000_000 + i * H, "h": p, "l": p, "c": p} for i, p in enumerate(prices)]
         with mock.patch("solid_dip_bt.gecko_hours", return_value=cs):

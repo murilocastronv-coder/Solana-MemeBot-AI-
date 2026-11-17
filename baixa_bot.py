@@ -27,6 +27,8 @@ MAX_OPEN = int(E("BAIXA_MAX_OPEN", 2))       # owner: at most 2 orders open at a
 KEEP_SOL_USD = E("BAIXA_KEEP_SOL_USD", 3)
 DAILY_LOSS = E("BAIXA_DAILY_LOSS_USD", 20)
 MIN_LIQ = E("BAIXA_MIN_LIQ", 250_000)
+MAX_LIQ = E("BAIXA_MAX_LIQ", 100_000_000)         # more than this in one Solana pool of these coins = fake numbers
+MIN_VOL_24H = E("BAIXA_MIN_VOL_24H", 25_000)
 CYCLE_S = E("BAIXA_CYCLE_S", 900)
 KEY = "baixa_bot"
 _LOCK = threading.RLock()
@@ -75,8 +77,13 @@ def enabled():
 
 
 # ---------------------------------------------------------------- data
+RESOLVE_V = 2
+
+
 def resolve(get=None):
-    """{symbol: {mint, pool, liq}}: DexScreener search (the Solana pool with the most liquidity, >= MIN_LIQ)."""
+    """{symbol: {mint, pool, liq, vol}}: DexScreener search. Fake copies of a symbol often show absurd liquidity and
+    no real trading, so the pool must: be paired with SOL/USDC/USDT, have MIN_LIQ..MAX_LIQ of liquidity, liquidity not
+    above 5x its market value, and >= MIN_VOL_24H of real 24 h volume; the one with the MOST VOLUME wins."""
     get = get or sg._get
     out = {}
     for sym in COINS:
@@ -87,14 +94,22 @@ def resolve(get=None):
             continue
         best = None
         for p in rows:
-            b = p.get("baseToken") or {}
+            b, q = p.get("baseToken") or {}, p.get("quoteToken") or {}
             if p.get("chainId") != "solana" or str(b.get("symbol") or "").upper() != sym or not b.get("address"):
                 continue
+            if str(q.get("symbol") or "").upper() not in ("SOL", "WSOL", "USDC", "USDT"):
+                continue
             liq = float((p.get("liquidity") or {}).get("usd") or 0)
-            if liq >= MIN_LIQ and (best is None or liq > best["liq"]):
-                best = {"mint": b["address"], "pool": p.get("pairAddress"), "liq": liq}
+            vol = float((p.get("volume") or {}).get("h24") or 0)
+            fdv = float(p.get("marketCap") or p.get("fdv") or 0)
+            if not MIN_LIQ <= liq <= MAX_LIQ or vol < MIN_VOL_24H or (fdv and liq > 5 * fdv):
+                continue
+            if best is None or vol > best["vol"]:
+                best = {"mint": b["address"], "pool": p.get("pairAddress"), "liq": liq, "vol": vol}
         if best:
             out[sym] = best
+        else:
+            logging.info("baixa resolve %s: nenhuma pool confiável", sym)
     return out
 
 
@@ -153,12 +168,11 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
     d = _load()
     if not d.get("enabled"):
         return []
-    if not d.get("tokens") or now - float(d.get("resolved_at") or 0) > 86400:
+    if not d.get("tokens") or d.get("resolve_v") != RESOLVE_V or now - float(d.get("resolved_at") or 0) > 86400:
         found = resolve(get)
-        if found:
-            with _LOCK:
-                d["tokens"], d["resolved_at"] = found, now
-                _save()
+        with _LOCK:
+            d["tokens"], d["resolved_at"], d["resolve_v"] = found, now, RESOLVE_V   # never keep a possibly fake contract
+            _save()
     if DAILY_LOSS and day_pnl(now) <= -DAILY_LOSS:
         return []
     held = _open()
@@ -213,7 +227,8 @@ def status_text():
          "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · vende no alvo +" +
          format(TP * 100, "g") + "% ou no stop −" + format(SL * 100, "g") + "% · 1 posição por moeda · deixa US$ " + format(KEEP_SOL_USD, "g") +
          " em SOL · máx. " + str(MAX_OPEN) + " abertas · para no dia em que perder US$ " + format(DAILY_LOSS, "g"),
-         "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil)"
+         "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil, volume 24 h US$ " +
+                                    format(t.get("vol", 0) / 1000, ",.0f") + " mil)"
                                    for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
          "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + n_open + "/" + str(MAX_OPEN),
          "🧪 Veja o resultado dessa regra no passado em 🧪 Backtest do robô."]
@@ -232,10 +247,11 @@ def backtest(now=None, get=None, progress=None):
     hourly GeckoTerminal candles; first 2/3 of the time vs the last 1/3 (no choice is made: the rule is fixed)."""
     import solid_dip_bt as bt
     now = now or time.time()
-    tokens = _load().get("tokens") or resolve(get)
-    if tokens and not _load().get("tokens"):
+    tokens = _load().get("tokens") if _load().get("resolve_v") == RESOLVE_V else None
+    if not tokens:
+        tokens = resolve(get)
         with _LOCK:
-            _load()["tokens"], _load()["resolved_at"] = tokens, now
+            _load()["tokens"], _load()["resolved_at"], _load()["resolve_v"] = tokens, now, RESOLVE_V
             _save()
     if progress:
         progress("🧪 Contratos achados: " + (", ".join(tokens) or "nenhum") + ". Baixando " + str(BT_DAYS) +
