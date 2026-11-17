@@ -74,6 +74,12 @@ class BaixaTest(unittest.TestCase):
             self.assertEqual(again, [])                                   # blocked for 24 h
         self.assertIn("anti-golpe", bb._load()["log"][-1])
         self.assertIn("Anti-golpe", bb.status_text())
+        self.assertIn("BP (liquidez US$ 300 mil", bb.status_text())
+        bb._load()["resolve_v"] = 3                                       # an older robot's list: never shown
+        txt = bb.status_text()
+        self.assertIn("procurando as moedas da regra nova", txt)
+        self.assertNotIn("BP (", txt)
+        self.assertNotIn("anti-golpe: criador", txt)
 
     def test_majors_only_by_official_mint(self):
         jup = bb.MAJORS["JUP"]

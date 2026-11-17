@@ -300,6 +300,7 @@ def handle(update):
     live_engine.start()
     __import__("copy_trader").set_mode(False)       # owner: remove everything else, only this robot
     baixa_bot.set_enabled(True)
+    run_async(lambda:baixa_bot.cycle(send,chat))          # look for the coins right away (not only in 15 min)
     send(chat,"🟢 ROBÔ BAIXA LIGADO COM DINHEIRO REAL. O copy trade foi desligado (só esse robô agora).\n"
      "Ele confere a cada 15 min as moedas da Solana com "+str(baixa_bot.ALL_MIN_AGE_D)+"+ dias e liquidez de US$ 70 mil a 400 mil; quando uma cair "+format(baixa_bot.DROP*100,"g")+"% do topo de 7 dias, "
      "compra US$ "+format(baixa_bot.USD,"g")+". Sem alvo: stop móvel liga em +"+format(baixa_bot.ARM*100,"g")+"% e vende "+format(baixa_bot.TRAIL*100,"g")+"% abaixo do topo"+
