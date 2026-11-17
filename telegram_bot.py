@@ -286,7 +286,7 @@ def handle(update):
   import baixa_bot
   why=baixa_bot.start_backtest_all(send,chat)
   send(chat,"⛔ "+why if why else "🧪 Backtest rodando: compra quando cai 5% do topo de 7 dias, SEM alvo, stop móvel que liga em +10% e vende 10% abaixo do topo "
-   "(com stop −20% e também sem stop), US$ 23, máx. 2 abertas, em TODAS as "
+   "(com stop −35% e também sem stop), US$ 23, máx. 2 abertas, em TODAS as "
    "moedas da Solana com 10+ dias e liquidez de US$ 70 mil a US$ 400 mil, últimos ~5,5 meses. Resultado em ~3 min. Só teste.",keyboard());return
  if action=="bx_bt":
   import baixa_bot
