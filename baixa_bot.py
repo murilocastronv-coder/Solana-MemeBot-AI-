@@ -20,8 +20,8 @@ E = sg._f
 COINS = ("BP", "ZEC", "SPCX", "HYPE", "NVDAX")
 DROP = E("BAIXA_DROP", 0.05)
 LOOKBACK_H = int(E("BAIXA_LOOKBACK_H", 168))
-TP = E("BAIXA_TP", 0.25)
-SL = E("BAIXA_SL", 0.40)
+TP = E("BAIXA_TP", 0.08)                    # owner (Nov 17, later): +8% target, -20% stop (was +25% / -40%)
+SL = E("BAIXA_SL", 0.20)
 USD = E("BAIXA_USD", 10)
 KEEP_SOL_USD = E("BAIXA_KEEP_SOL_USD", 3)
 DAILY_LOSS = E("BAIXA_DAILY_LOSS_USD", 20)
@@ -208,7 +208,75 @@ def status_text():
          "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil)"
                                    for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
          "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + str(len(_open())),
-         "⚠️ No backtest essa regra PERDEU fora da amostra (−US$ 10,18 nos ~40 dias de teste). Você decidiu ligar mesmo assim."]
+         "🧪 Veja o resultado dessa regra no passado em 🧪 Backtest do robô."]
     for x in (d.get("log") or [])[-5:]:
         L.append("• " + x)
     return "\n".join(L)
+
+
+# ---------------------------------------------------------------- backtest of THIS robot (owner, Nov 17)
+BT_DAYS = int(E("BAIXA_BT_DAYS", 120))
+_BT = threading.Lock()
+
+
+def backtest(now=None, get=None):
+    """Same coins, same entry (DROP below the 7-day top), same exits (TP / SL), US$ USD per buy, US$ 60 capital,
+    hourly GeckoTerminal candles; first 2/3 of the time vs the last 1/3 (no choice is made: the rule is fixed)."""
+    import solid_dip_bt as bt
+    now = now or time.time()
+    tokens = _load().get("tokens") or resolve(get)
+    data = {}
+    for sym, tk in tokens.items():
+        cs = bt.gecko_hours(tk["pool"], BT_DAYS, now, get)
+        if len(cs) > LOOKBACK_H + 24:
+            data[sym] = cs
+    if not data:
+        return None
+    start = min(c[0]["t"] for c in data.values())
+    end = max(c[-1]["t"] for c in data.values()) + 3600
+    cut = start + (end - start) * 2 // 3
+    run = lambda a, b: bt.simulate(data, a, b, DROP, LOOKBACK_H, size=USD, capital=60, target=TP, stop=SL)
+    return {"start": start, "end": end, "cut": cut, "coins": list(data), "first": run(start, cut), "last": run(cut, end),
+            "full": run(start, end)}
+
+
+def backtest_text(rep):
+    import solid_dip_bt as bt
+    if not rep:
+        return "⛔ Backtest do robô BAIXA: não consegui baixar os preços (GeckoTerminal)."
+    d = lambda t: time.strftime("%d/%m/%Y", time.gmtime(t))
+
+    def f(s):
+        n = s["trades"]
+        return ("US$ 60 → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " + str(s["wins"]) + " no alvo +" +
+                format(TP * 100, "g") + "% · " + str(s["stops"]) + " no stop −" + format(SL * 100, "g") + "% · acerto " +
+                (format(s["wins"] / n * 100, ".0f") if n else "0") + "% · abertas " + str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") +
+                ") · drawdown " + format(s["dd"], "g") + "%")
+    L = ["🧪 BACKTEST DO ROBÔ BAIXA (a regra que está no robô real) — " + d(rep["start"]) + " a " + d(rep["end"]),
+         "Moedas: " + ", ".join(rep["coins"]) + " · compra US$ " + format(USD, "g") + " quando cai " + format(DROP * 100, "g") +
+         "% do topo de 7 dias · alvo +" + format(TP * 100, "g") + "% · stop −" + format(SL * 100, "g") + "% · velas de 1 h reais · custo " +
+         format(bt.COST * 100, "g") + "% por lado",
+         "• primeiros 2/3: " + f(rep["first"]), "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
+         "• período todo: " + f(rep["full"])]
+    pc = rep["full"]["per_coin"]
+    if pc:
+        L.append("• por moeda (vendas, lucro): " + ", ".join(c + " " + str(n) + " / " + format(p, "+.2f") for c, (n, p) in sorted(pc.items())))
+    L.append("⚠️ Regra fixa (nada foi escolhido olhando o resultado). Alvo e stop na mesma vela de 1 h contam como stop. "
+             "Passado não garante futuro.")
+    return "\n".join(L)
+
+
+def start_backtest(send, chat):
+    if not _BT.acquire(blocking=False):
+        return "já está rodando"
+
+    def go():
+        try:
+            send(chat, backtest_text(backtest()))
+        except Exception as exc:
+            logging.exception("baixa backtest")
+            send(chat, "⛔ Backtest do robô BAIXA falhou: " + type(exc).__name__)
+        finally:
+            _BT.release()
+    threading.Thread(target=go, daemon=True).start()
+    return ""
