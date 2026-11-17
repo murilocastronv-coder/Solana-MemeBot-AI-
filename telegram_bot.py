@@ -294,7 +294,7 @@ def handle(update):
     __import__("copy_trader").set_mode(False)       # owner: remove everything else, only this robot
     baixa_bot.set_enabled(True)
     send(chat,"🟢 ROBÔ BAIXA LIGADO COM DINHEIRO REAL. O copy trade foi desligado (só esse robô agora).\n"
-     "Ele confere a cada 15 min; quando BP, ZEC, SPCX, HYPE ou NVDAX caírem "+format(baixa_bot.DROP*100,"g")+"% do topo de 7 dias, "
+     "Ele confere a cada 15 min "+str(len(baixa_bot.COINS))+" moedas grandes da Solana ("+", ".join(baixa_bot.COINS)+"); quando uma cair "+format(baixa_bot.DROP*100,"g")+"% do topo de 7 dias, "
      "compra US$ "+format(baixa_bot.USD,"g")+" e vende no +"+format(baixa_bot.TP*100,"g")+"% ou no −"+format(baixa_bot.SL*100,"g")+"%. "
      "Máx. "+str(baixa_bot.MAX_OPEN)+" ordens abertas. Precisa de SOL na carteira (US$ "+format(baixa_bot.USD,"g")+" por compra + US$ "+format(baixa_bot.KEEP_SOL_USD,"g")+" de reserva).\n\n"+baixa_bot.status_text(),keyboard());return
    if action=="bx_off":
