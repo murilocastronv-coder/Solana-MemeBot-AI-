@@ -93,14 +93,14 @@ def enabled():
 
 
 # ---------------------------------------------------------------- data
-RESOLVE_V = 4
+RESOLVE_V = 5                      # 5: wider search (Nov 17)
 
 
 def resolve(get=None, now=None):
     """Coins this robot trades (owner, Nov 17 evening): every Solana coin with 10+ days of life and US$ 70 mil to
     400 mil of liquidity today (the same list as the "all coins" backtest), from GeckoTerminal; mint and pool kept."""
     now = now or time.time()
-    found = all_coins(now, time.time() + 120, get)
+    found = all_coins(now, time.time() + 240, get)
     return {sym: {"mint": c["mint"], "pool": c["pool"], "liq": c["liq"], "created": c["created"]}
             for sym, c in found.items() if c.get("mint") and c.get("pool")}
 
@@ -666,14 +666,20 @@ def _gecko_once(url, deadline):
     return None
 
 
-def all_coins(now, deadline, get=None, pages=6):
-    """Solana coins with >= ALL_MIN_LIQ liquidity and 7+ days today: GeckoTerminal top pools + the big coins."""
+LIST_SORTS = ("h24_volume_usd_desc", "h24_tx_count_desc")     # owner (Nov 17): more coins in the 70-400 mil range
+
+
+def all_coins(now, deadline, get=None, pages=10):
+    """Solana coins in the liquidity range with 10+ days today: GeckoTerminal pool lists (most volume AND most trades,
+    up to 10 pages each = ~400 pools; stops at the deadline)."""
     import solid_dip_bt as bt
     out = {}
-    for page in range(1, pages + 1):
+    for sort, page in [(srt, pg) for srt in LIST_SORTS for pg in range(1, pages + 1)]:
+        if not get and time.time() > deadline:
+            break
         try:
-            d = get(bt.GECKO + "/networks/solana/pools?page=" + str(page) + "&sort=h24_volume_usd_desc") if get else \
-                _gecko_once(bt.GECKO + "/networks/solana/pools?page=" + str(page) + "&sort=h24_volume_usd_desc", deadline)
+            url = bt.GECKO + "/networks/solana/pools?page=" + str(page) + "&sort=" + sort
+            d = get(url) if get else _gecko_once(url, deadline)
         except Exception:
             d = None
         for p in ((d or {}).get("data") or []):
