@@ -144,7 +144,10 @@ class AllCoinsTest(unittest.TestCase):
         import time as _t
         now = 1_800_000_000
         iso = lambda t: _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(t))
-        pools = [{"attributes": {"name": "FROG / SOL", "address": "P1", "reserve_in_usd": "300000", "pool_created_at": iso(now - 300 * 86400)}},
+        pools = [{"attributes": {"name": "FROG / SOL", "address": "P1", "reserve_in_usd": "300000", "pool_created_at": iso(now - 300 * 86400)},
+                  "relationships": {"base_token": {"data": {"id": "solana_FrogMint111pump"}}}},
+                 {"attributes": {"name": "STOCK / SOL", "address": "P6", "reserve_in_usd": "300000", "pool_created_at": iso(now - 300 * 86400)},
+                  "relationships": {"base_token": {"data": {"id": "solana_XsStockMint111"}}}},
                  {"attributes": {"name": "BABY / SOL", "address": "P2", "reserve_in_usd": "500000", "pool_created_at": iso(now - 3 * 86400)}},
                  {"attributes": {"name": "TINY / SOL", "address": "P3", "reserve_in_usd": "50000", "pool_created_at": iso(now - 99 * 86400)}},
                  {"attributes": {"name": "USDC / SOL", "address": "P4", "reserve_in_usd": "9e7", "pool_created_at": iso(now - 900 * 86400)}},
@@ -163,7 +166,7 @@ class AllCoinsTest(unittest.TestCase):
             return {"data": {"attributes": {"ohlcv_list": rows}}}
         found = bb.all_coins(now, now + 999, get)
         self.assertIn("FROG", found)
-        self.assertFalse({"BABY", "TINY", "USDC", "BIG", "JUP"} & set(found))      # > US$ 700 mil is out too
+        self.assertFalse({"BABY", "TINY", "USDC", "BIG", "JUP", "STOCK"} & set(found))      # STOCK: not a Pump.fun coin      # > US$ 700 mil is out too
         rep = bb.backtest_all(now, get)
         self.assertIn("FROG", rep["coins"])
         self.assertGreater(rep["full"]["trades"], 0)
