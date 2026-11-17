@@ -163,3 +163,13 @@ class AllCoinsTest(unittest.TestCase):
         self.assertIn("FROG", rep["coins"])
         self.assertGreater(rep["full"]["trades"], 0)
         self.assertIn("TODAS AS MOEDAS", bb.backtest_all_text(rep))
+
+
+class SolCheckTest(unittest.TestCase):
+    def test_sol_check_uses_live_balance(self):
+        with mock.patch("live_engine.get_address", return_value="W"), \
+                mock.patch("live_order_bridge.get_sol_balance", return_value=int(0.70555e9)):
+            self.assertTrue(bb._sol_ok(72.3))          # 0.7 SOL ~ US$ 51: enough for US$ 23 + US$ 3
+        with mock.patch("live_engine.get_address", return_value="W"), \
+                mock.patch("live_order_bridge.get_sol_balance", return_value=int(0.1e9)):
+            self.assertFalse(bb._sol_ok(72.3))

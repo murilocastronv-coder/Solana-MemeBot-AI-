@@ -208,12 +208,15 @@ def day_pnl(now=None):
 
 
 def _sol_ok(sol_usd):
+    """Enough SOL in the bot wallet for one buy + the reserve. Uses the live engine's own balance call (the old
+    liq_bot/pool_bot helpers were removed from the project: that made this always say 'no SOL')."""
     try:
         import live_engine
-        import liq_bot as lb
-        lam = lb.sol_lamports(__import__("pool_bot")._rpc(), live_engine.get_address())
+        import live_order_bridge as bridge
+        lam = bridge.get_sol_balance(live_engine.get_address())
         return lam / 1e9 * float(sol_usd) >= USD + KEEP_SOL_USD + 0.5
-    except Exception:
+    except Exception as exc:
+        logging.warning("baixa: saldo de SOL indisponível (%s)", type(exc).__name__)
         return False
 
 
