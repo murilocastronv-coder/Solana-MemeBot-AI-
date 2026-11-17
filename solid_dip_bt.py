@@ -1,11 +1,11 @@
-"""Backtest (owner, Nov 17): buy SOLID Solana coins when they are down, sell at +8%, NO stop loss.
+"""Backtest (owner, Nov 17): buy SOLID Solana coins when they are down, sell at +TARGET, stop at -STOP.
+Owner, later: take profit +25% and stop loss -40% (first version: +8%, no stop).
 
 Coins: big, liquid Solana-ecosystem tokens with years of exchange history (no new memecoins).
 Data: 1-hour candles of the last 365 days (Binance; Coinbase if Binance refuses), real prices, nothing invented.
 Rule: when a coin closes DROP% or more below its highest price of the last LOOKBACK hours and the bot holds no
-position in it, buy US$ SIZE at that close; sell the whole position when a later candle reaches entry +TARGET
-(limit sale at exactly +8%). No stop loss: a position that never gets back to +8% stays open and is shown at the
-last price (that is the risk of this strategy). Costs: COST per side (Jupiter fee + slippage on liquid coins).
+position in it, buy US$ SIZE at that close; sell the whole position when a later candle reaches entry +TARGET or
+entry -STOP (stop first when both are inside one candle). Positions still open at the end are shown at the last price. Costs: COST per side (Jupiter fee + slippage on liquid coins).
 Portfolio: US$ CAPITAL, max one position per coin, cash can never go negative. Equity is marked to market every
 hour (drawdown includes the open losses). Choice: first 8 months (training), result on the last 4 months (test).
 """
@@ -22,7 +22,8 @@ COINS = (("SOL", "SOLUSDT", "SOL-USD"), ("JUP", "JUPUSDT", "JUP-USD"), ("BONK", 
          ("WIF", "WIFUSDT", "WIF-USD"), ("JTO", "JTOUSDT", "JTO-USD"), ("RAY", "RAYUSDT", None),
          ("PYTH", "PYTHUSDT", "PYTH-USD"), ("ORCA", "ORCAUSDT", "ORCA-USD"), ("W", "WUSDT", "W-USD"),
          ("RENDER", "RENDERUSDT", "RENDER-USD"))
-TARGET = E("DIP_BT_TARGET", 0.08)
+TARGET = E("DIP_BT_TARGET", 0.25)
+STOP = E("DIP_BT_STOP", 0.40)                  # 0 = no stop loss
 CAPITAL = E("DIP_BT_CAPITAL", 60)
 SIZE = E("DIP_BT_SIZE", 10)
 COST = E("DIP_BT_COST_PER_SIDE", 0.0025)
@@ -54,7 +55,7 @@ def fetch(binance, coinbase, days=DAYS, now=None, get=None):
                        str(cur) + "&endTime=" + str(end * 1000 - 1))
             if not page:
                 break
-            rows += [{"t": int(r[0]) // 1000, "h": float(r[2]), "c": float(r[4])} for r in page]
+            rows += [{"t": int(r[0]) // 1000, "h": float(r[2]), "l": float(r[3]), "c": float(r[4])} for r in page]
             cur = (rows[-1]["t"] + H) * 1000
     except Exception:
         rows = []
@@ -69,7 +70,7 @@ def fetch(binance, coinbase, days=DAYS, now=None, get=None):
                            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stop)))
             except Exception:
                 page = []
-            rows += [{"t": int(r[0]), "h": float(r[2]), "c": float(r[4])} for r in page or []]
+            rows += [{"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "c": float(r[4])} for r in page or []]
             cur = stop
     uniq = {r["t"]: r for r in rows if r["t"] + H <= now}
     return [uniq[t] for t in sorted(uniq)]
@@ -115,14 +116,22 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None):
             last_px[coin] = r["c"]
             p = pos.get(coin)
             if p:
-                if r["h"] >= p["entry"] * (1 + TARGET):
-                    back = p["qty"] * p["entry"] * (1 + TARGET) * (1 - COST)
+                low = r.get("l", r["c"])
+                exit_px, why = None, ""
+                if STOP and low <= p["entry"] * (1 - STOP):
+                    # stop first when both levels are inside the same candle (the cautious assumption); a gap sells lower
+                    stop_px = p["entry"] * (1 - STOP)
+                    exit_px, why = (r["c"] if r["h"] < stop_px else stop_px), "stop"   # whole candle below: sells at its close
+                elif r["h"] >= p["entry"] * (1 + TARGET):
+                    exit_px, why = p["entry"] * (1 + TARGET), "alvo"
+                if exit_px:
+                    back = p["qty"] * exit_px * (1 - COST)
                     cash += back
-                    trades.append({"coin": coin, "opened": p["t"], "closed": t, "pnl": round(back - size, 4),
-                                   "days": round((t - p["t"]) / 86400, 1), "worst": round(p["worst"] * 100, 1)})
+                    trades.append({"coin": coin, "opened": p["t"], "closed": t, "pnl": round(back - size, 4), "exit": why,
+                                   "days": round((t - p["t"]) / 86400, 1), "worst": round(min(p["worst"], low / p["entry"] - 1) * 100, 1)})
                     del pos[coin]
                 else:
-                    p["worst"] = min(p["worst"], r["c"] / p["entry"] - 1)
+                    p["worst"] = min(p["worst"], low / p["entry"] - 1)
                 continue
             top = tp[coin][i]
             if top is not None and r["c"] <= top * (1 - drop):
@@ -141,6 +150,7 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None):
     final = cash + open_val
     closed = sum(t["pnl"] for t in trades)
     return {"final": round(final, 2), "pnl": round(final - capital, 2), "closed_pnl": round(closed, 2), "trades": len(trades),
+            "wins": sum(1 for x in trades if x.get("exit") == "alvo"), "stops": sum(1 for x in trades if x.get("exit") == "stop"),
             "avg_days": round(sum(t["days"] for t in trades) / len(trades), 1) if trades else 0.0,
             "max_days": max((t["days"] for t in trades), default=0.0),
             "worst_during": min((t["worst"] for t in trades), default=0.0),
@@ -196,7 +206,9 @@ def run(now=None, get=None):
 
 def _fmt(s):
     return ("US$ " + format(CAPITAL, "g") + " → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " +
-            str(s["trades"]) + " vendas com +8% (média " + format(s["avg_days"], "g") + " dias, máx. " + format(s["max_days"], "g") +
+            str(s["wins"]) + " no alvo +" + format(TARGET * 100, "g") + "% · " + str(s["stops"]) + " no stop −" + format(STOP * 100, "g") +
+            "% · acerto " + (format(s["wins"] / s["trades"] * 100, ".0f") if s["trades"] else "0") + "% (média " + format(s["avg_days"], "g") +
+            " dias, máx. " + format(s["max_days"], "g") +
             " dias) · ainda presas: " + str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") + ") · pior queda segurando " +
             format(s["worst_during"], "g") + "% · drawdown " + format(s["dd"], "g") + "%")
 
@@ -206,7 +218,7 @@ def text(rep):
         return "⛔ Backtest compra na baixa: não consegui baixar as velas (Binance e Coinbase)."
     b = rep["best"]
     d = lambda t: time.strftime("%d/%m/%Y", time.gmtime(t))
-    L = ["📉 BACKTEST: COMPRA NA BAIXA, VENDE COM +8%, SEM STOP — " + d(rep["start"]) + " a " + d(rep["end"]),
+    L = ["📉 BACKTEST: COMPRA NA BAIXA, ALVO +" + format(TARGET * 100, "g") + "%, " + ("STOP −" + format(STOP * 100, "g") + "%" if STOP else "SEM STOP") + " — " + d(rep["start"]) + " a " + d(rep["end"]),
          "Moedas sólidas da Solana: " + ", ".join(rep["coins"]) + (" (sem dados: " + ", ".join(rep["missing"]) + ")" if rep["missing"] else "") +
          " · velas de 1 h reais · US$ " + format(SIZE, "g") + " por compra, 1 por moeda, capital US$ " + format(CAPITAL, "g") +
          " · custo " + format(COST * 100, "g") + "% por lado",
@@ -214,18 +226,18 @@ def text(rep):
          "🏆 Melhor no treino: comprar quando cai " + format(b["drop"] * 100, "g") + "% do topo de " + b["lookback"],
          "  • treino: " + _fmt(b["train"]), "  • TESTE (4 últimos meses): " + _fmt(b["test"]), "  • ano todo: " + _fmt(b["full"])]
     if b["full"]["open"]:
-        L.append("  • presas no fim: " + ", ".join(o["coin"] + " " + format(o["pct"], "+.0f") + "% desde " + d(o["since"]) for o in b["full"]["open"]))
+        L.append("  • abertas no fim: " + ", ".join(o["coin"] + " " + format(o["pct"], "+.0f") + "% desde " + d(o["since"]) for o in b["full"]["open"]))
     if b["full"]["per_coin"]:
         L.append("  • por moeda (vendas, lucro): " + ", ".join(c + " " + str(n) + " / " + format(p, "+.2f") for c, (n, p) in sorted(b["full"]["per_coin"].items())))
     L.append("📌 Regra simples (cai 10% do topo de 7 dias), ano todo: " + _fmt(rep["simple"]))
     if rep.get("hold_sol_full") is not None:
         L.append("⚖️ Só comprar SOL e segurar: ano " + format(rep["hold_sol_full"], "+.2f") + " · últimos 4 meses " +
                  format(rep["hold_sol_test"] or 0, "+.2f"))
-    L.append("🔢 Todas as combinações no treino (queda · período: resultado, vendas, presas):")
+    L.append("🔢 Todas as combinações no treino (queda · período: resultado, vendas, ainda abertas):")
     for drop, lb, pnl, n, op in rep["grid"][:8]:
         L.append("  • " + str(drop) + "% · " + lb + ": " + format(pnl, "+.2f") + " · " + str(n) + " vendas · presas " + format(op, "+.2f"))
-    L.append("⚠️ Sem stop: o lucro de cada venda é pequeno (+8%) e uma moeda que cai muito fica presa e segura o dinheiro. "
-             "O resultado inclui as presas pelo preço de hoje. Passado não garante futuro.")
+    L.append("⚠️ Quando o alvo e o stop cabem na mesma vela de 1 h, conto como stop (o caso pior). As posições ainda abertas entram "
+             "pelo preço de hoje. Passado não garante futuro.")
     return "\n".join(L)
 
 

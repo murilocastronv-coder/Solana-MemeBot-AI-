@@ -140,7 +140,7 @@ def keyboard():
   [{"text":"👥 Copy trade: status","callback_data":"copy_status"}],
   [{"text":"📋 Carteiras copiadas","callback_data":"copy_wallets"},{"text":"📦 Posições","callback_data":"copy_positions"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
-  [{"text":"📉 Backtest: compra na baixa +8%","callback_data":"dip_bt"}],
+  [{"text":"📉 Backtest: compra na baixa (alvo 25%, stop 40%)","callback_data":"dip_bt"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -286,7 +286,7 @@ def handle(update):
   import solid_dip_bt
   why=solid_dip_bt.start(send,chat)
   send(chat,"⛔ "+why if why else "📉 Backtest rodando: 1 ano de velas reais de SOL, JUP, BONK, WIF, JTO, RAY, PYTH, ORCA, W e RENDER. "
-   "Compra quando cai do topo, vende com +8%, sem stop. Resultado em ~1 min (só teste, nenhuma ordem real).",keyboard());return
+   "Compra quando cai do topo, vende no alvo +25% ou no stop −40%. Resultado em ~1 min (só teste, nenhuma ordem real).",keyboard());return
  if action in ("copy_positions","/posicoes_copy"):
   import copy_trader as ct
   try:
