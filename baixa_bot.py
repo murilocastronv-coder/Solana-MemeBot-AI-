@@ -580,3 +580,36 @@ def start_backtest_all(send, chat):
             _BT.release()
     threading.Thread(target=go, daemon=True).start()
     return ""
+
+
+def wallet_text(sol_usd=None):
+    """The wallet THIS robot buys and sells with: address, SOL, US$ value, coins held (owner, Nov 17)."""
+    import live_engine
+    import live_order_bridge as bridge
+    addr = live_engine.get_address()
+    if not addr:
+        return "⛔ A carteira do robô ainda não foi criada."
+    try:
+        px = float(sol_usd if sol_usd is not None else __import__("copy_trader")._sol_usd())
+    except Exception:
+        px = 0.0
+    try:
+        sol = bridge.get_sol_balance(addr) / 1e9
+        sol_line = "◎ " + format(sol, ".4f") + " SOL" + (" (≈ US$ " + format(sol * px, ",.2f") + ")" if px else "")
+        room = int(max(0.0, sol * px - KEEP_SOL_USD) // USD) if px else 0
+    except Exception as exc:
+        sol_line, room = "◎ saldo de SOL indisponível agora (" + type(exc).__name__ + ")", 0
+    coins = []
+    try:
+        import wallet_holdings
+        held = wallet_holdings.coins_held(addr) or {}          # refreshed every 30 s in the background
+        coins = sorted(held.items(), key=lambda kv: -kv[1])
+    except Exception:
+        pass
+    L = ["💰 CARTEIRA DO ROBÔ BAIXA (é com ela que ele compra e vende)", addr, "https://solscan.io/account/" + addr, sol_line]
+    if coins:
+        L.append("🪙 Moedas: " + ", ".join(m[:4] + "… US$ " + format(v, ",.2f") for m, v in coins[:8]))
+    L.append("🛒 Dá para " + str(min(room, MAX_OPEN)) + " compra(s) de US$ " + format(USD, "g") + " agora (deixa US$ " +
+             format(KEEP_SOL_USD, "g") + " em SOL)." if px else "🛒 Sem preço do SOL agora para calcular as compras.")
+    L.append("Confira se esse endereço é o mesmo da carteira onde você vê o seu SOL (por exemplo, no Phantom).")
+    return "\n".join(L)

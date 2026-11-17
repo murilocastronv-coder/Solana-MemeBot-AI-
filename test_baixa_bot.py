@@ -173,3 +173,14 @@ class SolCheckTest(unittest.TestCase):
         with mock.patch("live_engine.get_address", return_value="W"), \
                 mock.patch("live_order_bridge.get_sol_balance", return_value=int(0.1e9)):
             self.assertFalse(bb._sol_ok(72.3))
+
+
+class WalletTextTest(unittest.TestCase):
+    def test_wallet_text(self):
+        with mock.patch("live_engine.get_address", return_value="BotWallet111"), \
+                mock.patch("live_order_bridge.get_sol_balance", return_value=int(0.70555e9)), \
+                mock.patch("wallet_holdings.coins_held", return_value={"MintAAAA": 5.0}):
+            txt = bb.wallet_text(sol_usd=72.3)
+        self.assertIn("BotWallet111", txt)
+        self.assertIn("0.7056 SOL", txt)
+        self.assertIn("2 compra(s)", txt)
