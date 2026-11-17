@@ -163,7 +163,7 @@ class AllCoinsTest(unittest.TestCase):
             return {"data": {"attributes": {"ohlcv_list": rows}}}
         found = bb.all_coins(now, now + 999, get)
         self.assertIn("FROG", found)
-        self.assertFalse({"BABY", "TINY", "USDC", "BIG", "JUP"} & set(found))      # > US$ 400 mil is out too
+        self.assertFalse({"BABY", "TINY", "USDC", "BIG", "JUP"} & set(found))      # > US$ 700 mil is out too
         rep = bb.backtest_all(now, get)
         self.assertIn("FROG", rep["coins"])
         self.assertGreater(rep["full"]["trades"], 0)

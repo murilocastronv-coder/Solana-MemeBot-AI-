@@ -93,7 +93,7 @@ def enabled():
 
 
 # ---------------------------------------------------------------- data
-RESOLVE_V = 5                      # 5: wider search (Nov 17)
+RESOLVE_V = 6                      # 5: wider search; 6: liquidity up to US$ 700 mil (Nov 17)
 
 
 def resolve(get=None, now=None):
@@ -624,7 +624,7 @@ def start_backtest(send, chat):
 # ---------------------------------------------------------------- quick backtest on ALL coins (owner, Nov 17)
 ALL_MIN_LIQ = E("BAIXA_ALL_MIN_LIQ", 70_000)          # owner (Nov 17, later): US$ 70 mil, 10+ days, longer test
 ALL_MIN_AGE_D = int(E("BAIXA_ALL_MIN_AGE_D", 10))
-ALL_MAX_LIQ = E("BAIXA_ALL_MAX_LIQ", 400_000)            # owner (Nov 17, later): liquidity between US$ 70 mil and 400 mil
+ALL_MAX_LIQ = E("BAIXA_ALL_MAX_LIQ", 700_000)            # owner (Nov 17, later): liquidity between US$ 70 mil and 700 mil
 ALL_DAYS = int(E("BAIXA_ALL_DAYS", 166))           # one GeckoTerminal call of 1000 4-hour candles = 166 days
 ALL_DEADLINE_S = E("BAIXA_ALL_SECONDS", 170)
 # owner (Nov 17, later): in this test, no take profit - a trailing stop armed at +10% that sells 10% below the top;
