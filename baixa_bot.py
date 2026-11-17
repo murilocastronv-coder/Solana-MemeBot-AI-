@@ -10,6 +10,7 @@ mode "baixa"); the exit monitor sells at +TP or at -SL (live_exit_monitor). Max 
 leaves KEEP_SOL_USD in SOL, stops buying for the day after DAILY_LOSS. Off until the owner presses LIGAR.
 """
 import json
+import os
 import logging
 import threading
 import time
@@ -93,7 +94,10 @@ def enabled():
 
 
 # ---------------------------------------------------------------- data
-RESOLVE_V = 6                      # 5: wider search; 6: liquidity up to US$ 700 mil (Nov 17)
+RESOLVE_V = 7                      # 5: wider search; 6: liquidity up to US$ 700 mil; 7: only Pump.fun coins (Nov 17)
+# owner (Nov 17): only Pump.fun coins (mint ends in 'pump'): fixed supply, no mint/freeze authority, liquidity burned
+# when they graduate; 10+ days of life. The anti-scam check still runs before every buy.
+ONLY_PUMP = os.getenv("BAIXA_ONLY_PUMP", "true").strip().lower() != "false"
 
 
 def resolve(get=None, now=None):
@@ -521,7 +525,7 @@ def status_text():
     L = ["📉 ROBÔ BAIXA — " + ("🟢 LIGADO (💵 DINHEIRO REAL)" if d.get("enabled") else "⏸️ DESLIGADO"),
          "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · sem alvo: stop móvel liga em +" +
          format(ARM * 100, "g") + "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · " + ("stop −" + format(SL * 100, "g") + "%" if SL else "SEM stop") +
-         " · moedas com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez US$ " + format(ALL_MIN_LIQ / 1000, "g") + "–" + format(ALL_MAX_LIQ / 1000, "g") +
+         " · só moedas da Pump.fun com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez US$ " + format(ALL_MIN_LIQ / 1000, "g") + "–" + format(ALL_MAX_LIQ / 1000, "g") +
          " mil · máx. " + str(MAX_OPEN) + " abertas · deixa US$ " + format(KEEP_SOL_USD, "g") + " em SOL",
          "🛡️ Anti-golpe antes de cada compra: criador sem poder de criar/congelar, 10 maiores donos, teste de venda na Jupiter, "
          "Token-2022 sem armadilhas, RugCheck sem perigo e liquidez travada (se não der para checar, não compra)",
@@ -696,10 +700,12 @@ def all_coins(now, deadline, get=None, pages=10):
                 continue
             if now - created < ALL_MIN_AGE_D * 86400:
                 continue
+            base = ((((p.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id") or "")
+            mint = base[len("solana_"):] if base.startswith("solana_") else ""
+            if ONLY_PUMP and not mint.endswith("pump"):
+                continue                                      # not a Pump.fun coin
             if sym not in out or liq > out[sym]["liq"]:
-                base = ((((p.get("relationships") or {}).get("base_token") or {}).get("data") or {}).get("id") or "")
-                out[sym] = {"pool": a.get("address"), "liq": liq, "created": created,
-                            "mint": base[len("solana_"):] if base.startswith("solana_") else ""}
+                out[sym] = {"pool": a.get("address"), "liq": liq, "created": created, "mint": mint}
     return out                                            # the big coins have far more than ALL_MAX_LIQ: not in this test
 
 
