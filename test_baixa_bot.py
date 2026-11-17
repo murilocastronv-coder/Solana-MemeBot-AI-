@@ -57,6 +57,16 @@ class BaixaTest(unittest.TestCase):
         self.assertEqual(list(got), ["BP"])
         self.assertEqual(got["BP"]["mint"], "Real")
 
+    def test_majors_only_by_official_mint(self):
+        jup = bb.MAJORS["JUP"]
+        pairs = [{"chainId": "solana", "baseToken": {"symbol": "JUP", "address": jup}, "quoteToken": {"symbol": "SOL"}, "pairAddress": "PJ",
+                  "liquidity": {"usd": 5e6}, "volume": {"h24": 2e6}, "marketCap": 1e9}]
+        fake = {"pairs": [{"chainId": "solana", "baseToken": {"symbol": "JUP", "address": "FakeJup"}, "quoteToken": {"symbol": "SOL"},
+                           "pairAddress": "PX", "liquidity": {"usd": 9e6}, "volume": {"h24": 9e6}, "marketCap": 1e9}]}
+        got = bb.resolve(get=lambda url: pairs if "/tokens/v1/" in url else fake)
+        self.assertEqual(got["JUP"]["mint"], jup)                 # the fake copy found by name is never used
+        self.assertNotIn("ZEC", bb.COINS)
+
     def test_max_two_open_of_23(self):
         self.assertEqual((bb.USD, bb.MAX_OPEN), (23, 2))
         bb._load()["tokens"] = {s: {"mint": "M" + s, "pool": "P" + s, "liq": 1e6} for s in ("BP", "ZEC", "SPCX", "HYPE")}

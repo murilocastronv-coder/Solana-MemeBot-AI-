@@ -2,8 +2,8 @@
 
 Owner's decision, after being shown that this rule LOST money in the backtest's out-of-sample test (-US$ 10.18, no
 target hit) and that the coin list was not memecoins: run it with real money anyway, only this robot.
-Coins: the ones the backtest really bought (BP, ZEC, SPCX, HYPE, NVDAX); USD1 (stablecoin, never +25%) and ONYC
-(yield token) left out. Mints are found on GeckoTerminal (Solana pool with the most liquidity, >= US$ 250k).
+Coins: the big Solana coins (MAJORS, official mints) plus BP, SPCX and NVDAX; the pool of each is the one with the most
+real 24 h volume on DexScreener (paired with SOL/USDC/USDT, realistic liquidity).
 Rule (same as the backtest winner): every CYCLE_S, hourly candles of each coin; when the price is DROP below the
 highest price of the last LOOKBACK_H hours and the bot holds none of that coin, buy US$ USD (Jupiter, live engine,
 mode "baixa"); the exit monitor sells at +TP or at -SL (live_exit_monitor). Max one position per coin, always
@@ -17,7 +17,19 @@ import time
 import signals as sg
 
 E = sg._f
-COINS = ("BP", "ZEC", "SPCX", "HYPE", "NVDAX")
+# owner (Nov 17, later): all the big Solana coins. Official mints written here (never found by name, so a fake
+# copy with the same symbol can't be bought); BP, SPCX and NVDAX (they traded in the backtest) are found by name with
+# the volume/liquidity checks. ZEC and HYPE left out (their Solana pools barely trade).
+MAJORS = {"JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+          "WIF": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", "JTO": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
+          "RAY": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R", "PYTH": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+          "ORCA": "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE", "W": "85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ",
+          "RENDER": "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof", "PENGU": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv",
+          "TRUMP": "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN", "POPCAT": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+          "FARTCOIN": "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump"}
+BY_NAME = ("BP", "SPCX", "NVDAX")
+COINS = tuple(MAJORS) + BY_NAME
+BINANCE = {"JUP", "BONK", "WIF", "JTO", "RAY", "PYTH", "ORCA", "W", "RENDER", "PENGU", "TRUMP"}   # hourly candles from Binance
 DROP = E("BAIXA_DROP", 0.05)
 LOOKBACK_H = int(E("BAIXA_LOOKBACK_H", 168))
 TP = E("BAIXA_TP", 0.08)                    # owner (Nov 17, later): +8% target, -20% stop (was +25% / -40%)
@@ -77,7 +89,7 @@ def enabled():
 
 
 # ---------------------------------------------------------------- data
-RESOLVE_V = 2
+RESOLVE_V = 3
 
 
 def resolve(get=None):
@@ -86,16 +98,29 @@ def resolve(get=None):
     above 5x its market value, and >= MIN_VOL_24H of real 24 h volume; the one with the MOST VOLUME wins."""
     get = get or sg._get
     out = {}
+    by_mint = {}
+    mints = list(MAJORS.values())
+    for i in range(0, len(mints), 30):
+        try:
+            for p in get(sg.DEX + "/tokens/v1/solana/" + ",".join(mints[i:i + 30])) or []:
+                by_mint.setdefault((p.get("baseToken") or {}).get("address"), []).append(p)
+        except Exception as exc:
+            logging.info("baixa resolve majors: %s", type(exc).__name__)
     for sym in COINS:
         try:
-            rows = (get(sg.DEX + "/latest/dex/search?q=" + sym) or {}).get("pairs") or []
+            if sym in MAJORS:
+                rows = by_mint.get(MAJORS[sym], [])
+            else:
+                rows = (get(sg.DEX + "/latest/dex/search?q=" + sym) or {}).get("pairs") or []
         except Exception as exc:
             logging.info("baixa resolve %s: %s", sym, type(exc).__name__)
             continue
         best = None
         for p in rows:
             b, q = p.get("baseToken") or {}, p.get("quoteToken") or {}
-            if p.get("chainId") != "solana" or str(b.get("symbol") or "").upper() != sym or not b.get("address"):
+            if p.get("chainId") != "solana" or not b.get("address"):
+                continue
+            if (b["address"] != MAJORS[sym]) if sym in MAJORS else (str(b.get("symbol") or "").upper() != sym):
                 continue
             if str(q.get("symbol") or "").upper() not in ("SOL", "WSOL", "USDC", "USDT"):
                 continue
@@ -111,6 +136,19 @@ def resolve(get=None):
         else:
             logging.info("baixa resolve %s: nenhuma pool confiável", sym)
     return out
+
+
+def candles(sym, tk, days, now=None, get=None):
+    """Hourly candles: Binance for the big coins listed there (stable source), else the GeckoTerminal pool."""
+    import solid_dip_bt as bt
+    if sym in BINANCE and get is None:
+        try:
+            cs = bt.fetch(sym + "USDT", None, days=days, now=now)
+            if len(cs) > LOOKBACK_H:
+                return cs
+        except Exception as exc:
+            logging.info("baixa binance %s: %s", sym, type(exc).__name__)
+    return bt.gecko_hours(tk["pool"], days, now, get)
 
 
 def signal(candles, drop=None, lookback=None):
@@ -182,7 +220,7 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
             break                                           # owner: only MAX_OPEN orders open at a time
         if tk["mint"] in held:
             continue
-        cs = bt.gecko_hours(tk["pool"], (LOOKBACK_H + 24) // 24 + 1, now, get)
+        cs = candles(sym, tk, (LOOKBACK_H + 24) // 24 + 1, now, get)
         ok, px, top = signal(cs)
         if not ok:
             continue
@@ -258,7 +296,7 @@ def backtest(now=None, get=None, progress=None):
                  " dias de preços (o GeckoTerminal limita as consultas; pode levar alguns minutos)…")
     data = {}
     for sym, tk in tokens.items():
-        cs = bt.gecko_hours(tk["pool"], BT_DAYS, now, get)
+        cs = candles(sym, tk, BT_DAYS, now, get)
         logging.info("baixa backtest %s: %s velas", sym, len(cs))
         if len(cs) > LOOKBACK_H + 24:
             data[sym] = cs
