@@ -316,8 +316,15 @@ def handle(update):
     send(chat,"⏹️ Robô BAIXA desligado: não compra mais. As posições abertas continuam com alvo e stop.\n\n"+baixa_bot.status_text(),keyboard());return
    if action=="bx_pos":
     import live_trade_state as st
-    ps=[(m,p) for m,p in st._load()["positions"].items() if p.get("mode")=="baixa"]
-    send(chat,"📦 Posições do robô BAIXA: "+(str(len(ps))+"\n"+"\n".join("• "+str(p.get("symbol") or m[:6])+" · custo US$ "+format(float(p.get("cost_usd") or 0),".2f") for m,p in ps) if ps else "nenhuma aberta"),keyboard());return
+    ps=list(st._load()["positions"].items())          # every open position (none is hidden)
+    lines=["📦 Posições abertas: "+str(len(ps))+"/"+str(baixa_bot.MAX_OPEN)]
+    for m,p in ps:
+     peak=float(p.get("peak_ratio") or 0)
+     lines.append("• "+str(p.get("symbol") or m[:6])+(" (robô BAIXA)" if p.get("mode")=="baixa" else " ("+str(p.get("mode") or "?")+")")+
+      " · custo US$ "+format(float(p.get("cost_usd") or 0),".2f")+(" · topo "+format((peak-1)*100,"+.1f")+"%" if peak else "")+
+      " · aberta há "+format((time.time()-float(p.get("opened_at") or time.time()))/3600,".1f")+" h\n  https://dexscreener.com/solana/"+m)
+    if not ps:lines.append("nenhuma")
+    send(chat,"\n".join(lines),keyboard());return
    send(chat,baixa_bot.status_text(),keyboard());return
   except Exception as exc:send(chat,"⛔ Robô BAIXA: "+type(exc).__name__+": "+str(exc)[:200],keyboard());return
  if action=="dip_bt_meme":
@@ -571,7 +578,7 @@ def startup_notice():
  reason=live_engine.why_stopped()
  send(chat,"🔄 Bot reiniciado (deploy). Estado salvo recuperado:\n"+
   ("🟢 Robô LIGADO e operando" if reason is None else "🔴 Robô parado: "+reason)+
-  "\n📦 Posições abertas: "+str(st["positions"])+"/"+str(trade_state.MAX_POSITIONS)+" (venda automática continua)"+
+  "\n📦 Posições abertas: "+str(st["positions"])+"/"+str(__import__("baixa_bot").MAX_OPEN)+" (venda automática continua)"+
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 HEARTBEAT={"at":0.0,"step":"iniciando"}
 def beat(step):
