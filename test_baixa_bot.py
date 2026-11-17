@@ -41,6 +41,18 @@ class BaixaTest(unittest.TestCase):
             self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150), [])   # one per coin
         self.assertIn("Backtest do robô", bb.status_text())
 
+    def test_max_two_open_of_23(self):
+        self.assertEqual((bb.USD, bb.MAX_OPEN), (23, 2))
+        bb._load()["tokens"] = {s: {"mint": "M" + s, "pool": "P" + s, "liq": 1e6} for s in ("BP", "ZEC", "SPCX", "HYPE")}
+        bb._load()["resolved_at"] = 1e12
+        bb.set_enabled(True)
+        bought = []
+        buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
+        with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
+                mock.patch.object(bb, "_open", return_value={"MZEC"}), mock.patch.object(bb, "day_pnl", return_value=0):
+            got = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150)
+        self.assertEqual(len(got), 1)                              # 1 already open + 1 new = 2
+
     def test_exit_monitor_uses_the_rule(self):
         import live_exit_monitor as lem
         pos = {"mode": "baixa", "cost_usd": 10, "peak_ratio": 1.0}

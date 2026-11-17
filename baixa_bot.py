@@ -22,7 +22,8 @@ DROP = E("BAIXA_DROP", 0.05)
 LOOKBACK_H = int(E("BAIXA_LOOKBACK_H", 168))
 TP = E("BAIXA_TP", 0.08)                    # owner (Nov 17, later): +8% target, -20% stop (was +25% / -40%)
 SL = E("BAIXA_SL", 0.20)
-USD = E("BAIXA_USD", 10)
+USD = E("BAIXA_USD", 23)                    # owner (Nov 17, later): US$ 23 per order
+MAX_OPEN = int(E("BAIXA_MAX_OPEN", 2))       # owner: at most 2 orders open at a time
 KEEP_SOL_USD = E("BAIXA_KEEP_SOL_USD", 3)
 DAILY_LOSS = E("BAIXA_DAILY_LOSS_USD", 20)
 MIN_LIQ = E("BAIXA_MIN_LIQ", 250_000)
@@ -165,6 +166,8 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
     held = _open()
     bought = []
     for sym, tk in (d.get("tokens") or {}).items():
+        if len(held) + len(bought) >= MAX_OPEN:
+            break                                           # owner: only MAX_OPEN orders open at a time
         if tk["mint"] in held:
             continue
         cs = bt.gecko_hours(tk["pool"], (LOOKBACK_H + 24) // 24 + 1, now, get)
@@ -204,10 +207,10 @@ def status_text():
     L = ["📉 ROBÔ BAIXA — " + ("🟢 LIGADO (💵 DINHEIRO REAL)" if d.get("enabled") else "⏸️ DESLIGADO"),
          "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · vende no alvo +" +
          format(TP * 100, "g") + "% ou no stop −" + format(SL * 100, "g") + "% · 1 posição por moeda · deixa US$ " + format(KEEP_SOL_USD, "g") +
-         " em SOL · para no dia em que perder US$ " + format(DAILY_LOSS, "g"),
+         " em SOL · máx. " + str(MAX_OPEN) + " abertas · para no dia em que perder US$ " + format(DAILY_LOSS, "g"),
          "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil)"
                                    for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
-         "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + str(len(_open())),
+         "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + str(len(_open())) + "/" + str(MAX_OPEN),
          "🧪 Veja o resultado dessa regra no passado em 🧪 Backtest do robô."]
     for x in (d.get("log") or [])[-5:]:
         L.append("• " + x)
