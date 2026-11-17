@@ -185,6 +185,10 @@ def run(now=None, get=None):
             missing.append(coin)
     if not data:
         return None
+    return analyse(data, missing)
+
+
+def analyse(data, missing=(), kind="solid", extra=None):
     start = min(cs[0]["t"] for cs in data.values())
     end = max(cs[-1]["t"] for cs in data.values()) + H
     cut = start + (end - start) * 8 // 12
@@ -198,7 +202,7 @@ def run(now=None, get=None):
     test = simulate(data, cut, end, best[1], best[2])
     full = simulate(data, start, end, best[1], best[2])
     simple = simulate(data, start, end, 0.10, 168)
-    return {"start": start, "end": end, "cut": cut, "coins": list(data), "missing": missing,
+    return {"start": start, "end": end, "cut": cut, "coins": list(data), "missing": list(missing), "kind": kind, "extra": extra or {},
             "best": {"drop": best[1], "lookback": best[3], "train": best[4], "test": test, "full": full},
             "simple": simple, "grid": [(round(g[1] * 100), g[3], g[0], g[4]["trades"], g[4]["open_pnl"]) for g in grid],
             "hold_sol_test": hold_sol(data, cut, end), "hold_sol_full": hold_sol(data, start, end)}
@@ -219,35 +223,150 @@ def text(rep):
     b = rep["best"]
     d = lambda t: time.strftime("%d/%m/%Y", time.gmtime(t))
     L = ["📉 BACKTEST: COMPRA NA BAIXA, ALVO +" + format(TARGET * 100, "g") + "%, " + ("STOP −" + format(STOP * 100, "g") + "%" if STOP else "SEM STOP") + " — " + d(rep["start"]) + " a " + d(rep["end"]),
-         "Moedas sólidas da Solana: " + ", ".join(rep["coins"]) + (" (sem dados: " + ", ".join(rep["missing"]) + ")" if rep["missing"] else "") +
+         ("Memecoins da Solana (liquidez ≥ US$ " + format(MEME_MIN_LIQ, ",.0f") + " hoje, compra só com 7+ dias de vida): " if rep.get("kind") == "meme"
+          else "Moedas sólidas da Solana: ") + ", ".join(rep["coins"]) + (" (sem dados: " + ", ".join(rep["missing"]) + ")" if rep["missing"] else "") +
          " · velas de 1 h reais · US$ " + format(SIZE, "g") + " por compra, 1 por moeda, capital US$ " + format(CAPITAL, "g") +
          " · custo " + format(COST * 100, "g") + "% por lado",
-         "Escolhe a queda e o período nos 8 primeiros meses, confere nos 4 últimos (fora da amostra).",
+         "Escolhe a queda e o período nos primeiros 2/3 do tempo, confere no último 1/3 (" + d(rep["cut"]) + " a " + d(rep["end"]) +
+         ", fora da amostra).",
          "🏆 Melhor no treino: comprar quando cai " + format(b["drop"] * 100, "g") + "% do topo de " + b["lookback"],
-         "  • treino: " + _fmt(b["train"]), "  • TESTE (4 últimos meses): " + _fmt(b["test"]), "  • ano todo: " + _fmt(b["full"])]
+         "  • treino: " + _fmt(b["train"]), "  • TESTE (último 1/3): " + _fmt(b["test"]), "  • período todo: " + _fmt(b["full"])]
     if b["full"]["open"]:
         L.append("  • abertas no fim: " + ", ".join(o["coin"] + " " + format(o["pct"], "+.0f") + "% desde " + d(o["since"]) for o in b["full"]["open"]))
     if b["full"]["per_coin"]:
         L.append("  • por moeda (vendas, lucro): " + ", ".join(c + " " + str(n) + " / " + format(p, "+.2f") for c, (n, p) in sorted(b["full"]["per_coin"].items())))
-    L.append("📌 Regra simples (cai 10% do topo de 7 dias), ano todo: " + _fmt(rep["simple"]))
+    L.append("📌 Regra simples (cai 10% do topo de 7 dias), período todo: " + _fmt(rep["simple"]))
     if rep.get("hold_sol_full") is not None:
-        L.append("⚖️ Só comprar SOL e segurar: ano " + format(rep["hold_sol_full"], "+.2f") + " · últimos 4 meses " +
+        L.append("⚖️ Só comprar SOL e segurar: período todo " + format(rep["hold_sol_full"], "+.2f") + " · último 1/3 " +
                  format(rep["hold_sol_test"] or 0, "+.2f"))
     L.append("🔢 Todas as combinações no treino (queda · período: resultado, vendas, ainda abertas):")
     for drop, lb, pnl, n, op in rep["grid"][:8]:
         L.append("  • " + str(drop) + "% · " + lb + ": " + format(pnl, "+.2f") + " · " + str(n) + " vendas · presas " + format(op, "+.2f"))
+    if rep.get("kind") == "meme":
+        L.append("⚠️ VIÉS DE SOBREVIVÊNCIA: só entram memecoins que AINDA têm ≥ US$ " + format(MEME_MIN_LIQ, ",.0f") + " de liquidez hoje; "
+                 "as que morreram no caminho não aparecem, então o resultado real tende a ser PIOR que este. "
+                 "Liquidez histórica não existe no GeckoTerminal (filtro só pela liquidez de hoje).")
     L.append("⚠️ Quando o alvo e o stop cabem na mesma vela de 1 h, conto como stop (o caso pior). As posições ainda abertas entram "
              "pelo preço de hoje. Passado não garante futuro.")
     return "\n".join(L)
 
 
-def start(send, chat):
+# ---------------------------------------------------------------- memecoins (owner, Nov 17)
+MEME_MIN_LIQ = E("DIP_BT_MEME_MIN_LIQ", 250_000)
+MEME_MIN_AGE_D = 7
+MEME_DAYS = int(E("DIP_BT_MEME_DAYS", 180))
+MEME_MAX = int(E("DIP_BT_MEME_MAX", 25))
+GECKO = "https://api.geckoterminal.com/api/v2"
+NOT_MEME = {"SOL", "WSOL", "USDC", "USDT", "USDS", "PYUSD", "USDG", "EURC", "JUP", "JTO", "RAY", "PYTH", "ORCA", "W", "RENDER",
+            "JLP", "MSOL", "JITOSOL", "BSOL", "INF", "JUPSOL", "BBSOL", "HSOL", "CBBTC", "WBTC", "ETH", "WETH", "KMNO", "DRIFT",
+            "TNSR", "HNT", "MOBILE", "IO", "ZEUS", "CLOUD", "SONIC", "MPLX", "SAMO", "BTC", "XBTC", "LBTC", "SYRUPUSDC", "ONDO"}
+_gk = [0.0]
+
+
+def _gecko(url, get=None):
+    """GeckoTerminal free API (~30 calls/min): spaced 2.3 s, waits and retries on 429."""
+    if get:
+        return get(url)
+    for _ in range(4):
+        wait = _gk[0] + 2.3 - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _gk[0] = time.time()
+        r = _http.get(url, timeout=20, headers={"Accept": "application/json", "User-Agent": "DipBacktest/1.0"})
+        if r.status_code == 429:
+            time.sleep(30)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise RuntimeError("GeckoTerminal ocupado (429)")
+
+
+def meme_pools(now=None, get=None, pages=10):
+    """Today's Solana memecoin pools with liquidity >= MEME_MIN_LIQ and created 7+ days ago (best pool per coin)."""
+    now = now or time.time()
+    best = {}
+    for page in range(1, pages + 1):
+        try:
+            rows = (_gecko(GECKO + "/networks/solana/pools?page=" + str(page) + "&sort=h24_volume_usd_desc", get) or {}).get("data") or []
+        except Exception as exc:
+            logging.info("dip meme pools p%s: %s", page, type(exc).__name__)
+            break
+        for p in rows:
+            a = p.get("attributes") or {}
+            name = str(a.get("name") or "")
+            sym = name.split("/")[0].strip().upper()
+            quote = name.split("/")[-1].strip().upper() if "/" in name else ""
+            liq = float(a.get("reserve_in_usd") or 0)
+            try:
+                created = time.mktime(time.strptime(str(a.get("pool_created_at"))[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+            except Exception:
+                continue
+            if not sym or sym in NOT_MEME or quote not in ("SOL", "WSOL", "USDC", "USDT") or liq < MEME_MIN_LIQ:
+                continue
+            if now - created < MEME_MIN_AGE_D * 86400:
+                continue
+            if sym not in best or liq > best[sym]["liq"]:
+                best[sym] = {"sym": sym, "pool": a.get("address"), "liq": liq, "created": created}
+    return sorted(best.values(), key=lambda x: -x["liq"])[:MEME_MAX]
+
+
+def gecko_hours(pool, days, now=None, get=None):
+    """Hourly candles (oldest first) of the last `days` days from GeckoTerminal, paged 1000 at a time."""
+    now = int(now or time.time())
+    start = now - days * 86400
+    out, before = {}, now
+    for _ in range(days * 24 // 1000 + 2):
+        try:
+            d = _gecko(GECKO + "/networks/solana/pools/" + pool + "/ohlcv/hour?aggregate=1&limit=1000&currency=usd&before_timestamp=" +
+                       str(before), get)
+        except Exception as exc:
+            logging.info("dip meme ohlcv: %s", type(exc).__name__)
+            break
+        rows = ((d or {}).get("data") or {}).get("attributes", {}).get("ohlcv_list") or []
+        if not rows:
+            break
+        for r in rows:
+            t = int(r[0])
+            if t >= start and t + H <= now:
+                out[t] = {"t": t, "h": float(r[2]), "l": float(r[3]), "c": float(r[4])}
+        oldest = min(int(r[0]) for r in rows)
+        if oldest <= start or len(rows) < 1000:
+            break
+        before = oldest
+    return [out[t] for t in sorted(out)]
+
+
+def run_meme(now=None, get=None):
+    now = now or time.time()
+    pools = meme_pools(now, get)
+    data, missing = {}, []
+    for p in pools:
+        cs = gecko_hours(p["pool"], MEME_DAYS, now, get)
+        cs = [c for c in cs if c["t"] >= p["created"] + MEME_MIN_AGE_D * 86400]   # never buy before 7 days of life
+        if len(cs) > 24 * 14:
+            data[p["sym"]] = cs
+        else:
+            missing.append(p["sym"])
+    if not data:
+        return None
+    for coin, b, cb in COINS[:1]:                       # SOL as the buy-and-hold reference
+        sol = fetch(b, cb, days=MEME_DAYS, now=now, get=None if get is None else get)
+        if sol:
+            data_ref = dict(data, SOL=sol)
+            rep = analyse(data, missing, "meme", {"pools": len(pools)})
+            rep["hold_sol_full"] = hold_sol(data_ref, rep["start"], rep["end"])
+            rep["hold_sol_test"] = hold_sol(data_ref, rep["cut"], rep["end"])
+            return rep
+    return analyse(data, missing, "meme", {"pools": len(pools)})
+
+
+def start(send, chat, kind="solid"):
     if not _RUN.acquire(blocking=False):
         return "já está rodando"
 
     def go():
         try:
-            send(chat, text(run()))
+            send(chat, text(run_meme() if kind == "meme" else run()))
         except Exception as exc:
             logging.exception("dip backtest")
             send(chat, "⛔ Backtest compra na baixa falhou: " + type(exc).__name__)

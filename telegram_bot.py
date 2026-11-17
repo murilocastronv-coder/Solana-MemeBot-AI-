@@ -141,6 +141,7 @@ def keyboard():
   [{"text":"📋 Carteiras copiadas","callback_data":"copy_wallets"},{"text":"📦 Posições","callback_data":"copy_positions"}],
   [{"text":"➕ Adicionar carteira","callback_data":"cw_add"},{"text":"🔍 Analisar uma carteira","callback_data":"cw_eval"}],
   [{"text":"📉 Backtest: compra na baixa (alvo 25%, stop 40%)","callback_data":"dip_bt"}],
+  [{"text":"📉 Backtest memecoins (liquidez ≥ 250 mil, 7+ dias)","callback_data":"dip_bt_meme"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -282,6 +283,12 @@ def handle(update):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
   run_async(audit_job,chat);return
+ if action=="dip_bt_meme":
+  import solid_dip_bt
+  why=solid_dip_bt.start(send,chat,"meme")
+  send(chat,"⛔ "+why if why else "📉 Backtest de MEMECOINS rodando: memecoins da Solana com liquidez ≥ US$ 250 mil hoje e 7+ dias de vida, "
+   "6 meses de velas de 1 h reais (GeckoTerminal). Compra na baixa, vende no alvo +25% ou no stop −40%. Resultado em ~5 min "
+   "(o GeckoTerminal grátis só deixa ~30 consultas por minuto). Só teste, nenhuma ordem real.",keyboard());return
  if action=="dip_bt":
   import solid_dip_bt
   why=solid_dip_bt.start(send,chat)
