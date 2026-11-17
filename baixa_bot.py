@@ -39,6 +39,10 @@ TP = E("BAIXA_TP", 0)
 SL = E("BAIXA_SL", 0.35)                    # owner (Nov 17, evening): stop loss -35%
 ARM = E("BAIXA_ARM", 0.10)
 TRAIL = E("BAIXA_TRAIL", 0.10)
+# owner (Nov 17): if a coin falls DCA_DROP below the first buy, buy a 2nd order of USD (max 2 orders per coin); the
+# trailing stop then arms at +ARM over the AVERAGE price
+DCA_DROP = E("BAIXA_DCA_DROP", 0.38)
+MAX_BUYS_PER_COIN = 2
 USD = E("BAIXA_USD", 23)                    # owner (Nov 17, later): US$ 23 per order
 MAX_OPEN = int(E("BAIXA_MAX_OPEN", 2))       # owner: at most 2 orders open at a time
 KEEP_SOL_USD = E("BAIXA_KEEP_SOL_USD", 3)
@@ -385,6 +389,46 @@ def _why(last):
     return L + " · não comprou: " + ("; ".join(why) or "sem sinal")
 
 
+def dca_check(send=None, chat=None, sol_usd=None, value=None, add_buy=None, sol_ok=None):
+    """2nd order: an open position of this robot with one buy whose value fell DCA_DROP below its cost gets another
+    US$ USD (the live engine adds it to the same position: cost and amount add up, so the exits use the average)."""
+    import live_trade_state as st
+    done = []
+    for m, p in list(st._load()["positions"].items()):
+        if p.get("mode") != "baixa" or int(p.get("buys") or 1) >= MAX_BUYS_PER_COIN or not DCA_DROP:
+            continue
+        cost = float(p.get("cost_usd") or 0)
+        try:
+            val = (value or __import__("live_exit_monitor").quote_value_usd)(m, int(p.get("token_amount_raw") or 0))
+        except Exception:
+            continue
+        if not cost or val / cost > 1 - DCA_DROP:
+            continue
+        sym = str(p.get("symbol") or m[:6])
+        if not (sol_ok or _sol_ok)(sol_usd if sol_usd is not None else __import__("copy_trader")._sol_usd()):
+            note("ia comprar a 2ª ordem de " + sym + " (caiu " + format((1 - val / cost) * 100, ".0f") + "%), mas falta SOL")
+            continue
+        ok = (add_buy or _add_buy)(m, sym, send, chat)
+        note(("2ª ORDEM comprada: " if ok else "2ª ordem NÃO confirmada: ") + sym + " (caiu " + format((1 - val / cost) * 100, ".0f") +
+             "% da 1ª compra; agora o stop móvel liga em +" + format(ARM * 100, "g") + "% sobre o preço médio)")
+        if ok:
+            new_cost = float((st._load()["positions"].get(m) or {}).get("cost_usd") or cost + USD)
+            st.set_position_fields(m, peak_ratio=(val + USD) / new_cost, trail_armed=False)
+            done.append(sym)
+    return done
+
+
+def _add_buy(mint, sym, send, chat):
+    import live_engine
+    try:
+        s = live_engine._execute_buy({"baseToken": {"address": mint, "symbol": sym}}, mint, sym, send, chat, live_engine.get_address(),
+                                     None, "baixa", usd=USD, add_on=True)
+    except Exception as exc:
+        note("2ª ordem falhou " + sym + ": " + type(exc).__name__)
+        return False
+    return bool(s and s.get("status") == "settled_buy")
+
+
 def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_usd=None, safety=None):
     """One pass. Returns the symbols bought."""
     try:
@@ -414,6 +458,10 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
             _save()
     if DAILY_LOSS and day_pnl(now) <= -DAILY_LOSS:
         return []
+    try:
+        dca_check(send, chat, sol_usd, sol_ok=sol_ok)
+    except Exception as exc:
+        logging.warning("baixa dca: %s", type(exc).__name__)
     held = _open()
     bought = []
     last = {"at": now, "coins": len(d.get("tokens") or {}), "dips": 0, "bought": bought, "full": len(held) >= MAX_OPEN}
@@ -525,6 +573,7 @@ def status_text():
     L = ["📉 ROBÔ BAIXA — " + ("🟢 LIGADO (💵 DINHEIRO REAL)" if d.get("enabled") else "⏸️ DESLIGADO"),
          "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · sem alvo: stop móvel liga em +" +
          format(ARM * 100, "g") + "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · " + ("stop −" + format(SL * 100, "g") + "%" if SL else "SEM stop") +
+         " · 2ª ordem se cair " + format(DCA_DROP * 100, "g") + "% (máx. 2 por moeda)" +
          " · só moedas da Pump.fun com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez US$ " + format(ALL_MIN_LIQ / 1000, "g") + "–" + format(ALL_MAX_LIQ / 1000, "g") +
          " mil · máx. " + str(MAX_OPEN) + " abertas · deixa US$ " + format(KEEP_SOL_USD, "g") + " em SOL",
          "🛡️ Anti-golpe antes de cada compra: criador sem poder de criar/congelar, 10 maiores donos, teste de venda na Jupiter, "
@@ -569,7 +618,8 @@ def backtest(now=None, get=None, progress=None):
     start = min(c[0]["t"] for c in data.values())
     end = max(c[-1]["t"] for c in data.values()) + 3600
     cut = start + (end - start) * 2 // 3
-    run = lambda a, b: bt.simulate(data, a, b, DROP, LOOKBACK_H, size=USD, capital=60, target=TP or 9.0, stop=SL, arm=ARM, trail=TRAIL)
+    run = lambda a, b: bt.simulate(data, a, b, DROP, LOOKBACK_H, size=USD, capital=60, target=TP or 9.0, stop=SL, arm=ARM, trail=TRAIL,
+                                   dca=DCA_DROP)
     seen = {}
     for sym, cs in data.items():                      # how often the entry condition happened (sanity check of the data)
         tp = bt.tops(cs, LOOKBACK_H)
@@ -748,7 +798,7 @@ def backtest_all(now=None, get=None, progress=None):
     start = min(x[0]["t"] for x in data.values())
     end = max(x[-1]["t"] for x in data.values()) + TF4
     cut = start + (end - start) * 2 // 3
-    run = lambda a, b, st=SL: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, stop=st, arm=ALL_ARM, trail=ALL_TRAIL)
+    run = lambda a, b, st=SL: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, stop=st, arm=ALL_ARM, trail=ALL_TRAIL, dca=DCA_DROP)
     return {"start": start, "end": end, "cut": cut, "coins": sorted(data), "skipped": skipped, "found": len(coins),
             "first": run(start, cut), "last": run(cut, end), "full": run(start, end),
             "nostop_last": run(cut, end, 0), "nostop_full": run(start, end, 0)}

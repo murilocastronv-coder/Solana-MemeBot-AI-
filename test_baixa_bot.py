@@ -318,3 +318,33 @@ class WhyNotBuyingTest(unittest.TestCase):
         self.assertEqual(bb.room(26.50), 1)
         self.assertEqual(bb.room(49.99), 1)
         self.assertEqual(bb.room(50.00), 2)
+
+
+class DcaTest(unittest.TestCase):
+    def setUp(self):
+        bb._MEM.clear()
+
+    def test_second_order_at_minus_38(self):
+        import live_trade_state as st
+        positions = {"MintA": {"mode": "baixa", "symbol": "AAA", "cost_usd": 23.0, "token_amount_raw": 1000},
+                     "MintB": {"mode": "baixa", "symbol": "BBB", "cost_usd": 46.0, "token_amount_raw": 1000, "buys": 2},
+                     "MintC": {"mode": "baixa", "symbol": "CCC", "cost_usd": 23.0, "token_amount_raw": 1000}}
+        values = {"MintA": 23.0 * 0.60, "MintB": 46 * 0.3, "MintC": 23.0 * 0.70}
+        bought, fields = [], {}
+        with mock.patch.object(st, "_load", return_value={"positions": positions}), \
+                mock.patch.object(st, "set_position_fields", side_effect=lambda m, **f: fields.setdefault(m, f)):
+            got = bb.dca_check(value=lambda m, a: values[m], add_buy=lambda m, sym, s, c: bought.append(m) or True,
+                               sol_ok=lambda x: True, sol_usd=150)
+        self.assertEqual(got, ["AAA"])                 # -40%: 2nd order; BBB already has 2; CCC only -30%
+        self.assertEqual(bought, ["MintA"])
+        self.assertFalse(fields["MintA"]["trail_armed"])
+
+    def test_backtest_dca_average_price(self):
+        import solid_dip_bt as bt
+        H = 3600
+        prices = [10] * 10 + [9.0] + [5.4] + [6.4] * 3 + [5.7]          # buys 9.0, 2nd at 5.58 (-38%), avg ~6.89, +10% = 7.58?
+        cs = [{"t": i * H, "h": p, "l": p, "c": p} for i, p in enumerate(prices)]
+        s = bt.simulate({"A": cs}, 0, 100 * H, 0.05, 5, size=23, capital=60, target=9.0, stop=0, arm=0.10, trail=0.10, dca=0.38)
+        self.assertEqual(s["dca_trades"], 1)
+        self.assertEqual(s["trades"], 0)                                 # never reached +10% over the average: still open
+        self.assertLess(s["open_pnl"], 0)
