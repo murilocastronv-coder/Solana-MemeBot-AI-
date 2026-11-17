@@ -219,7 +219,7 @@ def _fmt(s):
 
 def text(rep):
     if not rep:
-        return "⛔ Backtest compra na baixa: não consegui baixar as velas (Binance e Coinbase)."
+        return "⛔ Backtest compra na baixa: não consegui baixar os preços (Binance/Coinbase ou GeckoTerminal)."
     b = rep["best"]
     d = lambda t: time.strftime("%d/%m/%Y", time.gmtime(t))
     L = ["📉 BACKTEST: COMPRA NA BAIXA, ALVO +" + format(TARGET * 100, "g") + "%, " + ("STOP −" + format(STOP * 100, "g") + "%" if STOP else "SEM STOP") + " — " + d(rep["start"]) + " a " + d(rep["end"]),
@@ -254,8 +254,8 @@ def text(rep):
 # ---------------------------------------------------------------- memecoins (owner, Nov 17)
 MEME_MIN_LIQ = E("DIP_BT_MEME_MIN_LIQ", 250_000)
 MEME_MIN_AGE_D = 7
-MEME_DAYS = int(E("DIP_BT_MEME_DAYS", 180))
-MEME_MAX = int(E("DIP_BT_MEME_MAX", 25))
+MEME_DAYS = int(E("DIP_BT_MEME_DAYS", 120))
+MEME_MAX = int(E("DIP_BT_MEME_MAX", 15))
 GECKO = "https://api.geckoterminal.com/api/v2"
 NOT_MEME = {"SOL", "WSOL", "USDC", "USDT", "USDS", "PYUSD", "USDG", "EURC", "JUP", "JTO", "RAY", "PYTH", "ORCA", "W", "RENDER",
             "JLP", "MSOL", "JITOSOL", "BSOL", "INF", "JUPSOL", "BBSOL", "HSOL", "CBBTC", "WBTC", "ETH", "WETH", "KMNO", "DRIFT",
@@ -267,21 +267,22 @@ def _gecko(url, get=None):
     """GeckoTerminal free API (~30 calls/min): spaced 2.3 s, waits and retries on 429."""
     if get:
         return get(url)
-    for _ in range(4):
+    for _ in range(3):
         wait = _gk[0] + 2.3 - time.time()
         if wait > 0:
             time.sleep(wait)
         _gk[0] = time.time()
         r = _http.get(url, timeout=20, headers={"Accept": "application/json", "User-Agent": "DipBacktest/1.0"})
         if r.status_code == 429:
-            time.sleep(30)
+            logging.info("dip meme: GeckoTerminal 429, esperando 15 s")
+            time.sleep(15)
             continue
         r.raise_for_status()
         return r.json()
     raise RuntimeError("GeckoTerminal ocupado (429)")
 
 
-def meme_pools(now=None, get=None, pages=10):
+def meme_pools(now=None, get=None, pages=4):
     """Today's Solana memecoin pools with liquidity >= MEME_MIN_LIQ and created 7+ days ago (best pool per coin)."""
     now = now or time.time()
     best = {}
@@ -336,11 +337,16 @@ def gecko_hours(pool, days, now=None, get=None):
     return [out[t] for t in sorted(out)]
 
 
-def run_meme(now=None, get=None):
+def run_meme(now=None, get=None, progress=None):
     now = now or time.time()
     pools = meme_pools(now, get)
+    logging.info("dip meme: %s memecoins com liquidez >= %s", len(pools), MEME_MIN_LIQ)
+    if progress:
+        progress("📉 Achei " + str(len(pools)) + " memecoins com liquidez ≥ US$ " + format(MEME_MIN_LIQ, ",.0f") + " e 7+ dias: " +
+                 ", ".join(p["sym"] for p in pools) + ". Baixando " + str(MEME_DAYS) + " dias de preços de cada uma…")
     data, missing = {}, []
-    for p in pools:
+    for i, p in enumerate(pools):
+        logging.info("dip meme: %s/%s %s", i + 1, len(pools), p["sym"])
         cs = gecko_hours(p["pool"], MEME_DAYS, now, get)
         cs = [c for c in cs if c["t"] >= p["created"] + MEME_MIN_AGE_D * 86400]   # never buy before 7 days of life
         if len(cs) > 24 * 14:
@@ -366,7 +372,7 @@ def start(send, chat, kind="solid"):
 
     def go():
         try:
-            send(chat, text(run_meme() if kind == "meme" else run()))
+            send(chat, text(run_meme(progress=lambda m: send(chat, m)) if kind == "meme" else run()))
         except Exception as exc:
             logging.exception("dip backtest")
             send(chat, "⛔ Backtest compra na baixa falhou: " + type(exc).__name__)
