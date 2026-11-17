@@ -151,7 +151,7 @@ def resolve_majors(get=None):
     return out
 
 
-def candles(sym, tk, days, now=None, get=None):
+def candles(sym, tk, days, now=None, get=None, tries=5):
     """Hourly candles: Binance for the big coins listed there (stable source), else the GeckoTerminal pool."""
     import solid_dip_bt as bt
     if sym in BINANCE and get is None:
@@ -161,7 +161,54 @@ def candles(sym, tk, days, now=None, get=None):
                 return cs
         except Exception as exc:
             logging.info("baixa binance %s: %s", sym, type(exc).__name__)
-    return bt.gecko_hours(tk["pool"], days, now, get)
+    return bt.gecko_hours(tk["pool"], days, now, get, tries=tries)
+
+
+TOP_TTL_S = E("BAIXA_TOP_TTL_S", 3600)
+_TOP = {}                       # mint -> (time, 7-day top): refreshed at most once an hour (GeckoTerminal is rate limited)
+
+
+def dex_prices(mints, get=None):
+    """{mint: price US$} now, from DexScreener (fast, 30 coins per call, no GeckoTerminal)."""
+    get = get or sg._get
+    out = {}
+    for i in range(0, len(mints), 30):
+        for p in get(sg.DEX + "/tokens/v1/solana/" + ",".join(mints[i:i + 30])) or []:
+            m = (p.get("baseToken") or {}).get("address")
+            try:
+                px = float(p.get("priceUsd") or 0)
+            except (TypeError, ValueError):
+                px = 0.0
+            liq = float((p.get("liquidity") or {}).get("usd") or 0)
+            if m and px > 0 and liq >= (out.get(m, (0, -1))[1]):
+                out[m] = (px, liq)                           # the price of the most liquid pool
+    return {m: v[0] for m, v in out.items()}
+
+
+def top_7d(sym, tk, now=None, get=None):
+    """Highest price of the last LOOKBACK_H hours (closed candles), cached for TOP_TTL_S; the last known top is kept
+    when GeckoTerminal refuses."""
+    now = now or time.time()
+    hit = _TOP.get(tk["mint"])
+    if hit and now - hit[0] < TOP_TTL_S:
+        return hit[1]
+    cs = candles(sym, tk, (LOOKBACK_H + 24) // 24 + 1, now, get, tries=2)     # live: never waits minutes on a refusal
+    if len(cs) >= LOOKBACK_H:
+        top = max(c["h"] for c in cs[-LOOKBACK_H:])
+        _TOP[tk["mint"]] = (now, top)
+        return top
+    return hit[1] if hit else 0.0
+
+
+def live_signal(sym, tk, now=None, get=None, prices=None):
+    """(buy?, price now, 7-day top): DexScreener price vs the cached 7-day top."""
+    px = (prices or {}).get(tk["mint"], 0.0)
+    if px <= 0:
+        return False, 0.0, 0.0
+    top = top_7d(sym, tk, now, get)
+    if top <= 0:
+        return False, px, 0.0
+    return px <= top * (1 - DROP), px, top
 
 
 def signal(candles, drop=None, lookback=None):
@@ -266,13 +313,16 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
         return []
     held = _open()
     bought = []
+    try:
+        prices = dex_prices([t["mint"] for t in (d.get("tokens") or {}).values()], get)
+    except Exception:
+        prices = {}
     for sym, tk in (d.get("tokens") or {}).items():
         if len(held) + len(bought) >= MAX_OPEN:
             break                                           # owner: only MAX_OPEN orders open at a time
         if tk["mint"] in held:
             continue
-        cs = candles(sym, tk, (LOOKBACK_H + 24) // 24 + 1, now, get)
-        ok, px, top = signal(cs)
+        ok, px, top = live_signal(sym, tk, now, get, prices)
         if not ok:
             continue
         if not (sol_ok or _sol_ok)(sol_usd if sol_usd is not None else __import__("copy_trader")._sol_usd()):

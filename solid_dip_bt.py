@@ -276,11 +276,11 @@ NOT_MEME = {"SOL", "WSOL", "USDC", "USDT", "USDS", "PYUSD", "USDG", "EURC", "JUP
 _gk = [0.0]
 
 
-def _gecko(url, get=None):
+def _gecko(url, get=None, tries=5):
     """GeckoTerminal free API (~30 calls/min): spaced 2.3 s, waits and retries on 429."""
     if get:
         return get(url)
-    for k in range(5):
+    for k in range(tries):
         sg._gecko_block[0] = max(sg._gecko_block[0], time.time() + 120)   # the other loops leave GeckoTerminal to this job
         wait = _gk[0] + 2.5 - time.time()
         if wait > 0:
@@ -325,7 +325,7 @@ def meme_pools(now=None, get=None, pages=4):
     return sorted(best.values(), key=lambda x: -x["liq"])[:MEME_MAX]
 
 
-def gecko_hours(pool, days, now=None, get=None):
+def gecko_hours(pool, days, now=None, get=None, tries=5):
     """Hourly candles (oldest first) of the last `days` days from GeckoTerminal, paged 1000 at a time."""
     now = int(now or time.time())
     start = now - days * 86400
@@ -333,7 +333,7 @@ def gecko_hours(pool, days, now=None, get=None):
     for _ in range(days * 24 // 1000 + 2):
         try:
             d = _gecko(GECKO + "/networks/solana/pools/" + pool + "/ohlcv/hour?aggregate=1&limit=1000&currency=usd&before_timestamp=" +
-                       str(before), get)
+                       str(before), get, tries)
         except Exception as exc:
             logging.info("dip meme ohlcv: %s", type(exc).__name__)
             break

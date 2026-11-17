@@ -13,6 +13,7 @@ def candles(prices):
 class BaixaTest(unittest.TestCase):
     def setUp(self):
         bb._MEM.clear()
+        bb._TOP.clear()
 
     def test_signal_and_exit(self):
         ok, px, top = bb.signal(candles([10] * 168 + [9.4]))
@@ -34,13 +35,15 @@ class BaixaTest(unittest.TestCase):
         bought = []
         buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
-                mock.patch.object(bb, "_open", return_value=set()), mock.patch.object(bb, "day_pnl", return_value=0):
+                mock.patch.object(bb, "_open", return_value=set()), mock.patch.object(bb, "day_pnl", return_value=0), \
+                mock.patch.object(bb, "dex_prices", side_effect=lambda mints, get=None: {m: 9.0 for m in mints}):
             self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: ""), [])   # off
             bb.set_enabled(True)
             self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: False, sol_usd=150, safety=lambda m: ""), [])  # no SOL
             self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: ""), ["BP"])
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
-                mock.patch.object(bb, "_open", return_value={"MintBP"}), mock.patch.object(bb, "day_pnl", return_value=0):
+                mock.patch.object(bb, "_open", return_value={"MintBP"}), mock.patch.object(bb, "day_pnl", return_value=0), \
+                mock.patch.object(bb, "dex_prices", side_effect=lambda mints, get=None: {m: 9.0 for m in mints}):
             self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: ""), [])   # one per coin
         self.assertIn("Backtest do robô", bb.status_text())
 
@@ -67,7 +70,8 @@ class BaixaTest(unittest.TestCase):
         bought = []
         buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
-                mock.patch.object(bb, "_open", return_value=set()), mock.patch.object(bb, "day_pnl", return_value=0):
+                mock.patch.object(bb, "_open", return_value=set()), mock.patch.object(bb, "day_pnl", return_value=0), \
+                mock.patch.object(bb, "dex_prices", side_effect=lambda mints, get=None: {m: 9.0 for m in mints}):
             got = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: "criador pode congelar carteiras")
             self.assertEqual((got, bought), ([], []))
             again = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: "")
@@ -100,7 +104,8 @@ class BaixaTest(unittest.TestCase):
         bought = []
         buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
-                mock.patch.object(bb, "_open", return_value={"MZEC"}), mock.patch.object(bb, "day_pnl", return_value=0):
+                mock.patch.object(bb, "_open", return_value={"MZEC"}), mock.patch.object(bb, "day_pnl", return_value=0), \
+                mock.patch.object(bb, "dex_prices", side_effect=lambda mints, get=None: {m: 9.0 for m in mints}):
             got = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: "")
         self.assertEqual(len(got), 1)                              # 1 already open + 1 new = 2
 
@@ -226,3 +231,22 @@ class RepairTest(unittest.TestCase):
         self.assertNotIn("OtherMint", fields)
         src = open(ct.__file__, encoding="utf-8").read()
         self.assertIn('"rocket", "baixa")', src)                          # recover_real_orphans skips the robot's positions
+
+
+class LiveSignalTest(unittest.TestCase):
+    def setUp(self):
+        bb._TOP.clear()
+
+    def test_top_cached_and_price_from_dexscreener(self):
+        tk = {"mint": "M1", "pool": "P1", "liq": 1e5}
+        calls = []
+        with mock.patch("solid_dip_bt.gecko_hours", side_effect=lambda *a, **k: calls.append(1) or candles([10] * 170)):
+            self.assertEqual(bb.live_signal("X", tk, 1000, None, {"M1": 9.4}), (True, 9.4, 10))
+            self.assertEqual(bb.live_signal("X", tk, 2000, None, {"M1": 9.8})[0], False)
+        self.assertEqual(len(calls), 1)                                   # one GeckoTerminal read per hour
+        with mock.patch("solid_dip_bt.gecko_hours", return_value=[]):     # GeckoTerminal refuses: last top kept
+            self.assertEqual(bb.live_signal("X", tk, 1000 + 7200, None, {"M1": 9.0})[2], 10)
+        self.assertEqual(bb.live_signal("X", tk, 1000, None, {}), (False, 0.0, 0.0))   # no price: no buy
+        rows = [{"baseToken": {"address": "M1"}, "priceUsd": "1.5", "liquidity": {"usd": 100}},
+                {"baseToken": {"address": "M1"}, "priceUsd": "1.6", "liquidity": {"usd": 900}}]
+        self.assertEqual(bb.dex_prices(["M1"], get=lambda url: rows), {"M1": 1.6})
