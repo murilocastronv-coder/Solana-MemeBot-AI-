@@ -35,13 +35,13 @@ class BaixaTest(unittest.TestCase):
         buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
                 mock.patch.object(bb, "_open", return_value=set()), mock.patch.object(bb, "day_pnl", return_value=0):
-            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150), [])   # off
+            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: ""), [])   # off
             bb.set_enabled(True)
-            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: False, sol_usd=150), [])  # no SOL
-            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150), ["BP"])
+            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: False, sol_usd=150, safety=lambda m: ""), [])  # no SOL
+            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: ""), ["BP"])
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
                 mock.patch.object(bb, "_open", return_value={"MintBP"}), mock.patch.object(bb, "day_pnl", return_value=0):
-            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150), [])   # one per coin
+            self.assertEqual(bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: ""), [])   # one per coin
         self.assertIn("Backtest do robô", bb.status_text())
 
     def test_resolve_picks_real_pool_not_fake(self):
@@ -58,6 +58,22 @@ class BaixaTest(unittest.TestCase):
         got = bb.resolve_majors(get=lambda url: rows if "q=BP" in url else {"pairs": []})
         self.assertEqual(list(got), ["BP"])
         self.assertEqual(got["BP"]["mint"], "Real")
+
+    def test_anti_scam_blocks_the_buy(self):
+        bb._load()["tokens"] = {"BP": {"mint": "MintBP", "pool": "P1", "liq": 300000}}
+        bb._load()["resolved_at"] = 1e12
+        bb._load()["resolve_v"] = bb.RESOLVE_V
+        bb.set_enabled(True)
+        bought = []
+        buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
+        with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
+                mock.patch.object(bb, "_open", return_value=set()), mock.patch.object(bb, "day_pnl", return_value=0):
+            got = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: "criador pode congelar carteiras")
+            self.assertEqual((got, bought), ([], []))
+            again = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: "")
+            self.assertEqual(again, [])                                   # blocked for 24 h
+        self.assertIn("anti-golpe", bb._load()["log"][-1])
+        self.assertIn("Anti-golpe", bb.status_text())
 
     def test_majors_only_by_official_mint(self):
         jup = bb.MAJORS["JUP"]
@@ -79,7 +95,7 @@ class BaixaTest(unittest.TestCase):
         buy = lambda pair, mint, sym, send, chat: bought.append(sym) or True
         with mock.patch("solid_dip_bt.gecko_hours", return_value=candles([10] * 168 + [9.0])), \
                 mock.patch.object(bb, "_open", return_value={"MZEC"}), mock.patch.object(bb, "day_pnl", return_value=0):
-            got = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150)
+            got = bb.cycle(now=2e9, buy=buy, sol_ok=lambda x: True, sol_usd=150, safety=lambda m: "")
         self.assertEqual(len(got), 1)                              # 1 already open + 1 new = 2
 
     def test_exit_monitor_uses_the_rule(self):
