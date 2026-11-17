@@ -195,12 +195,19 @@ def _buy(pair, mint, sym, send, chat):
 
 
 def status_text():
+    """Never waits for a busy trade-state lock (the menu must answer at once)."""
     d = _load()
+    h, n_open = [], "?"
     try:
         import live_trade_state as st
-        h = [x for x in st.history() if x.get("mode") == "baixa"]
+        if st._LOCK.acquire(timeout=0.3):
+            try:
+                h = [x for x in st.history() if x.get("mode") == "baixa"]
+                n_open = str(len(_open()))
+            finally:
+                st._LOCK.release()
     except Exception:
-        h = []
+        pass
     total = sum(float(x.get("pnl_usd") or 0) for x in h)
     L = ["📉 ROBÔ BAIXA — " + ("🟢 LIGADO (💵 DINHEIRO REAL)" if d.get("enabled") else "⏸️ DESLIGADO"),
          "⚙️ Compra US$ " + format(USD, "g") + " quando a moeda cai " + format(DROP * 100, "g") + "% do topo de 7 dias · vende no alvo +" +
@@ -208,7 +215,7 @@ def status_text():
          " em SOL · máx. " + str(MAX_OPEN) + " abertas · para no dia em que perder US$ " + format(DAILY_LOSS, "g"),
          "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil)"
                                    for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
-         "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + str(len(_open())) + "/" + str(MAX_OPEN),
+         "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + n_open + "/" + str(MAX_OPEN),
          "🧪 Veja o resultado dessa regra no passado em 🧪 Backtest do robô."]
     for x in (d.get("log") or [])[-5:]:
         L.append("• " + x)
