@@ -17,7 +17,21 @@ class DipTest(unittest.TestCase):
         self.assertEqual(bt.tops(cs, 2)[3], 5 * 1.001)          # max of candles 1 and 2
         self.assertIsNone(bt.tops(cs, 2)[1])
 
+    def test_target_and_stop(self):
+        from unittest import mock
+        with mock.patch.object(bt, "TARGET", 0.25), mock.patch.object(bt, "STOP", 0.40):
+            up = [10] * 10 + [8.0] + [9.0] * 3 + [10.5] + [10] * 3          # buys 8.0, +25% = 10.0 reached
+            down = [10] * 10 + [8.0] + [7.0] * 3 + [4.5] + [4.5] * 3        # -40% = 4.8 crossed: stop
+            s = bt.simulate({"UP": candles(up), "DN": candles(down)}, 0, 100 * H, 0.15, 5)
+        self.assertEqual((s["wins"], s["stops"], s["trades"]), (1, 1, 2))
+        q = 10 * (1 - bt.COST) / 8.0
+        self.assertAlmostEqual(s["closed_pnl"], round(q * 10.0 * (1 - bt.COST) - 10 + q * 4.5 * (1 - bt.COST) - 10, 2), places=2)   # the 4.5 candle is all below the stop: sells at 4.5
+
     def test_buy_dip_sell_8pct_and_stuck(self):
+        from unittest import mock
+        mock.patch.object(bt, "TARGET", 0.08).start()
+        mock.patch.object(bt, "STOP", 0).start()
+        self.addCleanup(mock.patch.stopall)
         prices = [10] * 10 + [8.5] + [8.6] * 5 + [9.3] + [9.0] * 5     # -15%: buys at 8.5, +8% = 9.18 reached at 9.3
         data = {"AAA": candles(prices), "BBB": candles([10] * 10 + [8] + [5] * 11)}   # falls and never comes back
         s = bt.simulate(data, 0, 100 * H, 0.15, 5)
