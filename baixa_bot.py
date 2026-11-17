@@ -33,9 +33,9 @@ BINANCE = {"JUP", "BONK", "WIF", "JTO", "RAY", "PYTH", "ORCA", "W", "RENDER", "P
 DROP = E("BAIXA_DROP", 0.05)
 LOOKBACK_H = int(E("BAIXA_LOOKBACK_H", 168))
 # owner (Nov 17, evening): the strategy of the "all coins" backtest - no target, trailing stop armed at +10% that sells
-# 10% below the top, and NO stop loss (the owner chose the no-stop version). BAIXA_SL=0.20 puts the -20% stop back.
+# 10% below the top; stop loss -35% (owner, later). BAIXA_SL=0 turns the stop off.
 TP = E("BAIXA_TP", 0)
-SL = E("BAIXA_SL", 0)
+SL = E("BAIXA_SL", 0.35)                    # owner (Nov 17, evening): stop loss -35%
 ARM = E("BAIXA_ARM", 0.10)
 TRAIL = E("BAIXA_TRAIL", 0.10)
 USD = E("BAIXA_USD", 23)                    # owner (Nov 17, later): US$ 23 per order
@@ -496,7 +496,7 @@ def backtest_all(now=None, get=None, progress=None):
     start = min(x[0]["t"] for x in data.values())
     end = max(x[-1]["t"] for x in data.values()) + TF4
     cut = start + (end - start) * 2 // 3
-    run = lambda a, b, st=0.20: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, stop=st, arm=ALL_ARM, trail=ALL_TRAIL)
+    run = lambda a, b, st=SL: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, stop=st, arm=ALL_ARM, trail=ALL_TRAIL)
     return {"start": start, "end": end, "cut": cut, "coins": sorted(data), "skipped": skipped, "found": len(coins),
             "first": run(start, cut), "last": run(cut, end), "full": run(start, end),
             "nostop_last": run(cut, end, 0), "nostop_full": run(start, end, 0)}
@@ -511,7 +511,7 @@ def backtest_all_text(rep):
     def f(s):
         n = s["trades"]
         return ("US$ 60 → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " + str(s["trails"]) + " no stop móvel · " +
-                str(s["stops"]) + " no stop −20% · no lucro " + (format(s["profit_trades"] / n * 100, ".0f") if n else "0") + "% · abertas " +
+                str(s["stops"]) + " no stop −" + format(SL * 100, "g") + "% · no lucro " + (format(s["profit_trades"] / n * 100, ".0f") if n else "0") + "% · abertas " +
                 str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") + ") · drawdown " + format(s["dd"], "g") + "%")
     pc = rep["full"]["per_coin"]
     best = sorted(pc.items(), key=lambda kv: -kv[1][1])
@@ -526,7 +526,7 @@ def backtest_all_text(rep):
          "• primeiros 2/3: " + f(rep["first"]), "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
          "• período todo (~" + format((rep["end"] - rep["start"]) / 86400 / 30, ".1f") + " meses): " + f(rep["full"]),
          "• vendas: " + str(rep["full"]["trades"]) + " no período",
-         "• SÓ o stop móvel, SEM stop −20%: último 1/3 " + format(rep["nostop_last"]["pnl"], "+.2f") + " · período todo " + f(rep["nostop_full"])]
+         "• SÓ o stop móvel, SEM stop: último 1/3 " + format(rep["nostop_last"]["pnl"], "+.2f") + " · período todo " + f(rep["nostop_full"])]
     if best:
         L.append("• melhores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[:6]))
         L.append("• piores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[-4:]))

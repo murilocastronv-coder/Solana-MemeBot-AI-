@@ -21,7 +21,8 @@ class BaixaTest(unittest.TestCase):
         self.assertFalse(bb.signal(candles([10] * 50 + [5]))[0])  # not enough history: no buy
         self.assertEqual(bb.exit_signal(1.26, 1.26), ("hold", "trailing"))          # armed, still at the top
         self.assertEqual(bb.exit_signal(1.12, 1.26), ("sell", "trailing_stop"))     # 10% below the top
-        self.assertEqual(bb.exit_signal(0.50, 1.05), ("hold", "baixa_hold"))        # no stop loss (owner's choice)
+        self.assertEqual(bb.exit_signal(0.70, 1.05), ("hold", "baixa_hold"))        # -30%: above the -35% stop
+        self.assertEqual(bb.exit_signal(0.64, 1.05), ("sell", "stop_loss"))         # owner: stop -35%
         self.assertEqual(bb.exit_signal(1.05)[0], "hold")
         with mock.patch.object(bb, "SL", 0.20):
             self.assertEqual(bb.exit_signal(0.80, 1.0), ("sell", "stop_loss"))   # BAIXA_SL=0.20 puts the stop back
@@ -85,7 +86,7 @@ class BaixaTest(unittest.TestCase):
         import live_exit_monitor as lem
         pos = {"mode": "baixa", "cost_usd": 10, "peak_ratio": 1.0}
         self.assertEqual(lem.position_signal(dict(pos, peak_ratio=1.3), 10, 11.5)["reason"], "trailing_stop")
-        self.assertEqual(lem.position_signal(pos, 10, 5.9)["action"], "hold")          # no stop loss
+        self.assertEqual(lem.position_signal(pos, 10, 6.4)["reason"], "stop_loss")     # -36%: stop -35%
         self.assertEqual(lem.position_signal(pos, 10, 10.5)["action"], "hold")
 
 
@@ -103,7 +104,7 @@ class BaixaBacktestTest(unittest.TestCase):
         self.assertEqual(rep["coins"], ["BP"])
         txt = bb.backtest_text(rep)
         self.assertIn("stop móvel +10%", txt)
-        self.assertIn("sem stop", txt)
+        self.assertIn("stop −35%", txt)
 
 
 if __name__ == "__main__":

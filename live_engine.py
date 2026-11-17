@@ -134,7 +134,7 @@ def _write_off(send, chat, mint, symbol, no_route):
 EXIT_TEXT = {
     "baixa": "📉 Robô BAIXA: 🚀 stop móvel liga em +" + format(float(os.getenv("BAIXA_ARM", "0.10")) * 100, ".0f") + "% e vende " +
              format(float(os.getenv("BAIXA_TRAIL", "0.10")) * 100, ".0f") + "% abaixo do topo" +
-             (" | 🛑 stop -" + format(float(os.getenv("BAIXA_SL", "0")) * 100, ".0f") + "%" if float(os.getenv("BAIXA_SL", "0")) else " | sem stop"),
+             (" | 🛑 stop -" + format(float(os.getenv("BAIXA_SL", "0.35")) * 100, ".0f") + "%" if float(os.getenv("BAIXA_SL", "0.35")) else " | sem stop"),
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
     "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
     "copy": "👥 Vende quando a carteira copiada vender (sem alvo/stop fixo)",
