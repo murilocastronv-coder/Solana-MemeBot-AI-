@@ -364,6 +364,7 @@ def start_backtest(send, chat):
 # ---------------------------------------------------------------- quick backtest on ALL coins (owner, Nov 17)
 ALL_MIN_LIQ = E("BAIXA_ALL_MIN_LIQ", 70_000)          # owner (Nov 17, later): US$ 70 mil, 10+ days, longer test
 ALL_MIN_AGE_D = int(E("BAIXA_ALL_MIN_AGE_D", 10))
+ALL_MAX_LIQ = E("BAIXA_ALL_MAX_LIQ", 400_000)            # owner (Nov 17, later): liquidity between US$ 70 mil and 400 mil
 ALL_DAYS = int(E("BAIXA_ALL_DAYS", 166))           # one GeckoTerminal call of 1000 4-hour candles = 166 days
 ALL_DEADLINE_S = E("BAIXA_ALL_SECONDS", 170)
 # owner (Nov 17, later): in this test, no take profit - a trailing stop armed at +10% that sells 10% below the top;
@@ -425,15 +426,13 @@ def all_coins(now, deadline, get=None, pages=6):
                 created = time.mktime(time.strptime(str(a.get("pool_created_at"))[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
             except Exception:
                 continue
-            if not sym or sym in NOT_COINS or quote not in ("SOL", "WSOL", "USDC", "USDT") or liq < ALL_MIN_LIQ:
+            if not sym or sym in NOT_COINS or quote not in ("SOL", "WSOL", "USDC", "USDT") or not ALL_MIN_LIQ <= liq <= ALL_MAX_LIQ:
                 continue
             if now - created < ALL_MIN_AGE_D * 86400:
                 continue
             if sym not in out or liq > out[sym]["liq"]:
                 out[sym] = {"pool": a.get("address"), "liq": liq, "created": created}
-    for sym in BINANCE:                                   # the big coins are always in (years old, deep liquidity)
-        out.setdefault(sym, {"pool": None, "liq": 0, "created": 0})
-    return out
+    return out                                            # the big coins have far more than ALL_MAX_LIQ: not in this test
 
 
 def backtest_all(now=None, get=None, progress=None):
@@ -444,7 +443,8 @@ def backtest_all(now=None, get=None, progress=None):
     deadline = time.time() + ALL_DEADLINE_S
     coins = all_coins(now, deadline, get)
     if progress:
-        progress("🧪 Achei " + str(len(coins)) + " moedas com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") +
+        progress("🧪 Achei " + str(len(coins)) + " moedas com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez de US$ " + format(ALL_MIN_LIQ, ",.0f") +
+                 " a US$ " + format(ALL_MAX_LIQ, ",.0f") +
                  ". Baixando ~" + format(ALL_DAYS / 30, ".1f") + " meses de preços (até ~3 min)…")
     data, skipped = {}, []
     for sym, c in sorted(coins.items(), key=lambda kv: kv[0] not in BINANCE):      # fast Binance coins first
@@ -493,7 +493,8 @@ def backtest_all_text(rep):
                 str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") + ") · drawdown " + format(s["dd"], "g") + "%")
     pc = rep["full"]["per_coin"]
     best = sorted(pc.items(), key=lambda kv: -kv[1][1])
-    L = ["🧪 BACKTEST: REGRA DO ROBÔ EM TODAS AS MOEDAS (" + str(ALL_MIN_AGE_D) + "+ dias, liquidez ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") + ") — " +
+    L = ["🧪 BACKTEST: TODAS AS MOEDAS (" + str(ALL_MIN_AGE_D) + "+ dias, liquidez US$ " + format(ALL_MIN_LIQ, ",.0f") + " a " +
+         format(ALL_MAX_LIQ, ",.0f") + ") — " +
          d(rep["start"]) + " a " + d(rep["end"]),
          "Moedas testadas: " + str(len(rep["coins"])) + " de " + str(rep["found"]) + " achadas" +
          (" (sem dados a tempo: " + ", ".join(rep["skipped"][:15]) + ")" if rep["skipped"] else "") +
@@ -507,7 +508,7 @@ def backtest_all_text(rep):
     if best:
         L.append("• melhores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[:6]))
         L.append("• piores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[-4:]))
-    L.append("⚠️ Só moedas que AINDA têm ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") + " de liquidez hoje (as que morreram não aparecem: o real tende a ser pior). "
+    L.append("⚠️ Só moedas que HOJE têm US$ " + format(ALL_MIN_LIQ, ",.0f") + " a " + format(ALL_MAX_LIQ, ",.0f") + " de liquidez (as que morreram não aparecem: o real tende a ser pior). "
              "Velas de 4 h: o stop móvel usa o topo de ANTES da vela (o caso pior). Passado não garante futuro.")
     return "\n".join(L)
 
