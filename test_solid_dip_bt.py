@@ -26,6 +26,15 @@ class DipTest(unittest.TestCase):
         self.assertEqual(bt.tops(cs, 2)[3], 5 * 1.001)          # max of candles 1 and 2
         self.assertIsNone(bt.tops(cs, 2)[1])
 
+    def test_trailing_stop_without_target(self):
+        prices = [10] * 10 + [8.0] + [8.4, 9.0, 9.6, 10.4, 9.5, 9.2] + [9.2] * 3     # +30% top at 10.4, then -10% = 9.36
+        s = bt.simulate({"A": candles(prices)}, 0, 100 * H, 0.15, 5, stop=0.20, arm=0.10, trail=0.10)
+        self.assertEqual((s["trails"], s["stops"], s["trades"]), (1, 0, 1))
+        q = 10 * (1 - bt.COST) / 8.0
+        self.assertAlmostEqual(s["closed_pnl"], round(q * 9.2 * (1 - bt.COST) - 10, 2), places=2)   # the 9.2 candle is all below 9.37: sells at its close
+        s2 = bt.simulate({"A": candles([10] * 10 + [8.0] + [8.6] * 5)}, 0, 100 * H, 0.15, 5, stop=0.20, arm=0.10, trail=0.10)
+        self.assertEqual(s2["trades"], 0)                              # never reached +10%: trailing not armed
+
     def test_target_and_stop(self):
         from unittest import mock
         with mock.patch.object(bt, "TARGET", 0.25), mock.patch.object(bt, "STOP", 0.40):

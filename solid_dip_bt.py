@@ -100,7 +100,7 @@ def tops(cs, lookback):
     return out
 
 
-def simulate(data, start, end, drop, lookback, size=None, capital=None, target=None, stop=None):
+def simulate(data, start, end, drop, lookback, size=None, capital=None, target=None, stop=None, arm=0.0, trail=0.0):
     """data: {coin: [candles]}. -> summary with trades, open positions, marked-to-market equity and drawdown."""
     target = TARGET if target is None else target
     stop = STOP if stop is None else stop
@@ -127,6 +127,13 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None, target=N
                     # stop first when both levels are inside the same candle (the cautious assumption); a gap sells lower
                     stop_px = p["entry"] * (1 - stop)
                     exit_px, why = (r["c"] if r["h"] < stop_px else stop_px), "stop"   # whole candle below: sells at its close
+                elif trail:
+                    # trailing stop (no fixed target): armed once the top reached +arm; sells `trail` below the top. The
+                    # top used is the one BEFORE this candle (its high may come after its low inside the hour)
+                    level = p["peak"] * (1 - trail)
+                    if p["peak"] >= p["entry"] * (1 + arm) and low <= level:
+                        exit_px, why = (r["c"] if r["h"] < level else level), "stop móvel"
+                    p["peak"] = max(p["peak"], r["h"])
                 elif r["h"] >= p["entry"] * (1 + target):
                     exit_px, why = p["entry"] * (1 + target), "alvo"
                 if exit_px:
@@ -144,7 +151,7 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None, target=N
                     no_cash += 1
                     continue
                 cash -= size
-                pos[coin] = {"t": t, "entry": r["c"], "qty": size * (1 - COST) / r["c"], "worst": 0.0}
+                pos[coin] = {"t": t, "entry": r["c"], "qty": size * (1 - COST) / r["c"], "worst": 0.0, "peak": r["c"]}
         eq = cash + sum(p["qty"] * last_px.get(c, p["entry"]) for c, p in pos.items())
         peak_eq = max(peak_eq, eq)
         dd = max(dd, (peak_eq - eq) / peak_eq if peak_eq else 0)
@@ -156,6 +163,7 @@ def simulate(data, start, end, drop, lookback, size=None, capital=None, target=N
     closed = sum(t["pnl"] for t in trades)
     return {"final": round(final, 2), "pnl": round(final - capital, 2), "closed_pnl": round(closed, 2), "trades": len(trades),
             "wins": sum(1 for x in trades if x.get("exit") == "alvo"), "stops": sum(1 for x in trades if x.get("exit") == "stop"),
+            "trails": sum(1 for x in trades if x.get("exit") == "stop móvel"), "profit_trades": sum(1 for x in trades if x["pnl"] > 0),
             "avg_days": round(sum(t["days"] for t in trades) / len(trades), 1) if trades else 0.0,
             "max_days": max((t["days"] for t in trades), default=0.0),
             "worst_during": min((t["worst"] for t in trades), default=0.0),

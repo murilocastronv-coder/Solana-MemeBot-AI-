@@ -366,6 +366,10 @@ ALL_MIN_LIQ = E("BAIXA_ALL_MIN_LIQ", 70_000)          # owner (Nov 17, later): U
 ALL_MIN_AGE_D = int(E("BAIXA_ALL_MIN_AGE_D", 10))
 ALL_DAYS = int(E("BAIXA_ALL_DAYS", 166))           # one GeckoTerminal call of 1000 4-hour candles = 166 days
 ALL_DEADLINE_S = E("BAIXA_ALL_SECONDS", 170)
+# owner (Nov 17, later): in this test, no take profit - a trailing stop armed at +10% that sells 10% below the top;
+# shown with the -20% stop loss as protection and without any stop
+ALL_ARM = E("BAIXA_ALL_ARM", 0.10)
+ALL_TRAIL = E("BAIXA_ALL_TRAIL", 0.10)
 TF4 = 4 * 3600
 NOT_COINS = {"USDC", "USDT", "USDS", "PYUSD", "USDG", "EURC", "USD1", "USDE", "SUSDE", "FDUSD", "USX", "USDY", "SYRUPUSDC",
              "SOL", "WSOL", "MSOL", "JITOSOL", "BSOL", "INF", "JUPSOL", "BBSOL", "HSOL", "DSOL", "CBBTC", "WBTC", "ETH", "WETH",
@@ -470,9 +474,10 @@ def backtest_all(now=None, get=None, progress=None):
     start = min(x[0]["t"] for x in data.values())
     end = max(x[-1]["t"] for x in data.values()) + TF4
     cut = start + (end - start) * 2 // 3
-    run = lambda a, b: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, target=TP, stop=SL)
+    run = lambda a, b, st=SL: bt.simulate(data, a, b, DROP, 42, size=USD, capital=60, stop=st, arm=ALL_ARM, trail=ALL_TRAIL)
     return {"start": start, "end": end, "cut": cut, "coins": sorted(data), "skipped": skipped, "found": len(coins),
-            "first": run(start, cut), "last": run(cut, end), "full": run(start, end)}
+            "first": run(start, cut), "last": run(cut, end), "full": run(start, end),
+            "nostop_last": run(cut, end, 0), "nostop_full": run(start, end, 0)}
 
 
 def backtest_all_text(rep):
@@ -483,8 +488,8 @@ def backtest_all_text(rep):
 
     def f(s):
         n = s["trades"]
-        return ("US$ 60 → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " + str(s["wins"]) + " no alvo · " +
-                str(s["stops"]) + " no stop · acerto " + (format(s["wins"] / n * 100, ".0f") if n else "0") + "% · abertas " +
+        return ("US$ 60 → " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ") · " + str(s["trails"]) + " no stop móvel · " +
+                str(s["stops"]) + " no stop −20% · no lucro " + (format(s["profit_trades"] / n * 100, ".0f") if n else "0") + "% · abertas " +
                 str(len(s["open"])) + " (" + format(s["open_pnl"], "+.2f") + ") · drawdown " + format(s["dd"], "g") + "%")
     pc = rep["full"]["per_coin"]
     best = sorted(pc.items(), key=lambda kv: -kv[1][1])
@@ -492,16 +497,18 @@ def backtest_all_text(rep):
          d(rep["start"]) + " a " + d(rep["end"]),
          "Moedas testadas: " + str(len(rep["coins"])) + " de " + str(rep["found"]) + " achadas" +
          (" (sem dados a tempo: " + ", ".join(rep["skipped"][:15]) + ")" if rep["skipped"] else "") +
-         " · compra US$ " + format(USD, "g") + " quando cai " + format(DROP * 100, "g") + "% do topo de 7 dias · alvo +" + format(TP * 100, "g") +
-         "% · stop −" + format(SL * 100, "g") + "% · máx. 2 abertas (US$ 60) · velas de 4 h reais · custo " + format(bt.COST * 100, "g") + "% por lado",
+         " · compra US$ " + format(USD, "g") + " quando cai " + format(DROP * 100, "g") + "% do topo de 7 dias · SEM alvo: stop móvel liga em +" +
+         format(ALL_ARM * 100, "g") + "% e vende " + format(ALL_TRAIL * 100, "g") + "% abaixo do topo · stop −" + format(SL * 100, "g") +
+         "% · máx. 2 abertas (US$ 60) · velas de 4 h reais · custo " + format(bt.COST * 100, "g") + "% por lado",
          "• primeiros 2/3: " + f(rep["first"]), "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
          "• período todo (~" + format((rep["end"] - rep["start"]) / 86400 / 30, ".1f") + " meses): " + f(rep["full"]),
-         "• vendas: " + str(rep["full"]["trades"]) + " no período"]
+         "• vendas: " + str(rep["full"]["trades"]) + " no período",
+         "• SÓ o stop móvel, SEM stop −20%: último 1/3 " + format(rep["nostop_last"]["pnl"], "+.2f") + " · período todo " + f(rep["nostop_full"])]
     if best:
         L.append("• melhores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[:6]))
         L.append("• piores: " + ", ".join(c + " " + str(n) + "/" + format(p, "+.2f") for c, (n, p) in best[-4:]))
     L.append("⚠️ Só moedas que AINDA têm ≥ US$ " + format(ALL_MIN_LIQ, ",.0f") + " de liquidez hoje (as que morreram não aparecem: o real tende a ser pior). "
-             "Velas de 4 h: alvo e stop na mesma vela contam como stop. Passado não garante futuro.")
+             "Velas de 4 h: o stop móvel usa o topo de ANTES da vela (o caso pior). Passado não garante futuro.")
     return "\n".join(L)
 
 

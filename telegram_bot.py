@@ -139,7 +139,7 @@ def keyboard():
  return [[{"text":"🟢 Ligar robô BAIXA (real)","callback_data":"bx_on"},{"text":"⏹️ Desligar","callback_data":"bx_off"}],
   [{"text":"📉 Robô BAIXA: status","callback_data":"bx_status"},{"text":"📦 Posições","callback_data":"bx_pos"}],
   [{"text":"🧪 Backtest do robô (alvo 8%, stop 20%)","callback_data":"bx_bt"}],
-  [{"text":"🧪 Backtest: TODAS as moedas (10+ dias, liq. ≥ 70 mil)","callback_data":"bx_bt_all"}],
+  [{"text":"🧪 Backtest: TODAS as moedas, stop móvel 10%","callback_data":"bx_bt_all"}],
   [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
@@ -285,7 +285,8 @@ def handle(update):
  if action=="bx_bt_all":
   import baixa_bot
   why=baixa_bot.start_backtest_all(send,chat)
-  send(chat,"⛔ "+why if why else "🧪 Backtest rodando: a regra do robô (cai 5% do topo de 7 dias, alvo +8%, stop −20%, US$ 23, máx. 2 abertas) em TODAS as "
+  send(chat,"⛔ "+why if why else "🧪 Backtest rodando: compra quando cai 5% do topo de 7 dias, SEM alvo, stop móvel que liga em +10% e vende 10% abaixo do topo "
+   "(com stop −20% e também sem stop), US$ 23, máx. 2 abertas, em TODAS as "
    "moedas da Solana com 10+ dias e liquidez ≥ US$ 70 mil, últimos ~5,5 meses. Resultado em ~3 min. Só teste.",keyboard());return
  if action=="bx_bt":
   import baixa_bot
