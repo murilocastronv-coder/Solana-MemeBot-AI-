@@ -322,6 +322,8 @@ def handle(update):
      peak=float(p.get("peak_ratio") or 0)
      lines.append("• "+str(p.get("symbol") or m[:6])+(" (robô BAIXA)" if p.get("mode")=="baixa" else " ("+str(p.get("mode") or "?")+")")+
       " · custo US$ "+format(float(p.get("cost_usd") or 0),".2f")+(" · topo "+format((peak-1)*100,"+.1f")+"%" if peak else "")+
+      ((" · 🚀 stop móvel ATIVO: vende se cair para "+format((peak*(1-baixa_bot.TRAIL)-1)*100,"+.1f")+"%") if p.get("mode")=="baixa" and peak>=1+baixa_bot.ARM else
+       (" · stop móvel liga em +"+format(baixa_bot.ARM*100,"g")+"% · stop −"+format(baixa_bot.SL*100,"g")+"%" if p.get("mode")=="baixa" else ""))+
       " · aberta há "+format((time.time()-float(p.get("opened_at") or time.time()))/3600,".1f")+" h\n  https://dexscreener.com/solana/"+m)
     if not ps:lines.append("nenhuma")
     send(chat,"\n".join(lines),keyboard());return

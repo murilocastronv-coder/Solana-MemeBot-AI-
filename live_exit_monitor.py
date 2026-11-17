@@ -24,6 +24,9 @@ REMOVED_BOT_MAX_HOLD_S = 6 * 3600
 
 def trail_text(position):
     """'sells X% below the top' for the position's trailing rule."""
+    if position.get("mode") == "baixa":
+        import baixa_bot
+        return format(baixa_bot.TRAIL * 100, ".0f")
     if position.get("mode") == "consensus":
         return format(float(CONSENSUS_EXIT["drop"]) * 100, ".0f")
     if position.get("mode") == "grad":

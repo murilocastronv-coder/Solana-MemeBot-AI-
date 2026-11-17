@@ -449,8 +449,17 @@ def exit_cycle(send, chat):
              "Continua vendendo junto com a carteira copiada.\n" + m)
     while ARMED:
         m, p, sig = ARMED.pop(0)
+        extra = ""
+        if p.get("mode") == "baixa":
+            import baixa_bot
+            peak = float(sig.get("peak_ratio") or 1)
+            level = peak * (1 - baixa_bot.TRAIL)
+            extra = ("📍 Ativou em: " + format((peak - 1) * 100, "+.1f") + "% (passou de +" + format(baixa_bot.ARM * 100, "g") +
+                     "%)\n🛑 Stop agora: vende se cair para " + format((level - 1) * 100, "+.1f") + "% sobre a compra (US$ " +
+                     format(float(p.get("cost_usd") or 0) * level, ".2f") + " dos US$ " + format(float(p.get("cost_usd") or 0), ".2f") +
+                     "); se subir mais, o stop sobe junto\n")
         send(chat, "🚀 STOP MÓVEL ATIVADO — " + str(p.get("symbol") or m[:6]) + " " + format(sig["change_pct"], "+.0f") +
-             "%\nAgora vendo se cair " + trail_text(p) + "% abaixo do topo (o stop sobe junto com o preço).\n" + m)
+             "%\nAgora vendo se cair " + trail_text(p) + "% abaixo do topo (o stop sobe junto com o preço).\n" + extra + m)
     for mint, position, signal in signals:
         symbol = position.get("symbol") or mint[:6]
         if signal["action"] == "write_off" or _sell_fail_count.get(mint, 0) >= MAX_SELL_FAILURES:
