@@ -13,7 +13,7 @@ def candles(prices):
 class BaixaTest(unittest.TestCase):
     def setUp(self):
         bb._MEM.clear()
-        bb._TOP.clear()
+        bb._CHG.clear()
 
     def test_signal_and_exit(self):
         ok, px, top = bb.signal(candles([10] * 168 + [9.4]))
@@ -235,18 +235,29 @@ class RepairTest(unittest.TestCase):
 
 class LiveSignalTest(unittest.TestCase):
     def setUp(self):
-        bb._TOP.clear()
+        bb._MEM.clear()
+        bb._CHG.clear()
 
-    def test_top_cached_and_price_from_dexscreener(self):
+    def test_top_from_gecko_history_and_dexscreener(self):
         tk = {"mint": "M1", "pool": "P1", "liq": 1e5}
         calls = []
         with mock.patch("solid_dip_bt.gecko_hours", side_effect=lambda *a, **k: calls.append(1) or candles([10] * 170)):
             self.assertEqual(bb.live_signal("X", tk, 1000, None, {"M1": 9.4}), (True, 9.4, 10))
             self.assertEqual(bb.live_signal("X", tk, 2000, None, {"M1": 9.8})[0], False)
-        self.assertEqual(len(calls), 1)                                   # one GeckoTerminal read per hour
-        with mock.patch("solid_dip_bt.gecko_hours", return_value=[]):     # GeckoTerminal refuses: last top kept
-            self.assertEqual(bb.live_signal("X", tk, 1000 + 7200, None, {"M1": 9.0})[2], 10)
+        self.assertEqual(len(calls), 1)                                   # one GeckoTerminal read per hour (saved)
         self.assertEqual(bb.live_signal("X", tk, 1000, None, {}), (False, 0.0, 0.0))   # no price: no buy
-        rows = [{"baseToken": {"address": "M1"}, "priceUsd": "1.5", "liquidity": {"usd": 100}},
-                {"baseToken": {"address": "M1"}, "priceUsd": "1.6", "liquidity": {"usd": 900}}]
-        self.assertEqual(bb.dex_prices(["M1"], get=lambda url: rows), {"M1": 1.6})
+
+    def test_works_when_geckoterminal_refuses(self):
+        tk = {"mint": "M2", "pool": "P2", "liq": 1e5}
+        rows = [{"baseToken": {"address": "M2"}, "priceUsd": "9.0", "liquidity": {"usd": 900},
+                 "priceChange": {"h1": -2, "h6": -5, "h24": -10}}]          # 24 h ago it was 10.0
+        with mock.patch("solid_dip_bt.gecko_hours", return_value=[]):
+            prices = bb.dex_prices(["M2"], get=lambda url: rows)
+            bb.record_prices(prices, 5000)
+            ok, px, top = bb.live_signal("X", tk, 5000, None, prices)
+        self.assertTrue(ok)
+        self.assertAlmostEqual(top, 10.0)
+        self.assertIn("M2", bb._load()["gfail"])                          # tries GeckoTerminal again only in an hour
+        bb._CHG.clear()
+        bb.record_prices({"M2": 12.0}, 6000)                               # own saved history also counts
+        self.assertAlmostEqual(bb.top_7d("X", tk, 6500), 12.0)
