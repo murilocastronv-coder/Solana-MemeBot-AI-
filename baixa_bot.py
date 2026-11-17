@@ -217,7 +217,7 @@ def _sol_ok(sol_usd):
         return False
 
 
-def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_usd=None):
+def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_usd=None, safety=None):
     """One pass. Returns the symbols bought."""
     import solid_dip_bt as bt
     now = now or time.time()
@@ -245,6 +245,19 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
             continue
         if not (sol_ok or _sol_ok)(sol_usd if sol_usd is not None else __import__("copy_trader")._sol_usd()):
             note("ia comprar " + sym + " (caiu " + format((1 - px / top) * 100, ".0f") + "% do topo de 7 dias), mas falta SOL na carteira")
+            continue
+        if time.time() - float((d.get("blocked") or {}).get(tk["mint"], 0)) < 86400:
+            continue                                        # failed the anti-scam check in the last 24 h
+        why = (safety or sg.safety_reason)(tk["mint"])      # mint/freeze authority, top holders, sell test, Token-2022, RugCheck
+        if why and "indisponível" in why:
+            note("não comprei " + sym + " agora: anti-golpe não conseguiu checar (" + why + "); tento no próximo ciclo")
+            continue
+        if why:
+            with _LOCK:
+                d.setdefault("blocked", {})[tk["mint"]] = time.time()
+                d["blocked"] = {m: t for m, t in d["blocked"].items() if time.time() - t < 86400}
+                _save()
+            note("NÃO comprei " + sym + " (caiu " + format((1 - px / top) * 100, ".0f") + "% do topo): anti-golpe: " + why)
             continue
         pair = {"baseToken": {"address": tk["mint"], "symbol": sym}, "liquidity": {"usd": tk["liq"]}}
         settled = (buy or _buy)(pair, tk["mint"], sym, send, chat)
@@ -285,6 +298,8 @@ def status_text():
          format(ARM * 100, "g") + "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · " + ("stop −" + format(SL * 100, "g") + "%" if SL else "SEM stop") +
          " · moedas com " + str(ALL_MIN_AGE_D) + "+ dias e liquidez US$ " + format(ALL_MIN_LIQ / 1000, "g") + "–" + format(ALL_MAX_LIQ / 1000, "g") +
          " mil · máx. " + str(MAX_OPEN) + " abertas · deixa US$ " + format(KEEP_SOL_USD, "g") + " em SOL",
+         "🛡️ Anti-golpe antes de cada compra: criador sem poder de criar/congelar, 10 maiores donos, teste de venda na Jupiter, "
+         "Token-2022 sem armadilhas, RugCheck sem perigo e liquidez travada (se não der para checar, não compra)",
          "🪙 Moedas: " + (", ".join(s + " (" + t["mint"][:4] + "…, liquidez US$ " + format(t["liq"] / 1000, ",.0f") + " mil, volume 24 h US$ " +
                                     format(t.get("vol", 0) / 1000, ",.0f") + " mil)"
                                    for s, t in (d.get("tokens") or {}).items()) or ", ".join(COINS) + " (procuro os contratos ao ligar)"),
