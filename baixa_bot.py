@@ -287,17 +287,39 @@ def day_pnl(now=None):
         return 0.0
 
 
-def _sol_ok(sol_usd):
-    """Enough SOL in the bot wallet for one buy + the reserve. Uses the live engine's own balance call (the old
-    liq_bot/pool_bot helpers were removed from the project: that made this always say 'no SOL')."""
+FEE_USD = 0.5                    # network fee + the new coin's token account, per buy
+
+
+def need_usd():
+    """Free SOL (in US$) one buy needs: the order + the reserve left in SOL + fees."""
+    return USD + KEEP_SOL_USD + FEE_USD
+
+
+def room(free_usd):
+    """How many buys of US$ USD the free SOL pays for (same rule as the check before each buy)."""
+    return int(max(0.0, float(free_usd) - KEEP_SOL_USD) // (USD + FEE_USD))
+
+
+def free_sol_usd(sol_usd):
+    """SOL in the bot wallet, in US$ (None if the balance can't be read)."""
     try:
         import live_engine
         import live_order_bridge as bridge
-        lam = bridge.get_sol_balance(live_engine.get_address())
-        return lam / 1e9 * float(sol_usd) >= USD + KEEP_SOL_USD + 0.5
+        return bridge.get_sol_balance(live_engine.get_address()) / 1e9 * float(sol_usd)
     except Exception as exc:
         logging.warning("baixa: saldo de SOL indisponível (%s)", type(exc).__name__)
-        return False
+        return None
+
+
+def _sol_ok(sol_usd):
+    """Enough SOL in the bot wallet for one buy + the reserve. Uses the live engine's own balance call (the old
+    liq_bot/pool_bot helpers were removed from the project: that made this always say 'no SOL')."""
+    free = free_sol_usd(sol_usd)
+    _LAST_FREE[0] = free
+    return free is not None and free >= need_usd()
+
+
+_LAST_FREE = [None]
 
 
 REPAIR_PREFIXES = ("8s11PkgQ",)          # BLOB, bought by this robot on Nov 17 and relabelled 'copy' by the copy trade
@@ -323,6 +345,42 @@ def repair_positions():
     return fixed
 
 
+RESOLVE_RETRY_S = E("BAIXA_RESOLVE_RETRY_S", 1800)
+
+
+def _why(last):
+    """One line: what the last cycle did and, if it bought nothing, why (owner: 'it stopped buying, why?')."""
+    if not last:
+        return ""
+    t = time.strftime("%H:%M", time.gmtime(last["at"]))
+    L = "🔎 Último ciclo (" + t + " UTC): " + str(last["coins"]) + " moedas · " + str(last["dips"]) + " caíram " + \
+        format(DROP * 100, "g") + "%+ do topo de 7 dias"
+    if last.get("bought"):
+        return L + " · comprou " + ", ".join(last["bought"])
+    if last.get("full"):
+        return L + " · não compra: já tem " + str(MAX_OPEN) + "/" + str(MAX_OPEN) + " abertas"
+    why = []
+    if last.get("no_sol"):
+        free = last.get("free_usd")
+        why.append("falta SOL (livre US$ " + (format(free, ".2f") if free is not None else "?") + ", precisa US$ " +
+                   format(need_usd(), ".2f") + " por compra)")
+    if last.get("no_price"):
+        why.append("preço do SOL indisponível")
+    if last.get("unsafe"):
+        why.append(str(last["unsafe"]) + " barradas no anti-golpe" + (" (ex.: " + last["unsafe_why"] + ")" if last.get("unsafe_why") else ""))
+    if last.get("unchecked"):
+        why.append(str(last["unchecked"]) + " sem checagem anti-golpe (serviço fora)")
+    if last.get("blocked"):
+        why.append(str(last["blocked"]) + " já barradas nas últimas 24 h")
+    if last.get("failed"):
+        why.append(str(last["failed"]) + " compra(s) não confirmada(s)")
+    if not last["coins"]:
+        why.append("nenhuma moeda na lista (GeckoTerminal não respondeu; tento de novo em até 30 min)")
+    elif not last["dips"]:
+        why.append("nenhuma moeda caiu o suficiente")
+    return L + " · não comprou: " + ("; ".join(why) or "sem sinal")
+
+
 def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_usd=None, safety=None):
     """One pass. Returns the symbols bought."""
     try:
@@ -334,23 +392,33 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
     d = _load()
     if not d.get("enabled"):
         return []
-    if not d.get("tokens") or d.get("resolve_v") != RESOLVE_V or now - float(d.get("resolved_at") or 0) > 86400:
+    stale = not d.get("tokens") or d.get("resolve_v") != RESOLVE_V or now - float(d.get("resolved_at") or 0) > 86400
+    if stale and now - float(d.get("resolve_fail_at") or 0) >= RESOLVE_RETRY_S:
         found = resolve(get, now)
-        if found or d.get("resolve_v") != RESOLVE_V:
-            with _LOCK:
+        with _LOCK:
+            if found:
                 if d.get("resolve_v") != RESOLVE_V:
                     d["log"] = []                               # the old robot's notes go away with the old list
-                d["tokens"], d["resolved_at"], d["resolve_v"] = found, now, RESOLVE_V   # never keep an old list
-                _save()
+                d["tokens"], d["resolved_at"], d["resolve_v"] = found, now, RESOLVE_V
+                d.pop("resolve_fail_at", None)
+            else:
+                # GeckoTerminal refused the list: keep the coins we have (an empty answer used to wipe the list and
+                # leave the robot with NO coins for 24 h) and try again in RESOLVE_RETRY_S
+                d["resolve_fail_at"] = now
+                if d.get("resolve_v") != RESOLVE_V:
+                    d["tokens"], d["resolve_v"] = {}, RESOLVE_V   # never trade an old robot's list
+            _save()
     if DAILY_LOSS and day_pnl(now) <= -DAILY_LOSS:
         return []
     held = _open()
     bought = []
+    last = {"at": now, "coins": len(d.get("tokens") or {}), "dips": 0, "bought": bought, "full": len(held) >= MAX_OPEN}
     try:
         prices = dex_prices([t["mint"] for t in (d.get("tokens") or {}).values()], get)
         record_prices(prices, now)
     except Exception:
         prices = {}
+    no_sol = None                                           # SOL is checked once per cycle, not once per coin
     for sym, tk in (d.get("tokens") or {}).items():
         if len(held) + len(bought) >= MAX_OPEN:
             break                                           # owner: only MAX_OPEN orders open at a time
@@ -359,16 +427,32 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
         ok, px, top = live_signal(sym, tk, now, get, prices)
         if not ok:
             continue
-        if not (sol_ok or _sol_ok)(sol_usd if sol_usd is not None else __import__("copy_trader")._sol_usd()):
-            note("ia comprar " + sym + " (caiu " + format((1 - px / top) * 100, ".0f") + "% do topo de 7 dias), mas falta SOL na carteira")
+        last["dips"] += 1
+        if no_sol is None or bought:
+            try:
+                px_sol = sol_usd if sol_usd is not None else __import__("copy_trader")._sol_usd()
+            except Exception:
+                px_sol = None
+            if px_sol is None:
+                last["no_price"], no_sol = True, True
+            else:
+                _LAST_FREE[0] = None
+                no_sol = not (sol_ok or _sol_ok)(px_sol)
+                last["free_usd"] = _LAST_FREE[0]
+        if no_sol:
+            last["no_sol"] = last.get("no_sol", 0) + 1
             continue
         if time.time() - float((d.get("blocked") or {}).get(tk["mint"], 0)) < 86400:
+            last["blocked"] = last.get("blocked", 0) + 1
             continue                                        # failed the anti-scam check in the last 24 h
         why = (safety or sg.safety_reason)(tk["mint"])      # mint/freeze authority, top holders, sell test, Token-2022, RugCheck
         if why and "indisponível" in why:
+            last["unchecked"] = last.get("unchecked", 0) + 1
             note("não comprei " + sym + " agora: anti-golpe não conseguiu checar (" + why + "); tento no próximo ciclo")
             continue
         if why:
+            last["unsafe"] = last.get("unsafe", 0) + 1
+            last["unsafe_why"] = sym + ": " + why
             with _LOCK:
                 d.setdefault("blocked", {})[tk["mint"]] = time.time()
                 d["blocked"] = {m: t for m, t in d["blocked"].items() if time.time() - t < 86400}
@@ -384,6 +468,15 @@ def cycle(send=None, chat=None, now=None, get=None, buy=None, sol_ok=None, sol_u
             with _LOCK:
                 d.setdefault("bought", {})[tk["mint"]] = time.time()     # this robot's own positions
                 _save()
+        else:
+            last["failed"] = last.get("failed", 0) + 1
+    if last.get("no_sol") and not bought:
+        free = last.get("free_usd")
+        note("ia comprar " + str(last["no_sol"]) + " moeda(s) em queda, mas falta SOL: livre US$ " +
+             (format(free, ".2f") if free is not None else "?") + ", precisa US$ " + format(need_usd(), ".2f") + " por compra")
+    with _LOCK:
+        d["last"] = dict(last, bought=list(bought))
+        _save()
     return bought
 
 
@@ -435,6 +528,8 @@ def status_text():
          coins_line(d),
          "📊 " + str(len(h)) + " operações fechadas · resultado " + format(total, "+.2f") + " USD · abertas " + n_open + "/" + str(MAX_OPEN),
          "🧪 Veja o resultado dessa regra no passado em 🧪 Backtest do robô."]
+    if d.get("enabled") and _why(d.get("last")):
+        L.insert(4, _why(d.get("last")))
     for x in ((d.get("log") or []) if d.get("resolve_v") == RESOLVE_V else [])[-5:]:      # only this robot's notes
         L.append("• " + x)
     return "\n".join(L)
@@ -710,9 +805,9 @@ def wallet_text(sol_usd=None):
     try:
         sol = bridge.get_sol_balance(addr) / 1e9
         sol_line = "◎ " + format(sol, ".4f") + " SOL" + (" (≈ US$ " + format(sol * px, ",.2f") + ")" if px else "")
-        room = int(max(0.0, sol * px - KEEP_SOL_USD) // USD) if px else 0
+        n_room = room(sol * px) if px else 0
     except Exception as exc:
-        sol_line, room = "◎ saldo de SOL indisponível agora (" + type(exc).__name__ + ")", 0
+        sol_line, n_room = "◎ saldo de SOL indisponível agora (" + type(exc).__name__ + ")", 0
     coins = []
     try:
         import wallet_holdings
@@ -723,7 +818,8 @@ def wallet_text(sol_usd=None):
     L = ["💰 CARTEIRA DO ROBÔ BAIXA (é com ela que ele compra e vende)", addr, "https://solscan.io/account/" + addr, sol_line]
     if coins:
         L.append("🪙 Moedas: " + ", ".join(m[:4] + "… US$ " + format(v, ",.2f") for m, v in coins[:8]))
-    L.append("🛒 Dá para " + str(min(room, MAX_OPEN)) + " compra(s) de US$ " + format(USD, "g") + " agora (deixa US$ " +
-             format(KEEP_SOL_USD, "g") + " em SOL)." if px else "🛒 Sem preço do SOL agora para calcular as compras.")
+    L.append("🛒 Dá para " + str(min(n_room, MAX_OPEN)) + " compra(s) de US$ " + format(USD, "g") + " agora (cada uma precisa de US$ " +
+             format(need_usd(), ".2f") + " livres em SOL: ordem + US$ " + format(KEEP_SOL_USD, "g") + " de reserva + taxas)." if px
+             else "🛒 Sem preço do SOL agora para calcular as compras.")
     L.append("Confira se esse endereço é o mesmo da carteira onde você vê o seu SOL (por exemplo, no Phantom).")
     return "\n".join(L)

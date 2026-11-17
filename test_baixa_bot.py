@@ -261,3 +261,57 @@ class LiveSignalTest(unittest.TestCase):
         bb._CHG.clear()
         bb.record_prices({"M2": 12.0}, 6000)                               # own saved history also counts
         self.assertAlmostEqual(bb.top_7d("X", tk, 6500), 12.0)
+
+
+class WhyNotBuyingTest(unittest.TestCase):
+    """Owner (Nov 17): 'it bought one and stopped': the status says why each cycle bought nothing."""
+    def setUp(self):
+        bb._MEM.clear()
+        bb._CHG.clear()
+
+    def _run(self, **kw):
+        d = bb._load()
+        d.update(enabled=True, resolved_at=2e9, resolve_v=bb.RESOLVE_V,
+                 tokens={"A": {"mint": "MA", "pool": "PA", "liq": 1e5}, "B": {"mint": "MB", "pool": "PB", "liq": 1e5}})
+        with mock.patch.object(bb, "top_7d", return_value=10.0), mock.patch.object(bb, "_open", return_value={"MX"}), \
+                mock.patch.object(bb, "day_pnl", return_value=0), mock.patch.object(bb, "repair_positions", return_value=[]), \
+                mock.patch.object(bb, "dex_prices", side_effect=lambda mints, get=None: {m: 9.0 for m in mints}):
+            return bb.cycle(now=2e9, sol_usd=150, **kw)
+
+    def test_no_sol_is_shown_with_the_numbers(self):
+        with mock.patch.object(bb, "free_sol_usd", return_value=20.0):
+            self.assertEqual(self._run(buy=lambda *a: True, safety=lambda m: ""), [])
+        txt = bb.status_text()
+        self.assertIn("falta SOL (livre US$ 20.00, precisa US$ 26.50", txt)
+        self.assertEqual(sum("falta SOL" in x for x in bb._load()["log"]), 1)     # one note per cycle, not per coin
+
+    def test_anti_scam_reason_is_shown(self):
+        self.assertEqual(self._run(buy=lambda *a: True, sol_ok=lambda p: True, safety=lambda m: "RugCheck: Low Liquidity"), [])
+        self.assertIn("2 barradas no anti-golpe", bb.status_text())
+
+    def test_sol_price_down_does_not_crash_the_cycle(self):
+        with mock.patch("copy_trader._sol_usd", side_effect=RuntimeError("down")):
+            d = bb._load()
+            d.update(enabled=True, resolved_at=2e9, resolve_v=bb.RESOLVE_V, tokens={"A": {"mint": "MA", "pool": "PA", "liq": 1e5}})
+            with mock.patch.object(bb, "top_7d", return_value=10.0), mock.patch.object(bb, "_open", return_value=set()), \
+                    mock.patch.object(bb, "day_pnl", return_value=0), mock.patch.object(bb, "repair_positions", return_value=[]), \
+                    mock.patch.object(bb, "dex_prices", side_effect=lambda mints, get=None: {m: 9.0 for m in mints}):
+                self.assertEqual(bb.cycle(now=2e9, buy=lambda *a: True, safety=lambda m: ""), [])
+        self.assertIn("preço do SOL indisponível", bb.status_text())
+
+    def test_failed_coin_list_keeps_the_coins(self):
+        d = bb._load()
+        d.update(enabled=True, resolved_at=0, resolve_v=bb.RESOLVE_V, tokens={"A": {"mint": "MA", "pool": "PA", "liq": 1e5}})
+        with mock.patch.object(bb, "resolve", return_value={}) as res, mock.patch.object(bb, "_open", return_value=set()), \
+                mock.patch.object(bb, "day_pnl", return_value=0), mock.patch.object(bb, "repair_positions", return_value=[]), \
+                mock.patch.object(bb, "dex_prices", return_value={}):
+            bb.cycle(now=2e9)
+            bb.cycle(now=2e9 + 900)                        # no new GeckoTerminal call before 30 min
+        self.assertEqual(res.call_count, 1)
+        self.assertIn("A", bb._load()["tokens"])           # an empty answer never wipes the list
+
+    def test_room_matches_the_buy_check(self):
+        self.assertEqual(bb.room(26.49), 0)
+        self.assertEqual(bb.room(26.50), 1)
+        self.assertEqual(bb.room(49.99), 1)
+        self.assertEqual(bb.room(50.00), 2)
