@@ -238,7 +238,7 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
-TRADE_ACTIONS={"tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
+TRADE_ACTIONS={"trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
  "tsc","tsv","tsell","twal","tsec","towner","trade_help","/posicoes","/ordens","/config","/ajuda","/comprar","/home","/dca","/watchlist","/scanner"}
 TRADE_PREFIXES=("tb","tbx","ts","tt","tl","tr","tc","tlo","tld","tla","tlx","tsoon","tsp","tw","tdo","tdp","tdx","tbc","tsx")
 def TRADE_ROUTE(cb,action):
@@ -663,10 +663,16 @@ def copy_wallet_action(chat,action,text):
 def trade_loop():
  """Trading bot upkeep every minute: limit orders, DCA orders, the users' TP / SL / trailing stops."""
  import trade_panel
+ import big_bot
  time.sleep(30)
+ next_robot=0
  while True:
   try:trade_panel.upkeep_all(send,active_chat())
   except Exception as exc:logging.warning("trade upkeep: %s: %s",type(exc).__name__,str(exc)[:150])
+  if time.time()>=next_robot:
+   next_robot=time.time()+big_bot.CYCLE_S
+   try:big_bot.cycle(send,active_chat())
+   except Exception as exc:logging.warning("big robot: %s: %s",type(exc).__name__,str(exc)[:150])
   time.sleep(60)
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
