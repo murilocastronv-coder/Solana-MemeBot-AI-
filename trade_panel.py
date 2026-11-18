@@ -492,7 +492,8 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 def home_text(chat):
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
-        return big_bot.status_text(chat, big_bot.cached_signals())
+        import sniper_demo
+        return big_bot.status_text(chat, big_bot.cached_signals()) + "\n\n" + sniper_demo.text(chat)
     if AIRDROP_ONLY and HOME == "superteam":
         import superteam_bot
         return superteam_bot.screen(chat)[0] + "\n💬 Nosso grupo no Telegram: " + GROUP_URL
@@ -514,7 +515,8 @@ def home_text(chat):
 def home_keyboard(chat):
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
-        kb = big_bot.keyboard(chat)
+        import sniper_demo
+        kb = big_bot.keyboard(chat) + [sniper_demo.keyboard_row(chat)]
         row = [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}]
         try:
             if positions(chat):
@@ -715,7 +717,7 @@ def cb_blocked(action):
     a = str(action or "")
     if a in AIRDROP_ALLOWED or a.startswith(("tad", "/airdrop")) or a.split(":")[0] in ("ts", "tsx"):
         return False
-    if HOME == "robot" and (a in ("trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "trd_on", "trd_off", "trd_reset", "/robo", "/backtest", "tterms")):
+    if HOME == "robot" and (a in ("tsn_on", "tsn_off", "tsn_reset", "trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "trd_on", "trd_off", "trd_reset", "/robo", "/backtest", "tterms")):
         return False
     return a.startswith("t") and (a.split(":")[0] in ("tb", "tbx", "tbc", "tc", "tlo", "tld", "tla", "tlx", "tt", "tl", "tr", "tw", "tdo", "tdp",
                                                      "tdx", "tsp", "tsoon") or a in ("tbuy", "tsellm", "tlim", "tdl", "twl", "tscan", "tset", "tsb",
@@ -833,6 +835,11 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         why = big_bot.start_backtest(send, chat, run_async)
         send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
              " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
+        return True
+    if action in ("tsn_on", "tsn_off", "tsn_reset"):
+        import sniper_demo
+        sniper_demo.handle(action, send, chat)
+        send(chat, home_text(chat), home_keyboard(chat))
         return True
     if action in ("trd_on", "trd_off", "trd_reset"):
         import big_bot
