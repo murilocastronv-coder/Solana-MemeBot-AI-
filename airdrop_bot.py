@@ -21,21 +21,19 @@ def _gnews(q, lang="en"):
     return "https://news.google.com/rss/search?q=" + q.replace(" ", "+") + "+when:7d&" + loc
 
 
-# Nov 18 (owner: "everywhere that has Solana airdrops"): news searches, Reddit, Medium and airdrop sites. A source that
+# Nov 18 (owner: "everywhere that has Solana airdrops"): news searches, Medium and airdrop sites. Reddit (404 / 429) and
+# airdrops.io (403) refuse the server on Render, so they were taken out (they can be added back with AIRDROP_FEEDS). A source that
 # refuses the server is skipped for 30 min; the same story from two sources is sent once.
 DEFAULT_FEEDS = (
     _gnews("solana airdrop"), _gnews("solana airdrop claim"), _gnews("solana airdrop eligibility"),
     _gnews("SPL token airdrop"), _gnews("solana points airdrop"), _gnews("solana ecosystem airdrop"),
     _gnews("airdrop solana", "pt"), _gnews("airdrop na solana", "pt"),
     _gnews("airdrop solana", "fr"), _gnews("largage aérien solana", "fr"),        # owner (Nov 18): PT, FR and EN
-    "https://www.reddit.com/r/solana/search.rss?q=airdrop&restrict_sr=1&sort=new",
-    "https://www.reddit.com/r/airdrops/search.rss?q=solana&restrict_sr=1&sort=new",
-    "https://www.reddit.com/r/CryptoAirdrop/search.rss?q=solana&restrict_sr=1&sort=new",
-    "https://www.reddit.com/r/solanadev/search.rss?q=airdrop&restrict_sr=1&sort=new",
+    _gnews("solana airdrop", "pt"), _gnews("solana airdrop", "fr"), _gnews("jupiter airdrop"), _gnews("pump.fun airdrop"),
+    _gnews("solana testnet airdrop campaign"), _gnews("solana memecoin airdrop"),
     "https://medium.com/feed/tag/solana-airdrop",
     "https://medium.com/feed/tag/airdrop",
     "https://airdropalert.com/feed/",
-    "https://airdrops.io/feed/",
 )
 FEEDS = tuple(u.strip() for u in os.getenv("AIRDROP_FEEDS", ",".join(DEFAULT_FEEDS)).split(",") if u.strip())
 FEED_EVERY_S = int(os.getenv("AIRDROP_FEED_EVERY_S", "600"))     # each source read at most every 10 min (no blocking)
@@ -50,6 +48,7 @@ SCAM_RE = re.compile(r"seed phrase|frase secreta|private key|chave privada|conne
                      r"validate (?:your )?wallet|sync (?:your )?wallet|wallet ?connect.*claim|double your", re.I)
 NOT_HANDLES = {"intent", "share", "home", "search", "i", "hashtag", "explore"}
 WAIT = {}                                      # chat -> time: waiting for the wallet address
+_LOGGED = [0.0]
 TEMPLATES = (
     "Participando! 🚀 Minha carteira Solana: {w}",
     "Bora {p}! 🔥 Carteira SOL: {w}",
@@ -190,7 +189,7 @@ def find(get=None):
             if key in titles:
                 continue
             titles.add(key)
-            if is_solana(it) and not is_scam(it):
+            if is_solana(it) and not is_scam(it) and not CJK_RE.search(it["title"]):
                 it["handle"], it["tweet"] = x_post(it["text"])
                 it["name"] = project_name(it)
                 out.append(it)
@@ -198,10 +197,22 @@ def find(get=None):
 
 
 # ---------------------------------------------------------------- the reply and the X link
+GENERIC_NAMES = {"", "solana", "sol", "crypto", "cripto", "the", "new", "o projeto", "token", "airdrop"}
+CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+def good_name(name):
+    """A project name worth writing in the reply (Nov 18: 'Solana on Solana', a Chinese headline)."""
+    n = str(name or "").strip()
+    return bool(n) and n.lower().lstrip("@") not in GENERIC_NAMES and not CJK_RE.search(n) and len(n.split()) <= 3
+
+
 def message(name, wallet, key, used=()):
-    """A different reply for each airdrop (the template is chosen from the airdrop's link, never the last one used)."""
+    """A different reply for each airdrop (the template is chosen from the airdrop's link, never the last one used).
+    Without a good project name, only the templates that do not name the project are used."""
     n = int(hashlib.sha256(str(key).encode()).hexdigest(), 16)
-    order = [TEMPLATES[(n + i) % len(TEMPLATES)] for i in range(len(TEMPLATES))]
+    pool = TEMPLATES if good_name(name) else tuple(t for t in TEMPLATES if "{p}" not in t)
+    order = [pool[(n + i) % len(pool)] for i in range(len(pool))]
     pick = next((t for t in order if t not in used), order[0])
     return pick.format(p=name, w=wallet), pick
 
@@ -213,18 +224,29 @@ def x_link(text, tweet=None):
     return "https://twitter.com/intent/tweet?" + urllib.parse.urlencode(q)
 
 
+def x_search(name):
+    q = (name if good_name(name) else "solana") + " airdrop"
+    return "https://x.com/search?" + urllib.parse.urlencode({"q": q, "f": "live"})
+
+
 def card(item, wallet, used=()):
-    msg, tpl = message(item.get("name") or "o projeto", wallet, item.get("link") or item.get("tweet"), used)
-    if item.get("handle") and not item.get("tweet"):
-        msg = "@" + item["handle"] + " " + msg
-    lines = ["🪂 AIRDROP: " + str(item.get("name") or item.get("title")),
+    """The airdrop with its reply. 'Abrir no X' only when the project's X post is known: the reply goes in the
+    COMMENTS of that post (owner, Nov 18: never a loose post on the profile). Otherwise a button searches the post on X
+    and the person pastes its link here to get the comment ready."""
+    msg, tpl = message(item.get("name") or "", wallet, item.get("link") or item.get("tweet"), used)
+    tweet = item.get("tweet")
+    lines = ["🪂 AIRDROP: " + str(item.get("name") if good_name(item.get("name")) else item.get("title") or item.get("name")),
              ("📝 " + item["title"] if item.get("title") and item.get("title") != item.get("name") else ""),
              ("🔗 " + item["link"] if item.get("link") else ""),
-             "✍️ Sua resposta (diferente em cada airdrop):\n" + msg,
-             ("Toque em 🐦 Abrir no X: abre a resposta no post do projeto, já escrita. Confira e publique você mesmo." if item.get("tweet")
-              else "Toque em 🐦 Abrir no X: abre um post já escrito marcando o projeto. Confira e publique você mesmo."),
-             "⚠️ Nunca conecte a carteira em site de 'resgate' nem passe frase secreta: airdrop de verdade não pede isso."]
-    kb = [[{"text": "🐦 Abrir no X", "url": x_link(msg, item.get("tweet"))}]]
+             "✍️ Seu comentário (diferente em cada airdrop):\n" + msg]
+    if tweet:
+        lines.append("Toque em 💬 Comentar no X: abre o post do projeto com o comentário já escrito. Confira e publique.")
+        kb = [[{"text": "💬 Comentar no X", "url": x_link(msg, tweet)}]]
+    else:
+        lines.append("Esse aviso não trouxe o post do projeto. Toque em 🔎 Achar o post no X, abra o post OFICIAL do airdrop, "
+                     "copie o link dele e cole aqui no bot: eu preparo o comentário certo nesse post.")
+        kb = [[{"text": "🔎 Achar o post no X", "url": x_search(item.get("name"))}]]
+    lines.append("⚠️ Nunca conecte a carteira em site de 'resgate' nem passe frase secreta: airdrop de verdade não pede isso.")
     if item.get("link"):
         kb.append([{"text": "📄 Ver o airdrop", "url": item["link"]}])
     return "\n".join(x for x in lines if x), kb, tpl
@@ -250,6 +272,8 @@ def run_for(chat, send, items, now=None, force=False):
             break
     a["last_run"] = now
     set_state(chat, a)
+    if sent:
+        logging.info("airdrop: sent %s new airdrop(s) to %s", sent, chat)
     return sent
 
 
@@ -260,6 +284,9 @@ def cycle(send, chats, get=None, now=None):
     if not want:
         return
     items = find(get)
+    if items and now - _LOGGED[0] > 1800:
+        _LOGGED[0] = now
+        logging.info("airdrop: %s Solana airdrops in the sources right now", len(items))
     for c in want:
         try:
             run_for(c, send, items, now)

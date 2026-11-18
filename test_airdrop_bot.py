@@ -45,7 +45,8 @@ class AirdropTest(unittest.TestCase):
         q = parse_qs(urlparse(url).query)
         self.assertEqual(q["in_reply_to"], ["1888888888888888888"])
         self.assertIn(W, q["text"][0])
-        self.assertTrue(parse_qs(urlparse(sent[1][1][0][0]["url"]).query)["text"][0].startswith("@bazfi "))
+        self.assertTrue(sent[1][1][0][0]["url"].startswith("https://x.com/search?"))   # no post known: never a loose post
+        self.assertFalse(any("intent/tweet" in b["url"] for row in sent[1][1] for b in row))
         self.assertEqual(ab.run_for(1, lambda *a, **k: None, items), 0)          # already sent: not again
 
     def test_pasted_x_post_and_wallet_flow(self):
@@ -163,3 +164,19 @@ class LanguagesTest(unittest.TestCase):
             self.assertIn(word, txt)
         msgs = {ab.message("Foo", W, "k" + str(i))[0] for i in range(60)}
         self.assertTrue(any("Mon wallet" in m or "Adresse SOL" in m or "Je " in m or "Partant" in m for m in msgs))
+
+
+class CommentOnlyTest(unittest.TestCase):
+    def test_generic_or_chinese_names_not_used(self):
+        self.assertFalse(ab.good_name("Solana"))
+        self.assertFalse(ab.good_name("Solana 空投 CSV 格式"))
+        self.assertTrue(ab.good_name("Kamino"))
+        for i in range(30):
+            m, _ = ab.message("Solana", W, "k" + str(i))
+            self.assertNotIn("Solana on Solana", m)
+            self.assertNotIn("{p}", m)
+
+    def test_chinese_headlines_skipped(self):
+        feed = FEED.replace("Fooswap Airdrop", "Solana 空投 CSV 格式 airdrop")
+        names = [i["name"] for i in ab.find(get=lambda url: feed)]
+        self.assertNotIn("Solana 空投 CSV 格式", names)
