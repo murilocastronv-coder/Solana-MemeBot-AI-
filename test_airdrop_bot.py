@@ -105,3 +105,33 @@ class AirdropOnlyTest(unittest.TestCase):
             self.assertEqual(ab._fetch("u"), FEED)
             self.assertEqual(ab._fetch("u"), FEED)
         self.assertEqual(calls[1].get("If-None-Match"), "abc")
+
+
+ATOM = """<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+<entry><title>Kamino airdrop season 3 on Solana is live</title><link href="https://www.reddit.com/r/solana/comments/abc/"/>
+<content>Official: https://x.com/KaminoFinance/status/1777777777777777777</content></entry>
+<entry><title>Free SOL airdrop - connect your wallet to claim</title><link href="https://www.reddit.com/r/solana/comments/def/"/>
+<content>scam</content></entry></feed>"""
+NEWS = """<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>Kamino airdrop season 3 on Solana is live - CoinDesk</title><link>https://news.example/kamino</link><description>solana airdrop</description></item>
+<item><title>Bitcoin hits new high - Reuters</title><link>https://news.example/btc</link><description>no</description></item>
+</channel></rss>"""
+
+
+class MoreSourcesTest(unittest.TestCase):
+    def test_atom_news_dedupe_and_scam(self):
+        with mock.patch.object(ab, "FEEDS", ("atom", "news")):
+            items = ab.find(get=lambda url: ATOM if url == "atom" else NEWS)
+        self.assertEqual(len(items), 1)                    # same title from 2 sources: once; scam and BTC news dropped
+        self.assertEqual(items[0]["tweet"], "1777777777777777777")
+        self.assertEqual(items[0]["name"], "Kamino")
+        self.assertEqual(ab.project_name({"title": "Kamino airdrop season 3 on Solana is live - CoinDesk"}), "Kamino")
+
+    def test_refusing_source_is_skipped_for_a_while(self):
+        class R:
+            status_code, text, headers = 403, "", {}
+        ab._FEED_FAIL.clear()
+        with mock.patch.object(ab.requests, "get", return_value=R()) as g, mock.patch.object(ab, "FEEDS", ("u",)):
+            self.assertEqual(ab.find(), [])
+            self.assertEqual(ab.find(), [])
+        self.assertEqual(g.call_count, 1)
