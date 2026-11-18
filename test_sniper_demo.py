@@ -83,4 +83,23 @@ class SniperDemoTest(unittest.TestCase):
         sd.exits(1, {m: 0.00105}, None, now=NOW + 240)                 # 6% below the top: sells with profit
         h = sd.state(1)["hist"][0]
         self.assertIn("stop móvel", h["why"])
-        self.assertEqual(h["rule"], "v2")
+        self.assertEqual(h["rule"], sd.RULE)
+
+
+class V3Test(unittest.TestCase):
+    def test_profit_floor_after_10(self):
+        self.assertIsNone(sd.exit_reason(1.09, 60, peak=1.09))
+        self.assertIn("piso", sd.exit_reason(1.04, 60, peak=1.11))         # Tomás: +10% then back to +0.2%
+        self.assertIn("stop móvel", sd.exit_reason(1.07, 60, peak=1.13))   # trailing still first above the floor
+
+    def test_refusal_funnel(self):
+        sd.REASONS.clear()
+        f = sd.features(pair(up1h=-10), NOW)
+        sd.count(1, sd.entry_reason(f), f, NOW)
+        sd.count(1, sd.entry_reason(f), f, NOW)                           # same coin counted once
+        g = sd.features(pair(mint="Zzz111111111111111111111111111111111pump", vol5=3000), NOW)
+        sd.count(1, sd.entry_reason(g), g, NOW)
+        t = sd.funnel_text(1)
+        self.assertIn("2 moedas", t)
+        self.assertIn("a hora não está subindo: 1", t)
+        self.assertIn("pouco volume em 5 min: 1", t)
