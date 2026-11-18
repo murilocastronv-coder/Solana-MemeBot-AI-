@@ -504,7 +504,7 @@ def home_keyboard(chat):
           [{"text": "💼 Posições", "callback_data": "tpl"}, {"text": "📋 Ordens limite", "callback_data": "tlim"},
            {"text": "🔁 Ordens DCA", "callback_data": "tdl"}],
           [{"text": "👥 Copy trade", "callback_data": "tcopy"}, {"text": "🤖 Robô moedas grandes", "callback_data": "trob"}],
-          [{"text": "🔎 Scanner", "callback_data": "tscan"}, {"text": "💰 Recompensas", "callback_data": "tsoon:rewards"},
+          [{"text": "🔎 Scanner", "callback_data": "tscan"}, {"text": "🪂 Airdrops", "callback_data": "tad"},
            {"text": "⭐ Watchlist", "callback_data": "twl"}],
           [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}],
           [{"text": "⚙️ Configurações", "callback_data": "tset"}, {"text": "❓ Ajuda", "callback_data": "thelp"},
@@ -909,6 +909,63 @@ def handle(action, text, send, chat, tail=None, run_async=None):
     if head == "tlx":
         send(chat, ("❌ Ordem cancelada." if cancel_limit(chat, rest) else "Essa ordem já não existe."), tail)
         return True
+    import airdrop_bot
+    if action in ("tad", "/airdrop", "tad_on", "tad_off", "tad_w", "tad_now"):
+        a = airdrop_bot.state(chat)
+        if action == "tad_w":
+            airdrop_bot.WAIT[chat] = time.time()
+            send(chat, "✏️ Mande o endereço PÚBLICO da carteira Solana que vai nas respostas dos airdrops (ex.: da sua Phantom). "
+                 "Nunca mande chave nem frase secreta. /cancelar para desistir.")
+            return True
+        if action in ("tad_on", "tad_off"):
+            if action == "tad_on" and not a["wallet"]:
+                airdrop_bot.WAIT[chat] = time.time()
+                send(chat, "Primeiro mande o endereço PÚBLICO da carteira Solana que vai nas respostas (ex.: da sua Phantom).")
+                return True
+            a["on"] = action == "tad_on"
+            airdrop_bot.set_state(chat, a)
+            if a["on"]:
+                run_async(lambda: airdrop_bot.run_for(chat, send, airdrop_bot.find(), force=True) or
+                          send(chat, "🪂 Nenhum airdrop novo da Solana agora. Te aviso quando aparecer."))
+        if action == "tad_now":
+            if not a["wallet"]:
+                airdrop_bot.WAIT[chat] = time.time()
+                send(chat, "Primeiro mande o endereço PÚBLICO da carteira Solana que vai nas respostas.")
+                return True
+            send(chat, "🔎 Procurando airdrops da Solana…")
+            run_async(lambda: airdrop_bot.run_for(chat, send, airdrop_bot.find(), force=True) or
+                      send(chat, "🪂 Nenhum airdrop novo da Solana agora.", tail))
+            return True
+        t, kb = airdrop_bot.screen(chat)
+        send(chat, t, kb + tail)
+        return True
+    if chat in airdrop_bot.WAIT and text is not None:
+        if str(text).strip() == "/cancelar" or time.time() - airdrop_bot.WAIT[chat] > 600:
+            airdrop_bot.WAIT.pop(chat, None)
+            if str(text).strip() == "/cancelar":
+                send(chat, "Cancelado.", tail)
+                return True
+        else:
+            w = airdrop_bot.valid_wallet(text)
+            if not w:
+                send(chat, "⛔ Endereço inválido. Mande o endereço público da carteira Solana (ou /cancelar).")
+                return True
+            airdrop_bot.WAIT.pop(chat, None)
+            a = airdrop_bot.state(chat)
+            a["wallet"] = w
+            airdrop_bot.set_state(chat, a)
+            t, kb = airdrop_bot.screen(chat)
+            send(chat, "✅ Carteira dos airdrops: " + w + "\n\n" + t, kb + tail)
+            return True
+    if text and airdrop_bot.STATUS_RE.search(str(text)):
+        out = airdrop_bot.from_post_link(chat, text)
+        if out == "wallet":
+            airdrop_bot.WAIT[chat] = time.time()
+            send(chat, "Primeiro mande o endereço PÚBLICO da carteira Solana que vai nas respostas dos airdrops.")
+            return True
+        if out:
+            send(chat, out[0], out[1] + tail)
+            return True
     pending = INPUT.get(chat)
     if pending and time.time() - pending["at"] < 600 and text is not None and not str(text).startswith("/"):
         INPUT.pop(chat, None)
