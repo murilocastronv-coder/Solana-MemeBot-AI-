@@ -309,7 +309,8 @@ def set_demo(chat, d):
 
 def demo_reset(chat, now=None):
     d = demo(chat)
-    d.update(cash=DEMO_START, start_usd=DEMO_START, pos={}, hist=[], bought={}, started=now or time.time())
+    d.update(cash=DEMO_START, start_usd=DEMO_START, pos={}, hist=[], bought={}, started=now or time.time(),
+             curve=[[int(now or time.time()), DEMO_START]])
     set_demo(chat, d)
     return d
 
@@ -357,14 +358,19 @@ def demo_exits(chat, prices, send=None, now=None):
 
 def demo_tick(send, chats, get=None):
     """Every 2 min: the demo positions' trailing stops with fresh prices (buys stay in the 15-min cycle)."""
-    open_chats = [c for c in chats if demo(c)["on"] and demo(c)["pos"]]
-    if not open_chats:
+    on_chats = [c for c in chats if demo(c)["on"]]
+    if not on_chats:
         return
-    mints = sorted({p["mint"] for c in open_chats for p in demo(c)["pos"].values()})
-    prices = dex_prices(mints, get)
-    for c in open_chats:
+    mints = sorted({p["mint"] for c in on_chats for p in demo(c)["pos"].values()})
+    prices = dex_prices(mints, get) if mints else {}
+    import demo_report
+    for c in on_chats:
         try:
-            demo_exits(c, prices, send)
+            if demo(c)["pos"]:
+                demo_exits(c, prices, send)
+            d = demo(c)
+            if demo_report.snapshot(d, demo_value(d, prices)):     # balance over time (one point per hour)
+                set_demo(c, d)
         except Exception as exc:
             logging.info("big demo %s: %s", c, type(exc).__name__)
 

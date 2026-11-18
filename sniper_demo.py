@@ -101,7 +101,8 @@ def save(chat, d):
 
 def reset(chat, now=None):
     d = state(chat)
-    d.update(cash=START, start_usd=START, pos={}, hist=[], seen=[], started=now or time.time())
+    d.update(cash=START, start_usd=START, pos={}, hist=[], seen=[], started=now or time.time(),
+             curve=[[int(now or time.time()), START]])
     save(chat, d)
     return d
 
@@ -254,9 +255,13 @@ def cycle(send, chats, pairs_fn=None, prices_fn=None, safety=None):
         except Exception as exc:
             logging.info("sniper demo prices: %s", type(exc).__name__)
     pairs = sorted(pairs, key=lambda p: -_num((p.get("volume") or {}).get("m5")))
+    import demo_report
     for c in on:
         try:
             exits(c, prices, send)
             buys(c, pairs, send, safety=safety)
+            d = state(c)
+            if demo_report.snapshot(d, value(d, prices)):          # balance over time (one point per hour)
+                save(c, d)
         except Exception as exc:
             logging.info("sniper demo %s: %s", c, type(exc).__name__)

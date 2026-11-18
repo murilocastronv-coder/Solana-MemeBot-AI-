@@ -270,6 +270,15 @@ def handle(update):
  if not authorized(chat):
   try:__import__("owner_notify").visit(chat,(cb or msg or {}).get("from"))
   except Exception:logging.exception("visit stats failed")
+ if action in ("tres","/resultados"):
+  def show_results():
+   import demo_report
+   try:
+    t,png=demo_report.results(chat)
+    send_photo(chat,png,"📈 Saldo das carteiras de teste ao longo do tempo")
+    send(chat,t,keyboard_for(chat))
+   except Exception as exc:send(chat,"⛔ Resultados: "+type(exc).__name__+": "+str(exc)[:150],keyboard_for(chat))
+  run_async(show_results);return
  import airdrop_bot
  if TRADE_ROUTE(cb,action) or (not cb and (chat in trade_panel.INPUT or chat in airdrop_bot.WAIT or airdrop_bot.STATUS_RE.search(text or ""))):
   if trade_panel.handle(action,None if cb else text,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async):return
