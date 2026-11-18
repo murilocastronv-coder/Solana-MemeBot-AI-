@@ -492,8 +492,7 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 def home_text(chat):
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
-        import sniper_demo
-        return big_bot.status_text(chat, big_bot.cached_signals()) + "\n\n" + sniper_demo.text(chat)
+        return big_bot.status_text(chat, big_bot.cached_signals())
     if AIRDROP_ONLY and HOME == "superteam":
         import superteam_bot
         return superteam_bot.screen(chat)[0] + "\n💬 Nosso grupo no Telegram: " + GROUP_URL
@@ -515,8 +514,7 @@ def home_text(chat):
 def home_keyboard(chat):
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
-        import sniper_demo
-        kb = [[{"text": "📊 Resultados das carteiras de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat) + [sniper_demo.keyboard_row(chat)]
+        kb = [[{"text": "📊 Resultados da carteira de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat)
         row = [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}]
         try:
             if positions(chat):
@@ -717,7 +715,7 @@ def cb_blocked(action):
     a = str(action or "")
     if a in AIRDROP_ALLOWED or a.startswith(("tad", "/airdrop")) or a.split(":")[0] in ("ts", "tsx"):
         return False
-    if HOME == "robot" and (a in ("tsn_on", "tsn_off", "tsn_reset", "trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "trd_on", "trd_off", "trd_reset", "/robo", "/backtest", "tterms")):
+    if HOME == "robot" and (a in ("trpos", "/posicoes_robo", "tsn_on", "tsn_off", "tsn_reset", "trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "trd_on", "trd_off", "trd_reset", "/robo", "/backtest", "tterms")):
         return False
     return a.startswith("t") and (a.split(":")[0] in ("tb", "tbx", "tbc", "tc", "tlo", "tld", "tla", "tlx", "tt", "tl", "tr", "tw", "tdo", "tdp",
                                                      "tdx", "tsp", "tsoon") or a in ("tbuy", "tsellm", "tlim", "tdl", "twl", "tscan", "tset", "tsb",
@@ -836,10 +834,12 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
              " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
         return True
+    if action in ("trpos", "/posicoes_robo"):
+        import big_bot
+        run_async(lambda: send(chat, big_bot.positions_text(chat), home_keyboard(chat)))
+        return True
     if action in ("tsn_on", "tsn_off", "tsn_reset"):
-        import sniper_demo
-        sniper_demo.handle(action, send, chat)
-        send(chat, home_text(chat), home_keyboard(chat))
+        send(chat, "🤖 O sniper foi removido: o bot agora é só o robô das moedas grandes.", home_keyboard(chat))
         return True
     if action in ("trd_on", "trd_off", "trd_reset"):
         import big_bot

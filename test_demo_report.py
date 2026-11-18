@@ -38,5 +38,5 @@ class DemoReportTest(unittest.TestCase):
         bb.set_demo(1, b)
         text, png = dr.results(1, now=NOW + 7200)
         self.assertIn("ROBÔ MOEDAS GRANDES", text)
-        self.assertIn("SNIPER", text)
+        self.assertNotIn("SNIPER", text)                       # owner (Nov 18): sniper removed
         self.assertTrue(png.startswith(b"\x89PNG"))
