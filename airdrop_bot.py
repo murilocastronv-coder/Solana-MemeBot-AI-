@@ -15,7 +15,13 @@ import xml.etree.ElementTree as ET
 
 import requests
 
-FEEDS = tuple(u.strip() for u in os.getenv("AIRDROP_FEEDS", "https://airdrops.io/feed/").split(",") if u.strip())
+# Nov 18: airdrops.io refuses the server (HTTP error), so news and Reddit feeds that accept servers are read too
+FEEDS = tuple(u.strip() for u in os.getenv("AIRDROP_FEEDS", ",".join((
+    "https://news.google.com/rss/search?q=solana+airdrop+when:7d&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=solana+airdrop+when:7d&hl=pt-BR&gl=BR&ceid=BR:pt-419",
+    "https://www.reddit.com/r/solana/search.rss?q=airdrop&restrict_sr=1&sort=new",
+    "https://airdrops.io/feed/"))).split(",") if u.strip())
+_FEED_FAIL = {}                                           # url -> time of the last refusal (retried after 30 min)
 EVERY_S = int(os.getenv("AIRDROP_EVERY_S", "30"))      # owner (Nov 18): look every 30 s (conditional GET, light on the site)
 _FEED_CACHE = {}                                          # url -> (etag, last-modified, body)
 MAX_PER_RUN = 5
@@ -76,6 +82,14 @@ def parse_feed(xml_text):
     except ET.ParseError:
         return out
     ns = {"content": "http://purl.org/rss/1.0/modules/content/"}
+    atom = "{http://www.w3.org/2005/Atom}"
+    for e in root.iter(atom + "entry"):                 # Atom feeds (Reddit)
+        title = (e.findtext(atom + "title") or "").strip()
+        link_el = e.find(atom + "link")
+        link = (link_el.get("href") if link_el is not None else "") or ""
+        text = e.findtext(atom + "content") or ""
+        if title and link:
+            out.append({"title": title, "link": link, "text": text, "cats": []})
     for it in root.iter("item"):
         title = (it.findtext("title") or "").strip()
         link = (it.findtext("link") or "").strip()
@@ -88,7 +102,8 @@ def parse_feed(xml_text):
 
 def is_solana(item):
     blob = (item["title"] + " " + item["text"] + " " + " ".join(item["cats"])).lower()
-    return "solana" in blob or " sol " in blob or "spl token" in blob
+    sol = "solana" in blob or " sol " in blob or "spl token" in blob
+    return sol and ("airdrop" in blob or "airdrops.io" in item["link"])
 
 
 def is_scam(item):
@@ -107,8 +122,10 @@ def x_post(text):
 
 
 def project_name(item):
-    t = re.sub(r"(?i)\s*airdrop.*$", "", item["title"]).strip(" -–|:")
-    return (t or item["title"])[:40]
+    title = re.sub(r"\s+[-–|]\s+[^-–|]{2,40}$", "", item["title"])          # "... - CoinDesk" (news source)
+    t = re.sub(r"(?i)\s*airdrop.*$", "", title).strip(" -–|:")
+    t = " ".join((t or title).split()[:4])
+    return t[:40]
 
 
 def _fetch(url):
@@ -122,21 +139,30 @@ def _fetch(url):
     r = requests.get(url, timeout=20, headers=h)
     if r.status_code == 304 and body is not None:
         return body
-    r.raise_for_status()
+    if r.status_code >= 400:
+        _FEED_FAIL[url] = time.time()
+        raise RuntimeError("HTTP " + str(r.status_code))
     _FEED_CACHE[url] = (r.headers.get("ETag"), r.headers.get("Last-Modified"), r.text)
     return r.text
 
 
 def find(get=None):
     """Solana airdrops from the feeds, newest first, without the scams."""
-    out = []
+    out, titles = [], set()
     for url in FEEDS:
+        if not get and time.time() - _FEED_FAIL.get(url, 0) < 1800:
+            continue                                      # refused us recently: try again in 30 min
         try:
             body = get(url) if get else _fetch(url)
         except Exception as exc:
-            logging.info("airdrop feed %s: %s", url, type(exc).__name__)
+            _FEED_FAIL[url] = time.time()
+            logging.info("airdrop feed %s: %s %s", url.split("?")[0], type(exc).__name__, str(exc)[:60])
             continue
         for it in parse_feed(body or ""):
+            key = re.sub(r"\W+", " ", re.sub(r"\s+[-–|]\s+[^-–|]{2,40}$", "", it["title"]).lower()).strip()[:80]
+            if key in titles:
+                continue
+            titles.add(key)
             if is_solana(it) and not is_scam(it):
                 it["handle"], it["tweet"] = x_post(it["text"])
                 it["name"] = project_name(it)
