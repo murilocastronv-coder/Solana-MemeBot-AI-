@@ -15,7 +15,7 @@ class RemovedBotsTests(unittest.TestCase):
             self.assertEqual(lem.position_signal(old, 10, 10.5)["reason"], "time_stop")
 
     def test_menu_has_only_copy_trade(self):
-        data = {b["callback_data"] for row in tb.keyboard() for b in row}
+        data = {b.get("callback_data") for row in tb.keyboard() for b in row}
         self.assertFalse(data & {"sig_on", "dip_on"})
 
 

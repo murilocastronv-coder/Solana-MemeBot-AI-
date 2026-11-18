@@ -12,8 +12,12 @@ import threading
 import time
 import uuid
 
+import os
+
 import user_trade as ut
 import user_wallets
+
+GROUP_URL = os.getenv("TELEGRAM_GROUP_URL", "https://t.me/+fKaHJ2Dg_nIzM2U0")   # owner (Nov 18): community group
 
 MODE = "trade"
 KEY = "trade_panel"
@@ -488,7 +492,8 @@ def home_text(chat):
     L = ["🟣 Solana · 👛 Sua carteira do bot (toque para copiar):", (w[0] if w else (user_wallets.get_address(chat) or "?")),
          ("💰 Saldo: " + format(w[1], ".4f") + " SOL (US$ " + format(w[2], ".2f") + ")" if w else "💰 Saldo: indisponível agora"),
          "—",
-         "Cole aqui o contrato de qualquer moeda da Solana para comprar e vender. Toque em 🔄 Atualizar para ver o saldo novo."]
+         "Cole aqui o contrato de qualquer moeda da Solana para comprar e vender. Toque em 🔄 Atualizar para ver o saldo novo.",
+         "💬 Nosso grupo no Telegram: " + GROUP_URL]
     if not is_owner(chat):
         L.append("💸 Taxa: " + format(ut.FEE_RATE * 100, "g") + "% por compra e por venda.")
     return "\n".join(L)
@@ -504,6 +509,7 @@ def home_keyboard(chat):
           [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}],
           [{"text": "⚙️ Configurações", "callback_data": "tset"}, {"text": "❓ Ajuda", "callback_data": "thelp"},
            {"text": "🔄 Atualizar", "callback_data": "thome"}]]
+    kb.append([{"text": "💬 Grupo no Telegram", "url": GROUP_URL}])
     if is_owner(chat):
         kb.append([{"text": "📊 Painel do dono", "callback_data": "towner"}])
     return kb
@@ -744,7 +750,7 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         return True
     if action in ("trb_bt", "/backtest"):
         import big_bot
-        why = big_bot.start_backtest(send, chat)
+        why = big_bot.start_backtest(send, chat, run_async)
         send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
              " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
         return True

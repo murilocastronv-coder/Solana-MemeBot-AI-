@@ -121,3 +121,11 @@ class BacktestTest(unittest.TestCase):
         self.assertEqual(len({c["t"] for c in cs}), len(cs))
         rep = bb.backtest(days=30, now=now, get=get)
         self.assertIn("BACKTEST", bb.backtest_text(rep))
+
+
+class BacktestDeliveryTest(unittest.TestCase):
+    def test_result_is_never_held_back(self):
+        import telegram_bot as tb
+        text = "🧪 BACKTEST — ROBÔ MOEDAS GRANDES (29/05/2026 a 18/11/2026)"
+        self.assertTrue(tb.should_send(text, now=1000, chat=1))
+        self.assertTrue(tb.should_send(text, now=1001, chat=1))      # second run: sent again
