@@ -763,6 +763,10 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         if action in ("trb_on", "trb_off"):
             r["on"] = action == "trb_on"
             big_bot.set_state(chat, r)
+            if not is_owner(chat):
+                import owner_notify
+                owner_notify.notify(("🤖 ROBÔ LIGADO por " if r["on"] else "🤖 Robô desligado por ") + owner_notify.who(chat) +
+                                    " · " + format(r["sol"], "g") + " SOL por compra")
             send(chat, "🟢 Robô ligado: confere as moedas grandes a cada " + str(big_bot.CYCLE_S // 60) + " min e compra com a sua carteira."
                  if r["on"] else "🔴 Robô desligado: não compra mais. As moedas que ele comprou continuam com o stop loss e o stop móvel.")
         if action == "trb_sol":
@@ -786,7 +790,9 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         send(chat, SOON.get(action.split(":", 1)[1], "Isso") + ": em breve. Ainda não está pronto.", tail)
         return True
     if action == "towner" and is_owner(chat):
-        send(chat, "📊 PAINEL DO DONO\n" + ut.owner_summary() + "\nTaxas vão para: " + str(__import__("user_copy").fee_wallet()), tail)
+        import owner_notify
+        send(chat, "📊 PAINEL DO DONO\n" + owner_notify.summary() + "\n" + ut.owner_summary() + "\nTaxas vão para: " +
+             str(__import__("user_copy").fee_wallet()) + "\n🔔 Você recebe aqui: pessoa nova, depósito, compra, venda, saque e robô ligado.", tail)
         return True
     head, _, rest = action.partition(":")
     if head == "tsp":
