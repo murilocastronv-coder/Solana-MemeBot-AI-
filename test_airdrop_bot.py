@@ -19,7 +19,8 @@ FEED = """<?xml version="1.0"?><rss version="2.0" xmlns:content="http://purl.org
 class AirdropTest(unittest.TestCase):
     def setUp(self):
         tp._MEM.clear()
-        self.p = [mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save")]
+        self.p = [mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save"),
+                  mock.patch.object(tp, "HOME", "airdrop")]
         for x in self.p:
             x.start()
 
@@ -98,7 +99,7 @@ class AirdropOnlyTest(unittest.TestCase):
     def test_home_is_the_airdrop_hunter(self):
         tp._MEM.clear()
         with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save"), \
-                mock.patch.object(tp, "positions", return_value=[]):
+                mock.patch.object(tp, "positions", return_value=[]), mock.patch.object(tp, "HOME", "airdrop"):
             self.assertIn("CAÇADOR DE AIRDROPS", tp.home_text(1))
             data = {b.get("callback_data") for row in tp.home_keyboard(1) for b in row}
         self.assertIn("tad_now", data)

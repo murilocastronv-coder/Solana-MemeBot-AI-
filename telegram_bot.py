@@ -238,7 +238,7 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
-TRADE_ACTIONS={"tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
+TRADE_ACTIONS={"vid","vid_on","vid_off","vid_now","vid_yt","/videos","sup","sup_on","sup_off","sup_code","sup_min","sup_now","/tarefas","tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
  "tsc","tsv","tsell","twal","tsec","towner","trade_help","/posicoes","/ordens","/config","/ajuda","/comprar","/home","/dca","/watchlist","/scanner"}
 TRADE_PREFIXES=("tb","tbx","ts","tt","tl","tr","tc","tlo","tld","tla","tlx","tsoon","tsp","tw","tdo","tdp","tdx","tbc","tsx")
 def TRADE_ROUTE(cb,action):
@@ -281,7 +281,7 @@ def handle(update):
    (not cb and chat in WITHDRAW and time.time()-WITHDRAW[chat]["at"]<600 and
     (not text.startswith("/") or text.strip()=="/cancelar"))):
   owner_withdraw(chat,action,text.strip());return
- if trade_panel.AIRDROP_ONLY and not cb and trade_panel.candidates(text) and not text.startswith("/"):
+ if trade_panel.AIRDROP_ONLY and trade_panel.HOME!="superteam" and not cb and trade_panel.candidates(text) and not text.startswith("/"):
   airdrop_bot.WAIT[chat]=time.time()          # only airdrops now: a pasted address is the airdrop wallet
   trade_panel.handle(action,text,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async);return
  if not cb and trade_panel.candidates(text) and not text.startswith("/") and not (authorized(chat) and (chat in EVAL_WALLET or chat in ADD_WALLET)):
@@ -686,12 +686,27 @@ def trade_loop():
    try:big_bot.cycle(send,active_chat())
    except Exception as exc:logging.warning("big robot: %s: %s",type(exc).__name__,str(exc)[:150])
   time.sleep(60)
+def video_loop():
+ """Owner (Nov 18): trending-topic videos to YouTube / Instagram at the scheduled hours (only after ▶️ Ligar)."""
+ import video_bot
+ time.sleep(45)
+ while True:
+  try:video_bot.tick(send,active_chat())
+  except Exception as exc:logging.warning("video tick: %s",type(exc).__name__)
+  time.sleep(60)
 def airdrop_loop():
- """Airdrop hunter (owner, Nov 18): looks for new Solana airdrops every AIRDROP_EVERY_S (30 s) all day."""
- import airdrop_bot,user_trade
+ """Owner (Nov 18, later): Superteam Earn paid tasks every minute (each source read every 10 min); the airdrop
+ hunter only when BOT_HOME=airdrop."""
+ import airdrop_bot,superteam_bot,trade_panel,user_trade
  time.sleep(20)
  while True:
-  try:airdrop_bot.cycle(send,([active_chat()] if active_chat() else [])+user_trade.users())
+  chats=([active_chat()] if active_chat() else [])+user_trade.users()
+  if trade_panel.HOME=="superteam":
+   try:superteam_bot.cycle(send,chats)
+   except Exception as exc:logging.warning("superteam cycle: %s",type(exc).__name__)
+   time.sleep(60)
+   continue
+  try:airdrop_bot.cycle(send,chats)
   except Exception as exc:logging.warning("airdrop cycle: %s",type(exc).__name__)
   time.sleep(max(10,airdrop_bot.EVERY_S))
 def copy_loop():
@@ -865,7 +880,8 @@ def loop():
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  threading.Thread(target=trade_loop,daemon=True).start()
- threading.Thread(target=airdrop_loop,daemon=True).start()     # owner (Nov 18): only the airdrop hunter       # owner (Nov 18): trading bot (limit / DCA / user exits)
+ threading.Thread(target=airdrop_loop,daemon=True).start()
+ threading.Thread(target=video_loop,daemon=True).start()       # owner (Nov 18): automatic videos (off until ▶️ Ligar)     # owner (Nov 18): only the airdrop hunter       # owner (Nov 18): trading bot (limit / DCA / user exits)
  # removed BTC robots: only close a position they may still hold, then stop
  threading.Thread(target=btc_live_loop,daemon=True).start()
  threading.Thread(target=btc_leftover_loop,daemon=True).start()
@@ -939,6 +955,13 @@ def panel_action():
   return Response("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><p style='font-family:sans-serif'>⛔ Não consegui: "+
    __import__("html").escape(str(exc)[:200])+"</p><p><a href='/painel'>Voltar ao painel</a></p>",status=500,mimetype="text/html")
  return Response(status=303,headers={"Location":"/painel?ok="+action})
+@app.get("/videos/<name>")
+def video_file(name):
+ """The rendered videos, for Instagram to download (random names, deleted after 2 days)."""
+ if not re.fullmatch(r"[0-9a-f]{16}\.mp4",name or ""):return Response("not found",status=404)
+ import video_bot
+ from flask import send_from_directory
+ return send_from_directory(video_bot.folder(),name,mimetype="video/mp4")
 @app.get("/")
 def health():return {"service":"solana-memecoin-copytrade","configured":bool(TOKEN),"private_chat_registered":bool(active_chat()),"trading":live_engine.ready()}
 if __name__=="__main__":

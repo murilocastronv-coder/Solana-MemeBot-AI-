@@ -17,7 +17,8 @@ import os
 import user_trade as ut
 import user_wallets
 
-AIRDROP_ONLY = os.getenv("AIRDROP_ONLY", "true").strip().lower() != "false"   # owner (Nov 18): only the airdrop hunter
+AIRDROP_ONLY = os.getenv("AIRDROP_ONLY", "true").strip().lower() != "false"   # owner (Nov 18): trading switched off
+HOME = os.getenv("BOT_HOME", "superteam").strip().lower()   # owner (Nov 18, later): only Superteam Earn paid tasks
 GROUP_URL = os.getenv("TELEGRAM_GROUP_URL", "https://t.me/+fKaHJ2Dg_nIzM2U0")   # owner (Nov 18): community group
 
 MODE = "trade"
@@ -489,6 +490,9 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 
 # ------------------------------------------------------------------ home screen
 def home_text(chat):
+    if AIRDROP_ONLY and HOME == "superteam":
+        import superteam_bot
+        return superteam_bot.screen(chat)[0] + "\n💬 Nosso grupo no Telegram: " + GROUP_URL
     if AIRDROP_ONLY:
         import airdrop_bot
         t = airdrop_bot.screen(chat)[0].replace("🪂 AIRDROPS DA SOLANA", "🪂 CAÇADOR DE AIRDROPS DA SOLANA", 1)
@@ -507,7 +511,8 @@ def home_text(chat):
 def home_keyboard(chat):
     if AIRDROP_ONLY:
         import airdrop_bot
-        kb = airdrop_bot.screen(chat)[1]
+        import superteam_bot
+        kb = superteam_bot.screen(chat)[1] if HOME == "superteam" else airdrop_bot.screen(chat)[1]
         extra = [{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]
         try:
             if positions(chat):
@@ -516,6 +521,7 @@ def home_keyboard(chat):
             pass
         kb = kb + [extra, [{"text": "💬 Grupo no Telegram", "url": GROUP_URL}]]
         if is_owner(chat):
+            kb.append([{"text": "🎬 Vídeos automáticos", "callback_data": "vid"}])
             kb.append([{"text": "📊 Painel do dono", "callback_data": "towner"}])
         return kb
     kb = [[{"text": "🟢 Comprar", "callback_data": "tbuy"}, {"text": "🔴 Vender", "callback_data": "tsellm"}],
@@ -708,6 +714,18 @@ def handle(action, text, send, chat, tail=None, run_async=None):
     run_async = run_async or (lambda fn: threading.Thread(target=fn, daemon=True).start())
     tail = tail or []
     s = settings(chat)
+    if action in ("vid", "vid_on", "vid_off", "vid_now", "vid_yt", "/videos"):
+        if not is_owner(chat):
+            return False
+        import video_bot
+        return video_bot.handle(action, send, chat, tail, run_async)
+    if action in ("sup", "sup_on", "sup_off", "sup_code", "sup_min", "sup_now", "/tarefas"):
+        import superteam_bot
+        return superteam_bot.handle(action, send, chat, tail, run_async)
+    if AIRDROP_ONLY and HOME == "superteam" and (str(action).startswith(("tad", "/airdrop")) or
+                                                  (text is not None and __import__("airdrop_bot").STATUS_RE.search(str(text)))):
+        send(chat, "💰 O bot agora é só de tarefas pagas da Solana (Superteam Earn). Os airdrops foram removidos.", home_keyboard(chat))
+        return True
     if AIRDROP_ONLY and cb_blocked(action):
         send(chat, "🪂 O bot agora é só o caçador de airdrops. Essa função foi removida.", home_keyboard(chat))
         return True
