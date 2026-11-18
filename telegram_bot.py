@@ -238,7 +238,7 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
-TRADE_ACTIONS={"vid","vid_on","vid_off","vid_now","vid_yt","/videos","sup","sup_on","sup_off","sup_code","sup_min","sup_now","/tarefas","tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
+TRADE_ACTIONS={"trd_on","trd_off","trd_reset","vid","vid_on","vid_off","vid_now","vid_yt","/videos","sup","sup_on","sup_off","sup_code","sup_min","sup_now","/tarefas","tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
  "tsc","tsv","tsell","twal","tsec","towner","trade_help","/posicoes","/ordens","/config","/ajuda","/comprar","/home","/dca","/watchlist","/scanner"}
 TRADE_PREFIXES=("tb","tbx","ts","tt","tl","tr","tc","tlo","tld","tla","tlx","tsoon","tsp","tw","tdo","tdp","tdx","tbc","tsx")
 def TRADE_ROUTE(cb,action):
@@ -677,11 +677,14 @@ def trade_loop():
  while True:
   try:trade_panel.upkeep_all(send,active_chat())
   except Exception as exc:logging.warning("trade upkeep: %s: %s",type(exc).__name__,str(exc)[:150])
-  if time.time()>=next_deposit:
+  if time.time()>=next_deposit and owner_notify.ENABLED:
    next_deposit=time.time()+180
    try:owner_notify.check_deposits()
    except Exception as exc:logging.warning("deposit check: %s",type(exc).__name__)
-  if time.time()>=next_robot and not trade_panel.AIRDROP_ONLY:
+  if trade_panel.HOME=="robot":
+   try:big_bot.demo_tick(send,([active_chat()] if active_chat() else [])+__import__("user_trade").users())
+   except Exception as exc:logging.warning("big demo: %s",type(exc).__name__)
+  if time.time()>=next_robot and (not trade_panel.AIRDROP_ONLY or trade_panel.HOME=="robot"):
    next_robot=time.time()+big_bot.CYCLE_S
    try:big_bot.cycle(send,active_chat())
    except Exception as exc:logging.warning("big robot: %s: %s",type(exc).__name__,str(exc)[:150])
@@ -701,6 +704,9 @@ def airdrop_loop():
  time.sleep(20)
  while True:
   chats=([active_chat()] if active_chat() else [])+user_trade.users()
+  if trade_panel.HOME=="robot":
+   time.sleep(60)                # owner (Nov 18, latest): airdrops and Superteam removed
+   continue
   if trade_panel.HOME=="superteam":
    try:superteam_bot.cycle(send,chats)
    except Exception as exc:logging.warning("superteam cycle: %s",type(exc).__name__)

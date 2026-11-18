@@ -83,7 +83,7 @@ if __name__ == "__main__":
 
 
 class AutomaticTest(unittest.TestCase):
-    def test_on_by_default(self):
+    def test_off_by_default(self):
         vb._MEM.clear()
         with mock.patch("pg_store.enabled", return_value=False):
-            self.assertTrue(vb._load()["on"])
+            self.assertFalse(vb._load()["on"])          # owner (Nov 18, latest): videos removed from the bot

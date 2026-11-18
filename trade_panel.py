@@ -18,7 +18,7 @@ import user_trade as ut
 import user_wallets
 
 AIRDROP_ONLY = os.getenv("AIRDROP_ONLY", "true").strip().lower() != "false"   # owner (Nov 18): trading switched off
-HOME = os.getenv("BOT_HOME", "superteam").strip().lower()   # owner (Nov 18, later): only Superteam Earn paid tasks
+HOME = os.getenv("BOT_HOME", "robot").strip().lower()   # owner (Nov 18, latest): only the big-coins robot (demo + real)
 GROUP_URL = os.getenv("TELEGRAM_GROUP_URL", "https://t.me/+fKaHJ2Dg_nIzM2U0")   # owner (Nov 18): community group
 
 MODE = "trade"
@@ -490,6 +490,9 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 
 # ------------------------------------------------------------------ home screen
 def home_text(chat):
+    if AIRDROP_ONLY and HOME == "robot":
+        import big_bot
+        return big_bot.status_text(chat, big_bot.cached_signals())
     if AIRDROP_ONLY and HOME == "superteam":
         import superteam_bot
         return superteam_bot.screen(chat)[0] + "\n💬 Nosso grupo no Telegram: " + GROUP_URL
@@ -509,6 +512,16 @@ def home_text(chat):
 
 
 def home_keyboard(chat):
+    if AIRDROP_ONLY and HOME == "robot":
+        import big_bot
+        kb = big_bot.keyboard(chat)
+        row = [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}]
+        try:
+            if positions(chat):
+                row.append({"text": "💼 Posições", "callback_data": "tpl"})
+        except Exception:
+            pass
+        return kb + [row]
     if AIRDROP_ONLY:
         import airdrop_bot
         import superteam_bot
@@ -702,6 +715,8 @@ def cb_blocked(action):
     a = str(action or "")
     if a in AIRDROP_ALLOWED or a.startswith(("tad", "/airdrop")) or a.split(":")[0] in ("ts", "tsx"):
         return False
+    if HOME == "robot" and (a in ("trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "trd_on", "trd_off", "trd_reset", "/robo", "/backtest", "tterms")):
+        return False
     return a.startswith("t") and (a.split(":")[0] in ("tb", "tbx", "tbc", "tc", "tlo", "tld", "tla", "tlx", "tt", "tl", "tr", "tw", "tdo", "tdp",
                                                      "tdx", "tsp", "tsoon") or a in ("tbuy", "tsellm", "tlim", "tdl", "twl", "tscan", "tset", "tsb",
                                                                                      "tss", "tsa", "tst", "tsl", "tsr", "tsc", "tsv", "tsell", "tcopy",
@@ -722,6 +737,10 @@ def handle(action, text, send, chat, tail=None, run_async=None):
     if action in ("sup", "sup_on", "sup_off", "sup_code", "sup_min", "sup_now", "/tarefas"):
         import superteam_bot
         return superteam_bot.handle(action, send, chat, tail, run_async)
+    if AIRDROP_ONLY and HOME == "robot" and (str(action).startswith(("tad", "/airdrop", "sup", "vid", "/tarefas", "/videos")) or
+                                              action in ("towner", "tcopy")):
+        send(chat, "🤖 O bot agora é só o robô das moedas grandes (demo e real). Essa função foi removida.", home_keyboard(chat))
+        return True
     if AIRDROP_ONLY and HOME == "superteam" and (str(action).startswith(("tad", "/airdrop")) or
                                                   (text is not None and __import__("airdrop_bot").STATUS_RE.search(str(text)))):
         send(chat, "💰 O bot agora é só de tarefas pagas da Solana (Superteam Earn). Os airdrops foram removidos.", home_keyboard(chat))
@@ -815,16 +834,37 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
              " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
         return True
-    if action in ("trob", "trb_on", "trb_off", "trb_sol", "/robo"):
+    if action in ("trd_on", "trd_off", "trd_reset"):
+        import big_bot
+        d = big_bot.demo(chat)
+        if action == "trd_reset" or (action == "trd_on" and not d["started"]):
+            d = big_bot.demo_reset(chat)
+        if action in ("trd_on", "trd_off"):
+            d["on"] = action == "trd_on"
+            big_bot.set_demo(chat, d)
+        send(chat, {"trd_on": "🧪 Conta DEMO ligada: US$ " + format(big_bot.DEMO_START, "g") + " de mentira, mesma regra do robô, preços reais. "
+                              "Em " + str(big_bot.DEMO_DAYS) + " dias você vê o resultado do mês.",
+                    "trd_off": "🧪 Conta DEMO desligada (o resultado fica guardado).",
+                    "trd_reset": "🔁 Demo zerada: começa de novo com US$ " + format(big_bot.DEMO_START, "g") + " hoje (dia 0 de " +
+                                 str(big_bot.DEMO_DAYS) + ")."}[action])
+        action = "trob" if action != "trd_on" else "trd_go"
+    if action in ("trob", "trb_on", "trb_off", "trb_sol", "/robo", "trd_go"):
         import big_bot
         r = big_bot.state(chat)
+        if action == "trb_on" and is_owner(chat):
+            try:
+                import live_engine
+                live_engine.start()                # the owner's real orders need the engine switched on
+            except Exception as exc:
+                send(chat, "⛔ Não consegui ligar as ordens reais: " + str(exc)[:150], tail)
+                return True
         if action == "trb_on" and not is_owner(chat) and not ut.load(chat).get("terms_at"):
             send(chat, terms_text(), [[{"text": "✅ Aceito a taxa de " + format(ut.FEE_RATE * 100, "g") + "%", "callback_data": "tterms"}]])
             return True
         if action in ("trb_on", "trb_off"):
             r["on"] = action == "trb_on"
             big_bot.set_state(chat, r)
-            if not is_owner(chat):
+            if not is_owner(chat) and HOME != "robot":
                 import owner_notify
                 owner_notify.notify(("🤖 ROBÔ LIGADO por " if r["on"] else "🤖 Robô desligado por ") + owner_notify.who(chat) +
                                     " · " + format(r["sol"], "g") + " SOL por compra")
@@ -839,9 +879,11 @@ def handle(action, text, send, chat, tail=None, run_async=None):
                 sigs = big_bot.signals_now()
             except Exception:
                 sigs = None
-            send(chat, big_bot.status_text(chat, sigs), big_bot.keyboard(chat) + tail)
+            send(chat, big_bot.status_text(chat, sigs), home_keyboard(chat) if HOME == "robot" else big_bot.keyboard(chat) + tail)
             if action == "trb_on":
                 big_bot.run_for(chat, sigs or [], send)
+            if action == "trd_go":
+                big_bot.demo_run(chat, sigs or [], send)
         run_async(go_robot)
         return True
     if action == "tcopy" and is_owner(chat):

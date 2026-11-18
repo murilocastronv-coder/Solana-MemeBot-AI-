@@ -4,6 +4,7 @@ who opens the bot, every deposit, buy, sell and withdrawal of the users, and see
 telegram_bot calls setup(send, owner_chat_fn) at startup. Stats live in pg_store key "bot_stats"."""
 import json
 import logging
+import os
 import threading
 import time
 
@@ -17,7 +18,12 @@ def setup(send, owner_chat_fn):
     _SEND.update(send=send, owner=owner_chat_fn)
 
 
+ENABLED = os.getenv("OWNER_NOTIFY", "false").strip().lower() == "true"   # owner (Nov 18, latest): notifications removed
+
+
 def notify(text):
+    if not ENABLED:
+        return
     try:
         owner = _SEND["owner"]() if _SEND["owner"] else None
         if owner and _SEND["send"]:
