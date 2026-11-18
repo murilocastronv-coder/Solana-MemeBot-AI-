@@ -74,6 +74,19 @@ if __name__ == "__main__":
 
 
 class AirdropOnlyTest(unittest.TestCase):
+    def test_each_source_read_at_most_every_10_min(self):
+        class R:
+            status_code, text, headers = 200, FEED, {}
+
+            def raise_for_status(self):
+                pass
+        ab._FEED_CACHE.clear()
+        ab._LAST_READ.clear()
+        with mock.patch.object(ab.requests, "get", return_value=R()) as g:
+            ab._fetch("v")
+            ab._fetch("v")
+        self.assertEqual(g.call_count, 1)
+
     def test_trading_buttons_removed_selling_kept(self):
         self.assertTrue(tp.AIRDROP_ONLY)
         for a in ("tbuy", "tb:0.1:X", "trob", "trb_on", "tlo:X", "tdo:X", "tset", "tcopy", "tscan"):
@@ -100,7 +113,8 @@ class AirdropOnlyTest(unittest.TestCase):
             def raise_for_status(self):
                 pass
         replies = [R(200, FEED, {"ETag": "abc"}), R(304)]
-        with mock.patch.object(ab.requests, "get", side_effect=lambda url, **k: calls.append(k["headers"]) or replies.pop(0)):
+        with mock.patch.object(ab.requests, "get", side_effect=lambda url, **k: calls.append(k["headers"]) or replies.pop(0)), \
+                mock.patch.object(ab, "FEED_EVERY_S", 0):
             ab._FEED_CACHE.clear()
             self.assertEqual(ab._fetch("u"), FEED)
             self.assertEqual(ab._fetch("u"), FEED)
@@ -131,6 +145,8 @@ class MoreSourcesTest(unittest.TestCase):
         class R:
             status_code, text, headers = 403, "", {}
         ab._FEED_FAIL.clear()
+        ab._FEED_CACHE.clear()
+        ab._LAST_READ.clear()
         with mock.patch.object(ab.requests, "get", return_value=R()) as g, mock.patch.object(ab, "FEEDS", ("u",)):
             self.assertEqual(ab.find(), [])
             self.assertEqual(ab.find(), [])

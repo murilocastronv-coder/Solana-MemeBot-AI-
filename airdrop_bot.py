@@ -16,11 +16,29 @@ import xml.etree.ElementTree as ET
 import requests
 
 # Nov 18: airdrops.io refuses the server (HTTP error), so news and Reddit feeds that accept servers are read too
-FEEDS = tuple(u.strip() for u in os.getenv("AIRDROP_FEEDS", ",".join((
-    "https://news.google.com/rss/search?q=solana+airdrop+when:7d&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=solana+airdrop+when:7d&hl=pt-BR&gl=BR&ceid=BR:pt-419",
+def _gnews(q, lang="en"):
+    loc = "hl=en-US&gl=US&ceid=US:en" if lang == "en" else "hl=pt-BR&gl=BR&ceid=BR:pt-419"
+    return "https://news.google.com/rss/search?q=" + q.replace(" ", "+") + "+when:7d&" + loc
+
+
+# Nov 18 (owner: "everywhere that has Solana airdrops"): news searches, Reddit, Medium and airdrop sites. A source that
+# refuses the server is skipped for 30 min; the same story from two sources is sent once.
+DEFAULT_FEEDS = (
+    _gnews("solana airdrop"), _gnews("solana airdrop claim"), _gnews("solana airdrop eligibility"),
+    _gnews("SPL token airdrop"), _gnews("solana points airdrop"), _gnews("solana ecosystem airdrop"),
+    _gnews("airdrop solana", "pt"), _gnews("airdrop na solana", "pt"),
     "https://www.reddit.com/r/solana/search.rss?q=airdrop&restrict_sr=1&sort=new",
-    "https://airdrops.io/feed/"))).split(",") if u.strip())
+    "https://www.reddit.com/r/airdrops/search.rss?q=solana&restrict_sr=1&sort=new",
+    "https://www.reddit.com/r/CryptoAirdrop/search.rss?q=solana&restrict_sr=1&sort=new",
+    "https://www.reddit.com/r/solanadev/search.rss?q=airdrop&restrict_sr=1&sort=new",
+    "https://medium.com/feed/tag/solana-airdrop",
+    "https://medium.com/feed/tag/airdrop",
+    "https://airdropalert.com/feed/",
+    "https://airdrops.io/feed/",
+)
+FEEDS = tuple(u.strip() for u in os.getenv("AIRDROP_FEEDS", ",".join(DEFAULT_FEEDS)).split(",") if u.strip())
+FEED_EVERY_S = int(os.getenv("AIRDROP_FEED_EVERY_S", "600"))     # each source read at most every 10 min (no blocking)
+_LAST_READ = {}                                                   # url -> time it was last downloaded
 _FEED_FAIL = {}                                           # url -> time of the last refusal (retried after 30 min)
 EVERY_S = int(os.getenv("AIRDROP_EVERY_S", "30"))      # owner (Nov 18): look every 30 s (conditional GET, light on the site)
 _FEED_CACHE = {}                                          # url -> (etag, last-modified, body)
@@ -131,6 +149,9 @@ def project_name(item):
 def _fetch(url):
     """The feed, asking 'changed since?' first (ETag / Last-Modified): a 304 reuses the copy already read."""
     etag, mod, body = _FEED_CACHE.get(url, (None, None, None))
+    if body is not None and time.time() - _LAST_READ.get(url, 0) < FEED_EVERY_S:
+        return body                                       # read recently: use the copy we have
+    _LAST_READ[url] = time.time()
     h = {"User-Agent": "Mozilla/5.0 AirdropAlert/1.0"}
     if etag:
         h["If-None-Match"] = etag
