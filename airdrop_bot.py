@@ -253,9 +253,14 @@ def card(item, wallet, used=()):
 
 
 # ---------------------------------------------------------------- per account
+SEEN_V = 2          # Nov 18: the airdrops sent before 'Comentar no X' are sent again ONCE with the right buttons
+
+
 def run_for(chat, send, items, now=None, force=False):
     now = now or time.time()
     a = state(chat)
+    if a.get("seen_v") != SEEN_V:
+        a["seen"], a["seen_v"] = [], SEEN_V
     if not a["wallet"] or (not a["on"] and not force):
         return 0
     used, sent = [], 0
