@@ -238,7 +238,7 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
-TRADE_ACTIONS={"trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
+TRADE_ACTIONS={"tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
  "tsc","tsv","tsell","twal","tsec","towner","trade_help","/posicoes","/ordens","/config","/ajuda","/comprar","/home","/dca","/watchlist","/scanner"}
 TRADE_PREFIXES=("tb","tbx","ts","tt","tl","tr","tc","tlo","tld","tla","tlx","tsoon","tsp","tw","tdo","tdp","tdx","tbc","tsx")
 def TRADE_ROUTE(cb,action):
@@ -270,7 +270,8 @@ def handle(update):
  if not authorized(chat):
   try:__import__("owner_notify").visit(chat,(cb or msg or {}).get("from"))
   except Exception:logging.exception("visit stats failed")
- if TRADE_ROUTE(cb,action) or (not cb and chat in trade_panel.INPUT):
+ import airdrop_bot
+ if TRADE_ROUTE(cb,action) or (not cb and (chat in trade_panel.INPUT or chat in airdrop_bot.WAIT or airdrop_bot.STATUS_RE.search(text or ""))):
   if trade_panel.handle(action,None if cb else text,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async):return
  if action=="tcopy":
   if authorized(chat):trade_panel.handle("tsoon:copy",None,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async)
@@ -677,6 +678,10 @@ def trade_loop():
    next_deposit=time.time()+180
    try:owner_notify.check_deposits()
    except Exception as exc:logging.warning("deposit check: %s",type(exc).__name__)
+  try:
+   import airdrop_bot,user_trade
+   airdrop_bot.cycle(send,([active_chat()] if active_chat() else [])+user_trade.users())
+  except Exception as exc:logging.warning("airdrop cycle: %s",type(exc).__name__)
   if time.time()>=next_robot:
    next_robot=time.time()+big_bot.CYCLE_S
    try:big_bot.cycle(send,active_chat())
