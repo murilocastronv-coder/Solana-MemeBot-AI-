@@ -18,7 +18,7 @@ MIN_LIQ, MAX_LIQ = 10_000.0, 200_000.0                    # owner
 MIN_AGE_H = 2.0                                           # owner: more than 2 h of life
 # Rule v2 (Nov 18, after the first 4 demo trades all hit the -8% stop in 3-12 min): they bought a 5-min bounce of coins
 # FALLING over the hour (3 of 4), with weak volume, and an -8% stop that the normal memecoin noise hits.
-RULE = "v2"
+RULE = "v3"
 MIN_VOL_5M = float(os.getenv("SNIPER_DEMO_MIN_VOL_5M", "8000"))       # v1: 3000
 MIN_TURNOVER = 0.08                                                    # 5-min volume >= 8% of the liquidity
 MIN_RATIO = float(os.getenv("SNIPER_DEMO_MIN_RATIO", "2.0"))           # v1: 1.5
@@ -29,6 +29,8 @@ CONFIRM_S = 60                                                         # new: st
 TP = float(os.getenv("SNIPER_DEMO_TP", "0.25"))                        # v1: +20%
 STOP = float(os.getenv("SNIPER_DEMO_STOP", "0.15"))                    # v1: -8% (inside the normal noise)
 TRAIL_ARM, TRAIL_DROP = 0.08, 0.05                                     # new: from +8%, sells 5% below the top
+FLOOR_ARM, FLOOR = 0.10, 0.04          # Nov 18 (Tomás +10% -> +0.2%): after +10% never give back below +4% (covers the costs)
+REASONS = {}                            # chat -> {reason: count} of the coins refused in the last window (what blocks most)
 MAX_HOLD_MIN = float(os.getenv("SNIPER_DEMO_MAX_HOLD_MIN", "45"))      # v1: 30
 COST = float(os.getenv("SNIPER_DEMO_COST", "0.02"))       # per side
 DAYS = 30
@@ -82,6 +84,8 @@ def exit_reason(ratio, held_s, peak=1.0):
         return "alvo +" + format(TP * 100, "g") + "%"
     if STOP and ratio <= 1 - STOP:
         return "stop −" + format(STOP * 100, "g") + "%"
+    if FLOOR_ARM and peak >= 1 + FLOOR_ARM and ratio <= 1 + FLOOR:
+        return "piso de lucro (+" + format(FLOOR * 100, "g") + "%)"
     if TRAIL_ARM and peak >= 1 + TRAIL_ARM and ratio <= peak * (1 - TRAIL_DROP):
         return "stop móvel (protegeu o lucro)"
     if MAX_HOLD_MIN and held_s >= MAX_HOLD_MIN * 60:
@@ -165,6 +169,32 @@ def exits(chat, prices, send=None, now=None):
     save(chat, d)
 
 
+def count(chat, reason, f, now=None):
+    """Counts why coins are refused (only coins that already pass the owner's filters: pump.fun, liquidity, 2 h), per
+    rolling 24 h, so the filter that blocks the most can be loosened with data."""
+    if reason.startswith(("não é endereço", "liquidez", "menos de 2 h", "sem preço")):
+        return
+    now = now or time.time()
+    r = REASONS.setdefault(str(chat), {"since": now, "n": {}, "coins": set()})
+    if now - r["since"] > 86400:
+        r.update(since=now, n={}, coins=set())
+    if f["mint"] in r["coins"]:
+        return
+    r["coins"].add(f["mint"])
+    key = reason.split(" (")[0]
+    r["n"][key] = r["n"].get(key, 0) + 1
+
+
+def funnel_text(chat):
+    r = REASONS.get(str(chat))
+    if not r or not r["n"]:
+        return "🔎 Ainda contando as moedas analisadas (pump.fun, liquidez 10–200 mil, 2 h+)."
+    tot = sum(r["n"].values())
+    top = sorted(r["n"].items(), key=lambda kv: -kv[1])
+    return ("🔎 Desde " + time.strftime("%H:%M", time.gmtime(r["since"])) + " UTC: " + str(len(r["coins"])) + " moedas analisadas e recusadas · " +
+            " · ".join(k + ": " + str(v) + " (" + format(v / tot * 100, ".0f") + "%)" for k, v in top[:5]))
+
+
 def buys(chat, pairs, send=None, now=None, safety=None):
     """Buys the coins that pass (fake money), at most MAX_OPEN open, one entry per coin ever."""
     now = now or time.time()
@@ -174,7 +204,11 @@ def buys(chat, pairs, send=None, now=None, safety=None):
         if len(d["pos"]) >= MAX_OPEN or d["cash"] < SIZE:
             break
         f = features(p, now)
-        if not f["mint"] or f["mint"] in d["pos"] or f["mint"] in d["seen"] or entry_reason(f):
+        if not f["mint"] or f["mint"] in d["pos"] or f["mint"] in d["seen"]:
+            continue
+        why_not = entry_reason(f)
+        if why_not:
+            count(chat, why_not, f, now)
             continue
         first = (d.setdefault("watch", {})).get(f["mint"])
         if CONFIRM_S and (not first or now - first[0] > 15 * 60):
@@ -192,6 +226,7 @@ def buys(chat, pairs, send=None, now=None, safety=None):
                 why = "anti-golpe indisponível"
             if why:
                 d["seen"].append(f["mint"])
+                count(chat, "anti-golpe", f, now)
                 continue
         d["seen"].append(f["mint"])
         d["watch"].pop(f["mint"], None)
@@ -227,7 +262,8 @@ def text(chat, prices=None, now=None):
     L = ["🎯 SNIPER DEMO — " + ("🟢 LIGADO" if d["on"] else "🔴 DESLIGADO") + " (dinheiro de mentira, preços reais)",
          "Regra " + RULE + ": Pump.fun no DexScreener · liquidez US$ 10–200 mil · 2 h a 7 dias de vida · só quando a última hora "
          "está subindo, volume forte e confirmação de 1 min · US$ " + format(SIZE, "g") + " por moeda, máx. " + str(MAX_OPEN) +
-         " · alvo +" + format(TP * 100, "g") + "% · stop móvel a partir de +" + format(TRAIL_ARM * 100, "g") + "% · stop −" +
+         " · alvo +" + format(TP * 100, "g") + "% · stop móvel a partir de +" + format(TRAIL_ARM * 100, "g") + "% · depois de +" +
+         format(FLOOR_ARM * 100, "g") + "% nunca sai abaixo de +" + format(FLOOR * 100, "g") + "% · stop −" +
          format(STOP * 100, "g") + "% · sai em " + format(MAX_HOLD_MIN, "g") + " min",
          "Começou com US$ " + format(d["start_usd"], "g") + " · agora US$ " + format(val, ".2f") + " (" + format(val - d["start_usd"], "+.2f") + ", " +
          format((val / d["start_usd"] - 1) * 100, "+.1f") + "%) · 📅 dia " + format(min(days, 999), ".0f") + " de " + str(DAYS),
@@ -235,7 +271,8 @@ def text(chat, prices=None, now=None):
          " · alvo " + str(sum(1 for x in h if x["why"].startswith("alvo"))) + " · stop " + str(sum(1 for x in h if x["why"].startswith("stop"))) +
          " · tempo " + str(sum(1 for x in h if x["why"].startswith("tempo")))]
     for x in h[-5:]:
-        L.append("• " + x["sym"] + ": " + format(x["pct"], "+.1f") + "% (" + x["why"] + ")")
+        L.append("• " + x["sym"] + ": " + format(x["pct"], "+.1f") + "% (" + x["why"] + ", regra " + x.get("rule", "v1") + ")")
+    L.append(funnel_text(chat))
     for m, p in d["pos"].items():
         px = prices.get(m)
         L.append("• aberta " + p["sym"] + ": " + (format((px / p["entry"] - 1) * 100, "+.1f") + "%" if px else "?") + " · há " +
