@@ -18,7 +18,7 @@ import user_trade as ut
 import user_wallets
 
 AIRDROP_ONLY = os.getenv("AIRDROP_ONLY", "true").strip().lower() != "false"   # owner (Nov 18): trading switched off
-HOME = os.getenv("BOT_HOME", "robot").strip().lower()   # owner (Nov 18, latest): only the big-coins robot (demo + real)
+HOME = os.getenv("BOT_HOME", "forex").strip().lower()   # owner (Nov 18, latest): only the FOREX robot (MT5 via MetaApi)
 GROUP_URL = os.getenv("TELEGRAM_GROUP_URL", "https://t.me/+fKaHJ2Dg_nIzM2U0")   # owner (Nov 18): community group
 
 MODE = "trade"
@@ -490,6 +490,11 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 
 # ------------------------------------------------------------------ home screen
 def home_text(chat):
+    if AIRDROP_ONLY and HOME == "forex":
+        if not is_owner(chat):
+            return "🔒 Este bot agora é privado. Se você tem SOL na carteira do bot, toque em 💸 Sacar SOL."
+        import forex_bot
+        return forex_bot.cached_status()
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
         return big_bot.status_text(chat, big_bot.cached_signals())
@@ -512,6 +517,11 @@ def home_text(chat):
 
 
 def home_keyboard(chat):
+    if AIRDROP_ONLY and HOME == "forex":
+        if not is_owner(chat):
+            return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
+        import forex_bot
+        return forex_bot.keyboard()
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
         kb = [[{"text": "📊 Resultados da carteira de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat)
@@ -833,6 +843,14 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         why = big_bot.start_backtest(send, chat, run_async)
         send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
              " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
+        return True
+    if action in ("fx", "fx_on", "fx_off", "fx_deploy", "fx_close", "/forex"):
+        if not is_owner(chat):
+            return False
+        import forex_bot
+        return forex_bot.handle(action, send, chat, run_async)
+    if AIRDROP_ONLY and HOME == "forex" and action not in ("thome", "/home"):
+        send(chat, "💱 O bot agora é só o robô de forex. Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("trpos", "/posicoes_robo"):
         import big_bot

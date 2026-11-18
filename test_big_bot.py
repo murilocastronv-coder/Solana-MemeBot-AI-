@@ -172,7 +172,7 @@ class DemoTest(unittest.TestCase):
         self.assertIn("1 no lucro", text)
 
     def test_home_is_the_robot_with_demo_and_real(self):
-        with mock.patch.object(tp, "positions", return_value=[]):
+        with mock.patch.object(tp, "positions", return_value=[]), mock.patch.object(tp, "HOME", "robot"):
             data = {b.get("callback_data") for row in tp.home_keyboard(1) for b in row}
             self.assertTrue({"trd_on", "trb_on", "trb_bt", "wallet_withdraw"} <= data)
             self.assertIn("CONTA DEMO", tp.home_text(1))
