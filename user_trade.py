@@ -146,6 +146,7 @@ def buy(chat, mint, sol, send=None, symbol=None):
     except uc.NotSent as exc:
         return "⛔ Compra não feita (nada foi gasto): " + str(exc)[:120]
     except uc.Uncertain:
+        update(chat, lambda d: d.__setitem__("busy_until", time.time() + 900))
         update(chat, lambda d: d["positions"].setdefault(mint, {"symbol": symbol or mint[:6], "tokens": 0, "cost_usd": 0.0,
                                                                 "opened_at": time.time()}).update(check_cost=float(sol) * price,
                                                                                                    check_before=before))
@@ -160,6 +161,8 @@ def buy(chat, mint, sol, send=None, symbol=None):
         p["cost_usd"] = float(p.get("cost_usd", 0)) + float(sol) * price
         p["buys"] = int(p.get("buys", 0)) + 1
     update(chat, f)
+    _tell_owner(chat, "🟢 COMPRA DE USUÁRIO: " + "{who}" + "\n" + format(float(sol), "g") + " SOL (US$ " + format(float(sol) * price, ".2f") +
+                ") de " + (symbol or mint[:6]) + " · taxa para você: " + format(fee / 1e9, ".4f") + " SOL\n" + mint)
     return ("🟢 COMPROU " + (symbol or mint[:6]) + "\n💵 " + format(float(sol), "g") + " SOL (US$ " + format(float(sol) * price, ".2f") +
             ") · taxa " + format(FEE_RATE * 100, "g") + "%: " + format(fee / 1e9, ".4f") + " SOL\n📄 " + mint)
 
@@ -182,6 +185,7 @@ def sell(chat, mint, pct, send=None, reason=None):
     except uc.NotSent as exc:
         return "⛔ Venda não feita: " + str(exc)[:120]
     except uc.Uncertain:
+        update(chat, lambda d: d.__setitem__("busy_until", time.time() + 900))
         return "⏳ Venda enviada, conferindo na blockchain. Confira o saldo em 💼 Posições daqui a 1 min."
     received = max(0, uc.sol_balance(address) - before)           # already without the fee
     _record_fee(chat, fee, received + fee)
@@ -201,6 +205,9 @@ def sell(chat, mint, pct, send=None, reason=None):
         d["history"] = (d["history"] + [{"mint": mint, "symbol": p.get("symbol") or mint[:6], "pnl_usd": round(pnl, 4),
                                          "closed_at": time.time(), "part": round(part, 3)}])[-200:]
     update(chat, f)
+    _tell_owner(chat, "🔴 VENDA DE USUÁRIO: " + "{who}" + "\n" + format(part * 100, ".0f") + "% de " + str(p.get("symbol") or mint[:6]) +
+                " · recebeu " + format(received / 1e9, ".4f") + " SOL" + (" · P/L " + format(pnl, "+.2f") + " USD" if cost else "") +
+                " · taxa para você: " + format(fee / 1e9, ".4f") + " SOL")
     why = {"tp": "🎯 Alvo atingido", "sl": "🛑 Stop loss", "trail": "🚀 Stop móvel"}.get(reason, "")
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + format(part * 100, ".0f") + "% de " + str(p.get("symbol") or mint[:6]) +
             ("\n" + why if why else "") + "\n💵 Recebeu " + format(received / 1e9, ".4f") + " SOL (US$ " + format(net, ".2f") + ")" +
@@ -318,10 +325,22 @@ def upkeep(send, chats=None, value=None, prices=None, buy_fn=None, sell_fn=None)
                     uc._notify(send, chat, "⛔ Ordem limite: " + type(exc).__name__)
 
 
+def _tell_owner(chat, text):
+    try:
+        import owner_notify
+        owner_notify.mark_balance(chat)
+        owner_notify.notify(text.replace("{who}", owner_notify.who(chat)))
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------- withdraw
 def withdraw(chat, to_address, lamports):
     _, kp = uc._keypair(chat)
-    return uc.transfer_sol(kp, to_address, int(lamports), wait_s=60)
+    update(chat, lambda d: d.__setitem__("busy_until", time.time() + 300))
+    sig = uc.transfer_sol(kp, to_address, int(lamports), wait_s=60)
+    _tell_owner(chat, "💸 SAQUE DE USUÁRIO: " + "{who}" + " sacou " + format(int(lamports) / 1e9, ".4f") + " SOL para " + to_address)
+    return sig
 
 
 # ---------------------------------------------------------------- owner report

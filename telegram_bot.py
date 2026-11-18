@@ -60,7 +60,7 @@ NOTIFY_REPEAT_S=float(os.getenv("NOTIFY_REPEAT_HOURS","2"))*3600
 SENT_AT={}
 SENT_LOCK=threading.Lock()
 CTX=threading.local()   # CTX.interactive=True while answering the owner (button/command)
-TRADE_RE=re.compile(r"BACKTEST|COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL|SINAL DE ENTRADA|TP1 ATINGIDO|TP2 ATINGIDO|STOP LOSS —|VOLTOU À ENTRADA|SINAL ENCERRADO|DIP BOT:|SNIPER:")
+TRADE_RE=re.compile(r"NOVA PESSOA NO BOT|DEPÓSITO:|COMPRA DE USUÁRIO|VENDA DE USUÁRIO|SAQUE DE USUÁRIO|ROBÔ LIGADO por|Robô desligado por|BACKTEST|COMPRANDO|COMPROU|SIM comprou|copiou compra|VENDEU|VENDENDO|vendeu|💰 LUCRO|🔻 PREJUÍZO|MOEDA ZERADA|Compra confirmada|Venda confirmada|STOP MÓVEL|SINAL DE ENTRADA|TP1 ATINGIDO|TP2 ATINGIDO|STOP LOSS —|VOLTOU À ENTRADA|SINAL ENCERRADO|DIP BOT:|SNIPER:")
 def is_trade_message(text):
  """A buy/sell notice: always sent, never held back (errors and warnings are not trades)."""
  t=(text or "").lstrip()
@@ -267,6 +267,9 @@ def handle(update):
   send(chat,"Seu chat ID privado: "+str(chat)+"\nIdentificação privada. O proprietário vinculado é mantido no disco persistente.");return
  import trade_panel
  text=(msg or {}).get("text","")
+ if not authorized(chat):
+  try:__import__("owner_notify").visit(chat,(cb or msg or {}).get("from"))
+  except Exception:logging.exception("visit stats failed")
  if TRADE_ROUTE(cb,action) or (not cb and chat in trade_panel.INPUT):
   if trade_panel.handle(action,None if cb else text,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async):return
  if action=="tcopy":
@@ -663,12 +666,17 @@ def copy_wallet_action(chat,action,text):
 def trade_loop():
  """Trading bot upkeep every minute: limit orders, DCA orders, the users' TP / SL / trailing stops."""
  import trade_panel
- import big_bot
+ import big_bot,owner_notify
+ owner_notify.setup(send,active_chat)
  time.sleep(30)
- next_robot=0
+ next_robot=0;next_deposit=0
  while True:
   try:trade_panel.upkeep_all(send,active_chat())
   except Exception as exc:logging.warning("trade upkeep: %s: %s",type(exc).__name__,str(exc)[:150])
+  if time.time()>=next_deposit:
+   next_deposit=time.time()+180
+   try:owner_notify.check_deposits()
+   except Exception as exc:logging.warning("deposit check: %s",type(exc).__name__)
   if time.time()>=next_robot:
    next_robot=time.time()+big_bot.CYCLE_S
    try:big_bot.cycle(send,active_chat())
