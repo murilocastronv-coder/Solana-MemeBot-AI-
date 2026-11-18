@@ -74,13 +74,16 @@ class BigBotTest(unittest.TestCase):
 
     def test_exit_rules_match_the_strategy(self):
         import user_trade as ut
-        p = {"sl": bb.SL, "trail": bb.TRAIL}
+        self.assertEqual(bb.SL, 0)                                  # owner (Nov 18): no stop loss
+        self.assertEqual(ut.exit_reason({"sl": bb.SL, "trail": bb.TRAIL}, 0.2, 1.0), None)
+        p = {"sl": 0.35, "trail": bb.TRAIL}
         self.assertEqual(ut.exit_reason(p, 0.64, 1.0), "sl")
         self.assertIsNone(ut.exit_reason(p, 0.70, 1.0))
         self.assertEqual(ut.exit_reason(p, 1.0, 1.12), "trail")    # armed at +12%, 10% below the top
         self.assertIsNone(ut.exit_reason(p, 1.05, 1.08))           # never reached +10%: no trailing
         with mock.patch.object(tp, "_load", return_value={"tp": 0, "sl": 0, "trail": 0}):
-            self.assertEqual(tp.exit_signal({"trade_sl": bb.SL, "trade_trail": bb.TRAIL}, 0.6, 1.0), ("sell", "trade_sl"))
+            self.assertEqual(tp.exit_signal({"trade_sl": 0.35, "trade_trail": bb.TRAIL}, 0.6, 1.0), ("sell", "trade_sl"))
+            self.assertEqual(tp.exit_signal({"trade_sl": bb.SL, "trade_trail": bb.TRAIL}, 0.2, 1.0)[0], "hold")
             self.assertEqual(tp.exit_signal({"trade_sl": bb.SL, "trade_trail": bb.TRAIL}, 1.0, 1.12), ("sell", "trade_trail"))
 
 
@@ -100,7 +103,8 @@ class BacktestTest(unittest.TestCase):
 
     def test_stop_loss_35(self):
         prices = [10.0] * 170 + [9.4] + [6.0]
-        rep = bb.simulate({"A": self.cs(prices)}, 0, 10 ** 9)
+        self.assertEqual(bb.simulate({"A": self.cs(prices)}, 0, 10 ** 9)["stops"], 0)      # no stop loss now
+        rep = bb.simulate({"A": self.cs(prices)}, 0, 10 ** 9, sl=0.35)
         self.assertEqual(rep["stops"], 1)
         self.assertAlmostEqual(rep["closed_pnl"], 50 * (1 - 0.003) * 0.65 * (1 - 0.003) - 50, places=4)
 
