@@ -83,6 +83,11 @@ class HandleTest(unittest.TestCase):
     def setUp(self):
         tp._MEM.clear()
         tp.INPUT.clear()
+        self.ao = mock.patch.object(tp, "AIRDROP_ONLY", False)
+        self.ao.start()
+
+    def tearDown(self):
+        self.ao.stop()
 
     def test_typed_amount_buys(self):
         sent, bought = [], []

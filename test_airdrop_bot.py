@@ -71,3 +71,37 @@ class AirdropTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AirdropOnlyTest(unittest.TestCase):
+    def test_trading_buttons_removed_selling_kept(self):
+        self.assertTrue(tp.AIRDROP_ONLY)
+        for a in ("tbuy", "tb:0.1:X", "trob", "trb_on", "tlo:X", "tdo:X", "tset", "tcopy", "tscan"):
+            self.assertTrue(tp.cb_blocked(a), a)
+        for a in ("tad", "tad_on", "thome", "tpl", "ts:100:X", "tsx:100:X", "towner"):
+            self.assertFalse(tp.cb_blocked(a), a)
+
+    def test_home_is_the_airdrop_hunter(self):
+        tp._MEM.clear()
+        with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save"), \
+                mock.patch.object(tp, "positions", return_value=[]):
+            self.assertIn("CAÇADOR DE AIRDROPS", tp.home_text(1))
+            data = {b.get("callback_data") for row in tp.home_keyboard(1) for b in row}
+        self.assertIn("tad_now", data)
+        self.assertNotIn("tbuy", data)
+
+    def test_feed_not_downloaded_again_when_unchanged(self):
+        calls = []
+
+        class R:
+            def __init__(self, code, text="", headers=None):
+                self.status_code, self.text, self.headers = code, text, headers or {}
+
+            def raise_for_status(self):
+                pass
+        replies = [R(200, FEED, {"ETag": "abc"}), R(304)]
+        with mock.patch.object(ab.requests, "get", side_effect=lambda url, **k: calls.append(k["headers"]) or replies.pop(0)):
+            ab._FEED_CACHE.clear()
+            self.assertEqual(ab._fetch("u"), FEED)
+            self.assertEqual(ab._fetch("u"), FEED)
+        self.assertEqual(calls[1].get("If-None-Match"), "abc")

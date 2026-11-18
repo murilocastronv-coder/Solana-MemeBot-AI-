@@ -281,6 +281,9 @@ def handle(update):
    (not cb and chat in WITHDRAW and time.time()-WITHDRAW[chat]["at"]<600 and
     (not text.startswith("/") or text.strip()=="/cancelar"))):
   owner_withdraw(chat,action,text.strip());return
+ if trade_panel.AIRDROP_ONLY and not cb and trade_panel.candidates(text) and not text.startswith("/"):
+  airdrop_bot.WAIT[chat]=time.time()          # only airdrops now: a pasted address is the airdrop wallet
+  trade_panel.handle(action,text,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async);return
  if not cb and trade_panel.candidates(text) and not text.startswith("/") and not (authorized(chat) and (chat in EVAL_WALLET or chat in ADD_WALLET)):
   send(chat,"🔎 Procurando a moeda…")
   run_async(lambda:trade_panel.show(send,chat,text,[[{"text":"⬅️ Início","callback_data":"thome"}]]) or
@@ -678,15 +681,19 @@ def trade_loop():
    next_deposit=time.time()+180
    try:owner_notify.check_deposits()
    except Exception as exc:logging.warning("deposit check: %s",type(exc).__name__)
-  try:
-   import airdrop_bot,user_trade
-   airdrop_bot.cycle(send,([active_chat()] if active_chat() else [])+user_trade.users())
-  except Exception as exc:logging.warning("airdrop cycle: %s",type(exc).__name__)
-  if time.time()>=next_robot:
+  if time.time()>=next_robot and not trade_panel.AIRDROP_ONLY:
    next_robot=time.time()+big_bot.CYCLE_S
    try:big_bot.cycle(send,active_chat())
    except Exception as exc:logging.warning("big robot: %s: %s",type(exc).__name__,str(exc)[:150])
   time.sleep(60)
+def airdrop_loop():
+ """Airdrop hunter (owner, Nov 18): looks for new Solana airdrops every AIRDROP_EVERY_S (30 s) all day."""
+ import airdrop_bot,user_trade
+ time.sleep(20)
+ while True:
+  try:airdrop_bot.cycle(send,([active_chat()] if active_chat() else [])+user_trade.users())
+  except Exception as exc:logging.warning("airdrop cycle: %s",type(exc).__name__)
+  time.sleep(max(10,airdrop_bot.EVERY_S))
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -857,7 +864,8 @@ def loop():
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
- threading.Thread(target=trade_loop,daemon=True).start()       # owner (Nov 18): trading bot (limit / DCA / user exits)
+ threading.Thread(target=trade_loop,daemon=True).start()
+ threading.Thread(target=airdrop_loop,daemon=True).start()     # owner (Nov 18): only the airdrop hunter       # owner (Nov 18): trading bot (limit / DCA / user exits)
  # removed BTC robots: only close a position they may still hold, then stop
  threading.Thread(target=btc_live_loop,daemon=True).start()
  threading.Thread(target=btc_leftover_loop,daemon=True).start()
