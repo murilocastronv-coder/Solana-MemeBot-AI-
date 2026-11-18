@@ -123,7 +123,7 @@ def position(chat, mint):
         if not p:
             return None
         return {"symbol": p.get("symbol"), "tokens": int(p.get("token_amount_raw") or 0), "cost_usd": float(p.get("cost_usd") or 0),
-                "mode": p.get("mode"), **settings_of(p)}
+                "mode": p.get("mode"), "robot": bool(p.get("trade_robot")), **settings_of(p)}
     p = ut.load(chat)["positions"].get(mint)
     return dict(p, mode=MODE) if p else None
 
@@ -478,7 +478,7 @@ def settings_text(chat):
 
 
 SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼️ Cartões de lucro / prejuízo em imagem",
-        "sniper": "🎯 Sniper (compra moedas novas no lançamento)", "rewards": "💰 Recompensas por indicação",
+"rewards": "💰 Recompensas por indicação",
         "copy": "👥 Copy trade de uma carteira que você escolher"}
 
 
@@ -498,7 +498,7 @@ def home_keyboard(chat):
     kb = [[{"text": "🟢 Comprar", "callback_data": "tbuy"}, {"text": "🔴 Vender", "callback_data": "tsellm"}],
           [{"text": "💼 Posições", "callback_data": "tpl"}, {"text": "📋 Ordens limite", "callback_data": "tlim"},
            {"text": "🔁 Ordens DCA", "callback_data": "tdl"}],
-          [{"text": "👥 Copy trade", "callback_data": "tcopy"}, {"text": "🎯 Sniper 🆕", "callback_data": "tsoon:sniper"}],
+          [{"text": "👥 Copy trade", "callback_data": "tcopy"}, {"text": "🤖 Robô moedas grandes", "callback_data": "trob"}],
           [{"text": "🔎 Scanner", "callback_data": "tscan"}, {"text": "💰 Recompensas", "callback_data": "tsoon:rewards"},
            {"text": "⭐ Watchlist", "callback_data": "twl"}],
           [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}],
@@ -741,6 +741,31 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         send(chat, "🔐 SEGURANÇA DA CONTA\n• A chave privada fica criptografada no servidor e nunca aparece no chat.\n"
              "• Exportar a chave está desativado.\n• Só a sua conta do Telegram mexe na sua carteira.\n"
              "• Ninguém do bot pede sua chave ou frase secreta: se pedirem, é golpe.", tail)
+        return True
+    if action in ("trob", "trb_on", "trb_off", "trb_sol", "/robo"):
+        import big_bot
+        r = big_bot.state(chat)
+        if action == "trb_on" and not is_owner(chat) and not ut.load(chat).get("terms_at"):
+            send(chat, terms_text(), [[{"text": "✅ Aceito a taxa de " + format(ut.FEE_RATE * 100, "g") + "%", "callback_data": "tterms"}]])
+            return True
+        if action in ("trb_on", "trb_off"):
+            r["on"] = action == "trb_on"
+            big_bot.set_state(chat, r)
+            send(chat, "🟢 Robô ligado: confere as moedas grandes a cada " + str(big_bot.CYCLE_S // 60) + " min e compra com a sua carteira."
+                 if r["on"] else "🔴 Robô desligado: não compra mais. As moedas que ele comprou continuam com o stop loss e o stop móvel.")
+        if action == "trb_sol":
+            r["sol"] = _cycle(tuple(sorted(set(float(x) for x in s["buy"]))), r["sol"])
+            big_bot.set_state(chat, r)
+
+        def go_robot():
+            try:
+                sigs = big_bot.signals_now()
+            except Exception:
+                sigs = None
+            send(chat, big_bot.status_text(chat, sigs), big_bot.keyboard(chat) + tail)
+            if action == "trb_on":
+                big_bot.run_for(chat, sigs or [], send)
+        run_async(go_robot)
         return True
     if action == "tcopy" and is_owner(chat):
         send(chat, "👥 " + SOON["copy"] + ": em breve.", tail)
