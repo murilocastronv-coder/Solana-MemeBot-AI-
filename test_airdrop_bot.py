@@ -180,3 +180,23 @@ class CommentOnlyTest(unittest.TestCase):
         feed = FEED.replace("Fooswap Airdrop", "Solana 空投 CSV 格式 airdrop")
         names = [i["name"] for i in ab.find(get=lambda url: feed)]
         self.assertNotIn("Solana 空投 CSV 格式", names)
+
+
+class ResendOnceTest(unittest.TestCase):
+    def setUp(self):
+        tp._MEM.clear()
+        self.p = [mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save")]
+        for x in self.p:
+            x.start()
+
+    def tearDown(self):
+        for x in self.p:
+            x.stop()
+
+    def test_old_airdrops_sent_again_once_with_comment_buttons(self):
+        items = ab.find(get=lambda url: FEED)
+        tp._load()["airdrop"] = {"wallet": W, "on": True, "seen": [i["link"] for i in items]}   # sent before, old buttons
+        sent = []
+        self.assertEqual(ab.run_for(1, lambda c, t, kb=None: sent.append(kb), items), 2)
+        self.assertIn("in_reply_to", sent[0][0][0]["url"])
+        self.assertEqual(ab.run_for(1, lambda *a, **k: None, items), 0)          # and never again
