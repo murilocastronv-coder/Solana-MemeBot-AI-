@@ -742,6 +742,12 @@ def handle(action, text, send, chat, tail=None, run_async=None):
              "• Exportar a chave está desativado.\n• Só a sua conta do Telegram mexe na sua carteira.\n"
              "• Ninguém do bot pede sua chave ou frase secreta: se pedirem, é golpe.", tail)
         return True
+    if action in ("trb_bt", "/backtest"):
+        import big_bot
+        why = big_bot.start_backtest(send, chat)
+        send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
+             " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
+        return True
     if action in ("trob", "trb_on", "trb_off", "trb_sol", "/robo"):
         import big_bot
         r = big_bot.state(chat)

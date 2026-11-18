@@ -86,3 +86,38 @@ class BigBotTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BacktestTest(unittest.TestCase):
+    def cs(self, prices, t0=0):
+        return [{"t": t0 + i * 3600, "h": p, "l": p, "c": p} for i, p in enumerate(prices)]
+
+    def test_buys_dip_and_sells_on_trailing(self):
+        prices = [10.0] * 170 + [9.4] + [10.5] * 3 + [9.0] * 2           # buy 9.4, peak +11.7%, falls >10% below top
+        rep = bb.simulate({"A": self.cs(prices)}, 0, 10 ** 9)
+        self.assertEqual((rep["trades"], rep["trails"], rep["stops"]), (1, 1, 0))
+        self.assertLess(rep["pnl"], 0.5)
+
+    def test_stop_loss_35(self):
+        prices = [10.0] * 170 + [9.4] + [6.0]
+        rep = bb.simulate({"A": self.cs(prices)}, 0, 10 ** 9)
+        self.assertEqual(rep["stops"], 1)
+        self.assertAlmostEqual(rep["closed_pnl"], 50 * (1 - 0.003) * 0.65 * (1 - 0.003) - 50, places=4)
+
+    def test_never_more_than_two_open_and_cash_not_negative(self):
+        data = {s: self.cs([10.0] * 170 + [9.0] * 5) for s in "ABC"}
+        rep = bb.simulate(data, 0, 10 ** 9)
+        self.assertEqual(rep["open"], 2)
+        self.assertGreaterEqual(rep["final"], 0)
+
+    def test_backtest_downloads_binance_pages(self):
+        now = 1_700_000_000
+        def get(url):
+            start = int(url.split("startTime=")[1]) // 1000
+            n = min(1000, (now - start) // 3600)
+            return [[(start + i * 3600) * 1000, "1", "1.1", "0.9", "1.0"] for i in range(n)]
+        cs = bb.binance_hours("JUPUSDT", 60, now=now, get=get)
+        self.assertGreater(len(cs), 60 * 24 - 5)
+        self.assertEqual(len({c["t"] for c in cs}), len(cs))
+        rep = bb.backtest(days=30, now=now, get=get)
+        self.assertIn("BACKTEST", bb.backtest_text(rep))

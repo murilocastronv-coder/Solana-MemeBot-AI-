@@ -275,4 +275,170 @@ def keyboard(chat):
     r = state(chat)
     return [[{"text": "🔴 Desligar robô" if r["on"] else "🟢 Ligar robô", "callback_data": "trb_off" if r["on"] else "trb_on"},
              {"text": "💵 Valor: " + format(r["sol"], "g") + " SOL", "callback_data": "trb_sol"}],
-            [{"text": "🔄 Atualizar", "callback_data": "trob"}]]
+            [{"text": "🧪 Backtest do robô", "callback_data": "trb_bt"}, {"text": "🔄 Atualizar", "callback_data": "trob"}]]
+
+
+# ---------------------------------------------------------------- backtest (owner, Nov 18)
+BT_DAYS = int(os.getenv("BIG_BT_DAYS", "180"))
+BT_CAPITAL = 100.0
+BT_SIZE = 50.0                     # US$ 100, US$ 50 per buy -> at most 2 open, like the robot
+BT_COST = 0.003                    # slippage + network per side
+_BT = threading.Lock()
+
+
+def binance_hours(pair, days, now=None, get=None):
+    """Hourly candles [{t,h,l,c}] of the last `days` days from Binance (1000 per call), oldest first."""
+    now = int(now or time.time())
+    end_ms = now * 1000
+    start_ms = end_ms - days * 86400 * 1000
+    out = []
+    while start_ms < end_ms:
+        rows = None
+        for host in ("https://api.binance.com", "https://data-api.binance.vision"):
+            url = host + "/api/v3/klines?symbol=" + pair + "&interval=1h&limit=1000&startTime=" + str(start_ms)
+            try:
+                rows = get(url) if get else requests.get(url, timeout=15).json()
+                if isinstance(rows, list):
+                    break
+            except Exception:
+                rows = None
+        if not rows or not isinstance(rows, list):
+            break
+        for r in rows:
+            if int(r[0]) + 3600_000 <= end_ms:
+                out.append({"t": int(r[0]) // 1000, "h": float(r[2]), "l": float(r[3]), "c": float(r[4])})
+        if len(rows) < 1000:
+            break
+        start_ms = int(rows[-1][0]) + 3600_000
+    return out
+
+
+def simulate(data, start, end, fee=0.0, drop=None, sl=None, arm=None, trail=None, size=BT_SIZE, capital=BT_CAPITAL,
+             max_open=None, cooldown_s=COOLDOWN_S):
+    """The robot's rule on hourly candles {sym: [{t,h,l,c}]}: buy at the close when it is `drop` below the highest high
+    of the previous 7 days; inside each candle the worst case first (stop loss, then the trailing stop with the top
+    from BEFORE the candle). Cash never goes negative. Returns the summary."""
+    drop = DROP if drop is None else drop
+    sl = SL if sl is None else sl
+    arm = ARM if arm is None else arm
+    trail = TRAIL if trail is None else trail
+    max_open = MAX_OPEN if max_open is None else max_open
+    side = BT_COST + fee
+    idx = {s: {c["t"]: i for i, c in enumerate(cs)} for s, cs in data.items()}
+    times = sorted({c["t"] for cs in data.values() for c in cs if start <= c["t"] < end})
+    cash, pos, last_buy, trades, peak_eq, dd = capital, {}, {}, [], capital, 0.0
+    for t in times:
+        for s in list(pos):
+            i = idx[s].get(t)
+            if i is None:
+                continue
+            c, p = data[s][i], pos[s]
+            exit_px = why = None
+            if sl and c["l"] <= p["entry"] * (1 - sl):
+                exit_px, why = p["entry"] * (1 - sl), "stop"
+            elif trail and p["peak"] >= 1 + arm and c["l"] <= p["entry"] * p["peak"] * (1 - trail):
+                exit_px, why = p["entry"] * p["peak"] * (1 - trail), "trail"
+            if exit_px is not None:
+                back = p["qty"] * exit_px * (1 - side)
+                cash += back
+                trades.append({"sym": s, "pnl": back - p["cost"], "why": why, "t": t})
+                del pos[s]
+            else:
+                p["peak"] = max(p["peak"], c["h"] / p["entry"])
+        for s, cs in data.items():
+            i = idx[s].get(t)
+            if i is None or i < LOOKBACK_H or s in pos or len(pos) >= max_open or cash < size:
+                continue
+            if s in last_buy and t - last_buy[s] < cooldown_s:
+                continue
+            top = max(x["h"] for x in cs[i - LOOKBACK_H:i])
+            if cs[i]["c"] <= top * (1 - drop):
+                px = cs[i]["c"]
+                pos[s] = {"entry": px, "qty": size * (1 - side) / px, "cost": size, "peak": 1.0}
+                cash -= size
+                last_buy[s] = t
+        eq = cash + sum(p["qty"] * data[s][idx[s][t]]["c"] if t in idx[s] else p["cost"] for s, p in pos.items())
+        peak_eq = max(peak_eq, eq)
+        dd = max(dd, (peak_eq - eq) / peak_eq * 100)
+    open_val = 0.0
+    for s, p in pos.items():
+        last = [c for c in data[s] if c["t"] < end]
+        open_val += p["qty"] * (last[-1]["c"] if last else p["entry"]) * (1 - side)
+    closed = sum(x["pnl"] for x in trades)
+    per = {}
+    for x in trades:
+        n, v = per.get(x["sym"], (0, 0.0))
+        per[x["sym"]] = (n + 1, v + x["pnl"])
+    return {"trades": len(trades), "wins": sum(1 for x in trades if x["pnl"] > 0), "stops": sum(1 for x in trades if x["why"] == "stop"),
+            "trails": sum(1 for x in trades if x["why"] == "trail"), "closed_pnl": closed,
+            "open": len(pos), "open_pnl": open_val - sum(p["cost"] for p in pos.values()),
+            "final": cash + open_val, "pnl": cash + open_val - capital, "dd": round(dd, 1), "per_coin": per}
+
+
+def backtest(days=None, now=None, get=None, progress=None):
+    days = days or BT_DAYS
+    now = now or time.time()
+    data, missing = {}, []
+    syms = [s for s in BINANCE if s in MAJORS or s in BY_JUPITER]
+    for s in syms:
+        cs = binance_hours(BINANCE[s], days, now, get)
+        if len(cs) > LOOKBACK_H + 24:
+            data[s] = cs
+        else:
+            missing.append(s)
+    if progress:
+        progress("🧪 Velas baixadas: " + str(len(data)) + " moedas" + (" (sem dados: " + ", ".join(missing) + ")" if missing else "") + ". Simulando…")
+    if not data:
+        return None
+    start = min(cs[0]["t"] for cs in data.values()) + LOOKBACK_H * 3600
+    end = max(cs[-1]["t"] for cs in data.values()) + 3600
+    cut = start + (end - start) * 2 // 3
+    return {"start": start, "end": end, "cut": cut, "coins": sorted(data), "missing": missing,
+            "full": simulate(data, start, end), "first": simulate(data, start, cut), "last": simulate(data, cut, end),
+            "fee": simulate(data, start, end, fee=0.02)}
+
+
+def backtest_text(rep):
+    if not rep:
+        return "⛔ Backtest do robô: não consegui baixar as velas da Binance agora. Tente de novo em alguns minutos."
+    d = lambda t: time.strftime("%d/%m/%Y", time.gmtime(t))
+
+    def f(s):
+        n = s["trades"]
+        return ("US$ " + format(BT_CAPITAL, "g") + " → US$ " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ", " +
+                format(s["pnl"] / BT_CAPITAL * 100, "+.1f") + "%) · " + str(n) + " vendas, " + str(s["wins"]) + " no lucro (" +
+                (format(s["wins"] / n * 100, ".0f") if n else "0") + "%) · " + str(s["trails"]) + " no stop móvel, " + str(s["stops"]) +
+                " no stop −" + format(SL * 100, "g") + "% · abertas " + str(s["open"]) + " (" + format(s["open_pnl"], "+.2f") + ") · queda máx. " +
+                format(s["dd"], "g") + "%")
+    full = rep["full"]
+    best = sorted(full["per_coin"].items(), key=lambda kv: -kv[1][1])
+    L = ["🧪 BACKTEST — ROBÔ MOEDAS GRANDES (" + d(rep["start"]) + " a " + d(rep["end"]) + ")",
+         "Regra do robô: compra quando cai " + format(DROP * 100, "g") + "% do topo de 7 dias · stop −" + format(SL * 100, "g") +
+         "% · stop móvel liga em +" + format(ARM * 100, "g") + "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · máx. " +
+         str(MAX_OPEN) + " abertas (US$ " + format(BT_SIZE, "g") + " cada de US$ " + format(BT_CAPITAL, "g") + ") · 24 h antes de recomprar a mesma",
+         "Moedas: " + ", ".join(rep["coins"]) + " · velas de 1 h reais da Binance · custo " + format(BT_COST * 100, "g") + "% por lado",
+         "• período todo: " + f(full),
+         "• primeiros 2/3: " + f(rep["first"]),
+         "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
+         "• com a taxa de 2% dos usuários (por compra e venda): " + format(rep["fee"]["pnl"], "+.2f") + " USD (" +
+         format(rep["fee"]["pnl"] / BT_CAPITAL * 100, "+.1f") + "%)"]
+    if best:
+        L.append("• por moeda (vendas / lucro US$): " + ", ".join(s + " " + str(n) + "/" + format(v, "+.2f") for s, (n, v) in best))
+    L.append("⚠️ Velas de 1 h: dentro de cada hora conta o pior caso. Passado não garante futuro.")
+    return "\n".join(L)
+
+
+def start_backtest(send, chat):
+    if not _BT.acquire(blocking=False):
+        return "já tem um backtest rodando"
+
+    def go():
+        try:
+            send(chat, backtest_text(backtest(progress=lambda m: send(chat, m))))
+        except Exception as exc:
+            logging.exception("big bot backtest")
+            send(chat, "⛔ Backtest falhou: " + type(exc).__name__)
+        finally:
+            _BT.release()
+    threading.Thread(target=go, daemon=True).start()
+    return ""
