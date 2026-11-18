@@ -7,10 +7,11 @@ import trade_panel as tp
 NOW = 1_800_000_000
 
 
-def pair(mint="AbcPump1111111111111111111111111111111pump", liq=50_000, age_h=5, vol5=8000, buys=60, sells=20, up5=12, price=0.001):
+def pair(mint="AbcPump1111111111111111111111111111111pump", liq=50_000, age_h=5, vol5=9000, buys=60, sells=20, up5=12, price=0.001,
+         up1h=30, up6h=40):
     return {"baseToken": {"address": mint, "symbol": "PEPE2"}, "priceUsd": str(price), "liquidity": {"usd": liq},
             "marketCap": 400_000, "volume": {"m5": vol5}, "txns": {"m5": {"buys": buys, "sells": sells}},
-            "priceChange": {"m5": up5, "h1": 30}, "pairCreatedAt": (NOW - age_h * 3600) * 1000}
+            "priceChange": {"m5": up5, "h1": up1h, "h6": up6h}, "pairCreatedAt": (NOW - age_h * 3600) * 1000}
 
 
 class SniperDemoTest(unittest.TestCase):
@@ -33,6 +34,9 @@ class SniperDemoTest(unittest.TestCase):
         self.assertIn("2 h", ok(age_h=1.5))
         self.assertIn("compradores", ok(buys=20, sells=20))
         self.assertIn("5 min", ok(up5=60))
+        self.assertIn("repique", ok(up1h=-6))                     # v2: no bounce inside a falling hour (3 of the 4 losses)
+        self.assertIn("volume", ok(vol5=5000))                    # v2: the losses had US$ 4.5-5.6 mil
+        self.assertIn("7 dias", ok(age_h=505))                    # v2: DIGS was 21 days old
 
     def test_demo_200_buys_then_sells_with_details(self):
         sd.reset(1, now=NOW)
@@ -42,12 +46,13 @@ class SniperDemoTest(unittest.TestCase):
         msgs = []
         send = lambda c, t, *a: msgs.append(t)
         m = "AbcPump1111111111111111111111111111111pump"
-        self.assertEqual(sd.buys(1, [pair()], send, now=NOW, safety=lambda mint: ""), ["PEPE2"])
+        self.assertEqual(sd.buys(1, [pair()], send, now=NOW - 60, safety=lambda mint: ""), [])     # seen: waits 1 min
+        self.assertEqual(sd.buys(1, [pair()], send, now=NOW, safety=lambda mint: ""), ["PEPE2"])   # still up: buys
         self.assertEqual(sd.state(1)["cash"], 180.0)
         self.assertEqual(sd.buys(1, [pair()], send, now=NOW + 60, safety=lambda mint: ""), [])     # one entry per coin
         sd.exits(1, {m: 0.00105}, send, now=NOW + 300)                                            # +5%: holds
         self.assertIn(m, sd.state(1)["pos"])
-        sd.exits(1, {m: 0.00121}, send, now=NOW + 600)                                            # +21%: take profit
+        sd.exits(1, {m: 0.00126}, send, now=NOW + 600)                                            # +26%: take profit
         d = sd.state(1)
         self.assertEqual(d["pos"], {})
         self.assertGreater(d["hist"][0]["pnl"], 0)
@@ -58,8 +63,24 @@ class SniperDemoTest(unittest.TestCase):
 
     def test_scam_and_time_stop(self):
         sd.reset(1, now=NOW)
+        sd.buys(1, [pair()], None, now=NOW - 60, safety=lambda mint: "mint authority")
         self.assertEqual(sd.buys(1, [pair()], None, now=NOW, safety=lambda mint: "mint authority"), [])
         sd.reset(1, now=NOW)
+        sd.buys(1, [pair()], None, now=NOW - 60, safety=lambda mint: "")
         sd.buys(1, [pair()], None, now=NOW, safety=lambda mint: "")
-        sd.exits(1, {"AbcPump1111111111111111111111111111111pump": 0.00101}, None, now=NOW + 31 * 60)
-        self.assertEqual(sd.state(1)["hist"][0]["why"], "tempo de 30 min")
+        sd.exits(1, {"AbcPump1111111111111111111111111111111pump": 0.00101}, None, now=NOW + 46 * 60)
+        self.assertEqual(sd.state(1)["hist"][0]["why"], "tempo de 45 min")
+
+    def test_confirmation_and_trailing(self):
+        sd.reset(1, now=NOW)
+        sd.buys(1, [pair()], None, now=NOW - 60, safety=lambda mint: "")
+        self.assertEqual(sd.buys(1, [pair(price=0.00095)], None, now=NOW, safety=lambda mint: ""), [])   # fell: no buy
+        sd.reset(1, now=NOW)
+        sd.buys(1, [pair()], None, now=NOW - 60, safety=lambda mint: "")
+        sd.buys(1, [pair()], None, now=NOW, safety=lambda mint: "")
+        m = "AbcPump1111111111111111111111111111111pump"
+        sd.exits(1, {m: 0.00112}, None, now=NOW + 120)                 # +12%: trailing armed
+        sd.exits(1, {m: 0.00105}, None, now=NOW + 240)                 # 6% below the top: sells with profit
+        h = sd.state(1)["hist"][0]
+        self.assertIn("stop móvel", h["why"])
+        self.assertEqual(h["rule"], "v2")
