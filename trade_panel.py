@@ -516,7 +516,7 @@ def home_keyboard(chat):
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
         import sniper_demo
-        kb = big_bot.keyboard(chat) + [sniper_demo.keyboard_row(chat)]
+        kb = [[{"text": "📊 Resultados das carteiras de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat) + [sniper_demo.keyboard_row(chat)]
         row = [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}]
         try:
             if positions(chat):
