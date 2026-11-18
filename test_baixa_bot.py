@@ -233,7 +233,7 @@ class RepairTest(unittest.TestCase):
         self.assertEqual(fields["8s11PkgQxyz"]["peak_ratio"], 1.0)          # no instant sale at a loss
         self.assertNotIn("OtherMint", fields)
         src = open(ct.__file__, encoding="utf-8").read()
-        self.assertIn('"rocket", "baixa")', src)                          # recover_real_orphans skips the robot's positions
+        self.assertIn('"rocket", "baixa", "trade")', src)                          # recover_real_orphans skips the robot's positions
 
 
 class LiveSignalTest(unittest.TestCase):
