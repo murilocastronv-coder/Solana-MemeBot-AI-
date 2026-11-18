@@ -151,3 +151,15 @@ class MoreSourcesTest(unittest.TestCase):
             self.assertEqual(ab.find(), [])
             self.assertEqual(ab.find(), [])
         self.assertEqual(g.call_count, 1)
+
+
+class LanguagesTest(unittest.TestCase):
+    def test_pt_fr_en_sources_and_messages(self):
+        langs = {"pt": "hl=pt-BR", "fr": "hl=fr&", "en": "hl=en-US"}
+        for code, frag in langs.items():
+            self.assertTrue(any(frag in u for u in ab.DEFAULT_FEEDS), code)
+        txt = " ".join(ab.TEMPLATES)
+        for word in ("carteira", "wallet Solana :", "My Solana address"):
+            self.assertIn(word, txt)
+        msgs = {ab.message("Foo", W, "k" + str(i))[0] for i in range(60)}
+        self.assertTrue(any("Mon wallet" in m or "Adresse SOL" in m or "Je " in m or "Partant" in m for m in msgs))

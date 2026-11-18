@@ -17,7 +17,7 @@ import requests
 
 # Nov 18: airdrops.io refuses the server (HTTP error), so news and Reddit feeds that accept servers are read too
 def _gnews(q, lang="en"):
-    loc = "hl=en-US&gl=US&ceid=US:en" if lang == "en" else "hl=pt-BR&gl=BR&ceid=BR:pt-419"
+    loc = {"en": "hl=en-US&gl=US&ceid=US:en", "pt": "hl=pt-BR&gl=BR&ceid=BR:pt-419", "fr": "hl=fr&gl=FR&ceid=FR:fr"}[lang]
     return "https://news.google.com/rss/search?q=" + q.replace(" ", "+") + "+when:7d&" + loc
 
 
@@ -27,6 +27,7 @@ DEFAULT_FEEDS = (
     _gnews("solana airdrop"), _gnews("solana airdrop claim"), _gnews("solana airdrop eligibility"),
     _gnews("SPL token airdrop"), _gnews("solana points airdrop"), _gnews("solana ecosystem airdrop"),
     _gnews("airdrop solana", "pt"), _gnews("airdrop na solana", "pt"),
+    _gnews("airdrop solana", "fr"), _gnews("largage aérien solana", "fr"),        # owner (Nov 18): PT, FR and EN
     "https://www.reddit.com/r/solana/search.rss?q=airdrop&restrict_sr=1&sort=new",
     "https://www.reddit.com/r/airdrops/search.rss?q=solana&restrict_sr=1&sort=new",
     "https://www.reddit.com/r/CryptoAirdrop/search.rss?q=solana&restrict_sr=1&sort=new",
@@ -60,6 +61,11 @@ TEMPLATES = (
     "Let's go {p}! 💎 My Solana address: {w}",
     "Excited for {p} on Solana ⚡ {w}",
     "Joined ✅ Wallet (Solana): {w}",
+    "Je participe ! 🚀 Mon wallet Solana : {w}",
+    "Allez {p} ! 🔥 Adresse SOL : {w}",
+    "Super projet sur Solana 💜 Mon wallet : {w}",
+    "Partant pour l'airdrop {p} 🙌 {w}",
+    "Je suis {p} de près ✅ SOL : {w}",
 )
 
 
