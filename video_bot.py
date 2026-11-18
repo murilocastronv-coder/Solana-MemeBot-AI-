@@ -44,7 +44,7 @@ YT_SCOPE = "https://www.googleapis.com/auth/youtube"
 def _load():
     with _LOCK:
         if not _MEM:
-            d = {"on": True, "done": [], "log": [], "yt_refresh": "", "used_topics": []}   # owner (Nov 18): automatic from the start
+            d = {"on": False, "done": [], "log": [], "yt_refresh": "", "used_topics": []}   # owner (Nov 18, latest): removed from the bot
             try:
                 import pg_store
                 if pg_store.enabled():

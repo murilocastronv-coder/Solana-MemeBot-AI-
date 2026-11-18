@@ -89,6 +89,7 @@ class AirdropOnlyTest(unittest.TestCase):
             ab._fetch("v")
         self.assertEqual(g.call_count, 1)
 
+    @mock.patch.object(tp, "HOME", "airdrop")
     def test_trading_buttons_removed_selling_kept(self):
         self.assertTrue(tp.AIRDROP_ONLY)
         for a in ("tbuy", "tb:0.1:X", "trob", "trb_on", "tlo:X", "tdo:X", "tset", "tcopy", "tscan"):

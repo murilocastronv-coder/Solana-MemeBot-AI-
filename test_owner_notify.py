@@ -13,7 +13,7 @@ class OwnerNotifyTest(unittest.TestCase):
         self.sent = []
         on.setup(lambda chat, text, *a: self.sent.append((chat, text)), lambda: 100)
         self.dir = pathlib.Path(tempfile.mkdtemp())
-        self.p = [mock.patch.object(on, "_save"), mock.patch.object(ut.user_wallets, "_base_dir", return_value=self.dir)]
+        self.p = [mock.patch.object(on, "_save"), mock.patch.object(on, "ENABLED", True), mock.patch.object(ut.user_wallets, "_base_dir", return_value=self.dir)]
         for x in self.p:
             x.start()
 

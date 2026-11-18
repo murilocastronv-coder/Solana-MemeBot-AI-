@@ -133,3 +133,44 @@ class BacktestDeliveryTest(unittest.TestCase):
         text = "🧪 BACKTEST — ROBÔ MOEDAS GRANDES (29/05/2026 a 18/11/2026)"
         self.assertTrue(tb.should_send(text, now=1000, chat=1))
         self.assertTrue(tb.should_send(text, now=1001, chat=1))      # second run: sent again
+
+
+class DemoTest(unittest.TestCase):
+    def setUp(self):
+        tp._MEM.clear()
+        self.p = [mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save")]
+        for x in self.p:
+            x.start()
+
+    def tearDown(self):
+        for x in self.p:
+            x.stop()
+
+    def test_demo_buys_and_sells_on_trailing_without_stop_loss(self):
+        bb.demo_reset(1, now=1000)
+        d = bb.demo(1)
+        d["on"] = True
+        bb.set_demo(1, d)
+        sigs = [("JUP", "MJ", 0.90, 1.0, True), ("RAY", "MR", 1.80, 2.0, True), ("PYTH", "MP", 0.5, 0.6, True)]
+        msgs = []
+        send = lambda c, t, *a: msgs.append(t)
+        self.assertEqual(bb.demo_run(1, sigs, send, now=2000), ["JUP", "RAY"])           # max 2, US$ 50 each
+        self.assertAlmostEqual(bb.demo(1)["cash"], 0.0)
+        bb.demo_exits(1, {"MJ": 0.40, "MR": 1.80}, send, now=3000)                         # -55%: no stop loss, keeps it
+        self.assertIn("JUP", bb.demo(1)["pos"])
+        bb.demo_exits(1, {"MJ": 1.17, "MR": 1.80}, send, now=4000)                         # +30%: trailing armed
+        bb.demo_exits(1, {"MJ": 1.05, "MR": 1.80}, send, now=5000)                         # >10% below the top: sells, +16%
+        d = bb.demo(1)
+        self.assertNotIn("JUP", d["pos"])
+        self.assertEqual(len(d["hist"]), 1)
+        self.assertTrue(any("DEMO VENDEU JUP" in m for m in msgs))
+        text = bb.demo_text(1, {"MR": 1.80}, now=1000 + 31 * 86400)
+        self.assertIn("teste de 1 mês completo", text)
+        self.assertIn("1 no lucro", text)
+
+    def test_home_is_the_robot_with_demo_and_real(self):
+        with mock.patch.object(tp, "positions", return_value=[]):
+            data = {b.get("callback_data") for row in tp.home_keyboard(1) for b in row}
+            self.assertTrue({"trd_on", "trb_on", "trb_bt", "wallet_withdraw"} <= data)
+            self.assertIn("CONTA DEMO", tp.home_text(1))
+            self.assertIn("CONTA REAL", tp.home_text(1))

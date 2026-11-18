@@ -184,15 +184,30 @@ def signals_now(get=None, now=None):
         px = prices.get(m, 0.0)
         top = top_7d(sym, m, now, get) if px else 0.0
         out.append((sym, m, px, top, bool(px and top and px <= top * (1 - DROP))))
-    return sorted(out, key=lambda r: (r[2] / r[3]) if r[3] else 9)
+    out = sorted(out, key=lambda r: (r[2] / r[3]) if r[3] else 9)
+    LAST_SIGS[:] = [now, out]
+    return out
+
+
+LAST_SIGS = [0.0, None]
+
+
+def cached_signals(max_age=1800, now=None):
+    """The signals of the last cycle (no network: the home screen must answer at once)."""
+    now = now or time.time()
+    return LAST_SIGS[1] if LAST_SIGS[1] is not None and now - LAST_SIGS[0] < max_age else None
 
 
 # ---------------------------------------------------------------- per-account robot
 def state(chat):
     import trade_panel as tp
-    r = dict(tp.settings(chat).get("robot") or {})
+    try:
+        st = tp.settings(chat)
+    except Exception:                              # no account yet (e.g. owner not registered)
+        st = {}
+    r = dict(st.get("robot") or {})
     r.setdefault("on", False)
-    r.setdefault("sol", float(tp.settings(chat)["buy"][0]))
+    r.setdefault("sol", float((st.get("buy") or [0.05])[0]))
     r.setdefault("bought", {})
     return r
 
@@ -250,19 +265,151 @@ def run_for(chat, sigs, send, now=None, buy=None):
 def cycle(send, owner_chat, get=None):
     import user_trade as ut
     chats = ([owner_chat] if owner_chat else []) + ut.users()
-    if not any(state(c)["on"] for c in chats):
+    if not any(state(c)["on"] or demo(c)["on"] for c in chats):
         return
     sigs = signals_now(get)
     for c in chats:
         try:
             run_for(c, sigs, send)
+            demo_run(c, sigs, send)
         except Exception as exc:
             logging.info("big bot %s: %s", c, type(exc).__name__)
 
 
+# ---------------------------------------------------------------- DEMO account (owner, Nov 18): same rule, fake money, real prices
+DEMO_START = float(os.getenv("BIG_DEMO_USD", "100"))
+DEMO_SIZE = DEMO_START / 2                     # 2 coins at most, like the real robot
+DEMO_COST = 0.003                              # slippage + network per side, like the backtest
+DEMO_DAYS = 30
+
+
+def demo(chat):
+    import trade_panel as tp
+    try:
+        d = dict(tp.settings(chat).get("robot_demo") or {})
+    except Exception:
+        d = {}
+    d.setdefault("on", False)
+    d.setdefault("cash", DEMO_START)
+    d.setdefault("pos", {})
+    d.setdefault("hist", [])
+    d.setdefault("bought", {})
+    d.setdefault("started", 0)
+    return d
+
+
+def set_demo(chat, d):
+    import trade_panel as tp
+    d["hist"] = list(d.get("hist") or [])[-300:]
+    tp.set_setting(chat, "robot_demo", d)
+
+
+def demo_reset(chat, now=None):
+    d = demo(chat)
+    d.update(cash=DEMO_START, pos={}, hist=[], bought={}, started=now or time.time())
+    set_demo(chat, d)
+    return d
+
+
+def demo_exits(chat, prices, send=None, now=None):
+    """Trailing stop of the demo positions (no stop loss): armed at +ARM, sells TRAIL below the top."""
+    now = now or time.time()
+    d = demo(chat)
+    sold = []
+    for sym, p in list(d["pos"].items()):
+        px = prices.get(p["mint"], 0.0)
+        if px <= 0:
+            continue
+        ratio = px / p["entry"]
+        p["peak"] = max(float(p.get("peak") or 1.0), ratio)
+        why = None
+        if SL and ratio <= 1 - SL:
+            why = "stop loss"
+        elif p["peak"] >= 1 + ARM and ratio <= p["peak"] * (1 - TRAIL):
+            why = "stop móvel"
+        if why:
+            back = p["qty"] * px * (1 - DEMO_COST)
+            d["cash"] += back
+            pnl = back - p["cost"]
+            d["hist"].append({"sym": sym, "pnl": round(pnl, 4), "t": now, "why": why})
+            del d["pos"][sym]
+            sold.append(sym)
+            if send:
+                send(chat, ("💰" if pnl >= 0 else "🔻") + " DEMO VENDEU " + sym + " (" + why + ", topo +" + format((p["peak"] - 1) * 100, ".1f") +
+                     "%): " + format(pnl, "+.2f") + " USD · saldo demo US$ " + format(demo_value(d, prices), ".2f"))
+    set_demo(chat, d)
+    return sold
+
+
+def demo_tick(send, chats, get=None):
+    """Every 2 min: the demo positions' trailing stops with fresh prices (buys stay in the 15-min cycle)."""
+    open_chats = [c for c in chats if demo(c)["on"] and demo(c)["pos"]]
+    if not open_chats:
+        return
+    mints = sorted({p["mint"] for c in open_chats for p in demo(c)["pos"].values()})
+    prices = dex_prices(mints, get)
+    for c in open_chats:
+        try:
+            demo_exits(c, prices, send)
+        except Exception as exc:
+            logging.info("big demo %s: %s", c, type(exc).__name__)
+
+
+def demo_value(d, prices):
+    return d["cash"] + sum(p["qty"] * (prices.get(p["mint"]) or p["entry"]) for p in d["pos"].values())
+
+
+def demo_run(chat, sigs, send=None, now=None):
+    """One demo cycle: exits first, then buys like the real robot (US$ DEMO_SIZE each, max MAX_OPEN, 24 h per coin)."""
+    now = now or time.time()
+    if not demo(chat)["on"]:
+        return []
+    prices = {m: px for _, m, px, _, _ in sigs if px}
+    demo_exits(chat, prices, send, now)
+    d = demo(chat)
+    done = []
+    for sym, m, px, top, buy_now in sigs:
+        if (not buy_now or sym in d["pos"] or len(d["pos"]) >= MAX_OPEN or d["cash"] < DEMO_SIZE * 0.99 or
+                (m in d["bought"] and now - float(d["bought"][m]) < COOLDOWN_S)):
+            continue
+        size = min(DEMO_SIZE, d["cash"])
+        d["pos"][sym] = {"mint": m, "entry": px, "qty": size * (1 - DEMO_COST) / px, "cost": size, "peak": 1.0, "t": now}
+        d["cash"] -= size
+        d["bought"][m] = now
+        done.append(sym)
+        if send:
+            send(chat, "🧪 DEMO COMPROU " + sym + " (US$ " + format(size, ".2f") + " de mentira) a US$ " + format(px, ".6g") + ", " +
+                 format((1 - px / top) * 100, ".1f") + "% abaixo do topo de 7 dias")
+    d["bought"] = {k: v for k, v in d["bought"].items() if now - v < COOLDOWN_S}
+    set_demo(chat, d)
+    return done
+
+
+def demo_text(chat, prices=None, now=None):
+    now = now or time.time()
+    d = demo(chat)
+    prices = prices or {}
+    val = demo_value(d, prices)
+    days = (now - float(d["started"] or now)) / 86400
+    h = d["hist"]
+    wins = sum(1 for x in h if x["pnl"] > 0)
+    L = ["🧪 CONTA DEMO — " + ("🟢 LIGADA" if d["on"] else "🔴 DESLIGADA") + " (dinheiro de mentira, preços reais)",
+         "Começou com US$ " + format(DEMO_START, "g") + " · agora US$ " + format(val, ".2f") + " (" + format(val - DEMO_START, "+.2f") + ", " +
+         format((val / DEMO_START - 1) * 100, "+.1f") + "%)",
+         "📅 Dia " + format(min(days, 999), ".0f") + " de " + str(DEMO_DAYS) + (" ✅ teste de 1 mês completo" if days >= DEMO_DAYS else ""),
+         "Vendas: " + str(len(h)) + " (" + str(wins) + " no lucro" + (", " + format(wins / len(h) * 100, ".0f") + "%" if h else "") + ") · "
+         "lucro das vendas " + format(sum(x["pnl"] for x in h), "+.2f") + " USD"]
+    for sym, p in d["pos"].items():
+        px = prices.get(p["mint"])
+        L.append("• aberta " + sym + ": US$ " + format(p["cost"], ".2f") + (" → " + format(p["qty"] * px, ".2f") + " (" +
+                 format((px / p["entry"] - 1) * 100, "+.1f") + "%)" if px else "") + " · topo +" + format((p["peak"] - 1) * 100, ".1f") + "%")
+    return "\n".join(L)
+
+
 def status_text(chat, sigs=None):
     r = state(chat)
-    L = ["🤖 ROBÔ MOEDAS GRANDES — " + ("🟢 LIGADO" if r["on"] else "🔴 DESLIGADO"),
+    L = ["🤖 ROBÔ MOEDAS GRANDES DA SOLANA",
+         "💵 CONTA REAL — " + ("🟢 LIGADA" if r["on"] else "🔴 DESLIGADA"),
          "Compra " + format(r["sol"], "g") + " SOL quando uma moeda grande da Solana (não é memecoin) cai " + format(DROP * 100, "g") +
          "% do topo de 7 dias · 🛑 " + sl_text() + " · 🚀 stop móvel liga em +" + format(ARM * 100, "g") +
          "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · máx. " + str(MAX_OPEN) + " moedas abertas · confere a cada " +
@@ -272,15 +419,20 @@ def status_text(chat, sigs=None):
         L.append("Moedas (preço vs topo de 7 dias):")
         for sym, m, px, top, buy_now in sigs:
             L.append(("🟢 " if buy_now else "• ") + sym + (": " + format((px / top - 1) * 100, "+.1f") + "% do topo" if top else ": sem preço agora"))
-    L.append("⚠️ Resultado passado não garante lucro. O robô usa a SUA carteira e precisa de SOL nela.")
+    L.append("")
+    L.append(demo_text(chat, {m: px for _, m, px, _, _ in (sigs or []) if px}))
+    L.append("⚠️ Resultado passado não garante lucro. A conta real usa a SUA carteira e precisa de SOL nela.")
     return "\n".join(L)
 
 
 def keyboard(chat):
     r = state(chat)
-    return [[{"text": "🔴 Desligar robô" if r["on"] else "🟢 Ligar robô", "callback_data": "trb_off" if r["on"] else "trb_on"},
-             {"text": "💵 Valor: " + format(r["sol"], "g") + " SOL", "callback_data": "trb_sol"}],
-            [{"text": "🧪 Backtest do robô", "callback_data": "trb_bt"}, {"text": "🔄 Atualizar", "callback_data": "trob"}]]
+    d = demo(chat)
+    return [[{"text": "🧪 Desligar DEMO" if d["on"] else "🧪 Ligar DEMO", "callback_data": "trd_off" if d["on"] else "trd_on"},
+             {"text": "🔁 Zerar demo", "callback_data": "trd_reset"}],
+            [{"text": "💵 Desligar REAL" if r["on"] else "💵 Ligar REAL", "callback_data": "trb_off" if r["on"] else "trb_on"},
+             {"text": "Valor real: " + format(r["sol"], "g") + " SOL", "callback_data": "trb_sol"}],
+            [{"text": "🧪 Backtest", "callback_data": "trb_bt"}, {"text": "🔄 Atualizar", "callback_data": "trob"}]]
 
 
 # ---------------------------------------------------------------- backtest (owner, Nov 18)
