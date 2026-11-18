@@ -17,6 +17,7 @@ import os
 import user_trade as ut
 import user_wallets
 
+AIRDROP_ONLY = os.getenv("AIRDROP_ONLY", "true").strip().lower() != "false"   # owner (Nov 18): only the airdrop hunter
 GROUP_URL = os.getenv("TELEGRAM_GROUP_URL", "https://t.me/+fKaHJ2Dg_nIzM2U0")   # owner (Nov 18): community group
 
 MODE = "trade"
@@ -488,6 +489,10 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 
 # ------------------------------------------------------------------ home screen
 def home_text(chat):
+    if AIRDROP_ONLY:
+        import airdrop_bot
+        t = airdrop_bot.screen(chat)[0].replace("🪂 AIRDROPS DA SOLANA", "🪂 CAÇADOR DE AIRDROPS DA SOLANA", 1)
+        return t + "\n💬 Nosso grupo no Telegram: " + GROUP_URL
     w = _wallet(chat)
     L = ["🟣 Solana · 👛 Sua carteira do bot (toque para copiar):", (w[0] if w else (user_wallets.get_address(chat) or "?")),
          ("💰 Saldo: " + format(w[1], ".4f") + " SOL (US$ " + format(w[2], ".2f") + ")" if w else "💰 Saldo: indisponível agora"),
@@ -500,6 +505,19 @@ def home_text(chat):
 
 
 def home_keyboard(chat):
+    if AIRDROP_ONLY:
+        import airdrop_bot
+        kb = airdrop_bot.screen(chat)[1]
+        extra = [{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]
+        try:
+            if positions(chat):
+                extra.append({"text": "💼 Posições", "callback_data": "tpl"})
+        except Exception:
+            pass
+        kb = kb + [extra, [{"text": "💬 Grupo no Telegram", "url": GROUP_URL}]]
+        if is_owner(chat):
+            kb.append([{"text": "📊 Painel do dono", "callback_data": "towner"}])
+        return kb
     kb = [[{"text": "🟢 Comprar", "callback_data": "tbuy"}, {"text": "🔴 Vender", "callback_data": "tsellm"}],
           [{"text": "💼 Posições", "callback_data": "tpl"}, {"text": "📋 Ordens limite", "callback_data": "tlim"},
            {"text": "🔁 Ordens DCA", "callback_data": "tdl"}],
@@ -633,7 +651,14 @@ def scanner_text(get=None):
 
 
 def upkeep_all(send, owner_chat):
-    """Every minute: the owner's limit orders, everybody's DCA orders, the users' exits / limit orders."""
+    """Every minute: the owner's limit orders, everybody's DCA orders, the users' exits / limit orders.
+    AIRDROP_ONLY: no new buys (limit / DCA off); open positions keep their exits."""
+    if AIRDROP_ONLY:
+        try:
+            ut.upkeep(send, limits=False)
+        except Exception as exc:
+            logging.info("user trade upkeep: %s", type(exc).__name__)
+        return
     if owner_chat:
         try:
             owner_upkeep(send, owner_chat)
@@ -663,11 +688,29 @@ def help_text():
             "Taxa para usuários: " + format(ut.FEE_RATE * 100, "g") + "% de cada compra e venda.")
 
 
+AIRDROP_ALLOWED = {"thome", "/home", "tpl", "/posicoes", "towner", "tsec", "twal", "thelp", "/ajuda"}
+
+
+def cb_blocked(action):
+    """Trading buttons switched off in AIRDROP_ONLY (selling what is already open stays: ts / tsx)."""
+    a = str(action or "")
+    if a in AIRDROP_ALLOWED or a.startswith(("tad", "/airdrop")) or a.split(":")[0] in ("ts", "tsx"):
+        return False
+    return a.startswith("t") and (a.split(":")[0] in ("tb", "tbx", "tbc", "tc", "tlo", "tld", "tla", "tlx", "tt", "tl", "tr", "tw", "tdo", "tdp",
+                                                     "tdx", "tsp", "tsoon") or a in ("tbuy", "tsellm", "tlim", "tdl", "twl", "tscan", "tset", "tsb",
+                                                                                     "tss", "tsa", "tst", "tsl", "tsr", "tsc", "tsv", "tsell", "tcopy",
+                                                                                     "trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "tterms",
+                                                                                     "trade_help"))
+
+
 def handle(action, text, send, chat, tail=None, run_async=None):
     """Callbacks of the trading screens and the typed amount. True when handled."""
     run_async = run_async or (lambda fn: threading.Thread(target=fn, daemon=True).start())
     tail = tail or []
     s = settings(chat)
+    if AIRDROP_ONLY and cb_blocked(action):
+        send(chat, "🪂 O bot agora é só o caçador de airdrops. Essa função foi removida.", home_keyboard(chat))
+        return True
     if action in ("tpl", "/posicoes"):
         run_async(lambda: send(chat, *(lambda t, kb: (t, kb + tail))(*positions_text(chat))))
         return True
@@ -953,7 +996,9 @@ def handle(action, text, send, chat, tail=None, run_async=None):
             airdrop_bot.WAIT.pop(chat, None)
             a = airdrop_bot.state(chat)
             a["wallet"] = w
+            a["on"] = True                            # owner (Nov 18): hunts all day as soon as the wallet is set
             airdrop_bot.set_state(chat, a)
+            run_async(lambda: airdrop_bot.run_for(chat, send, airdrop_bot.find(), force=True))
             t, kb = airdrop_bot.screen(chat)
             send(chat, "✅ Carteira dos airdrops: " + w + "\n\n" + t, kb + tail)
             return True

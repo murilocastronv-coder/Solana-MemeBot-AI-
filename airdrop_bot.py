@@ -16,7 +16,8 @@ import xml.etree.ElementTree as ET
 import requests
 
 FEEDS = tuple(u.strip() for u in os.getenv("AIRDROP_FEEDS", "https://airdrops.io/feed/").split(",") if u.strip())
-EVERY_S = int(os.getenv("AIRDROP_EVERY_S", str(3 * 3600)))
+EVERY_S = int(os.getenv("AIRDROP_EVERY_S", "30"))      # owner (Nov 18): look every 30 s (conditional GET, light on the site)
+_FEED_CACHE = {}                                          # url -> (etag, last-modified, body)
 MAX_PER_RUN = 5
 STATUS_RE = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})/status/(\d{5,25})")
 HANDLE_RE = re.compile(r"https?://(?:www\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})(?:[/?\"'\s<]|$)")
@@ -41,7 +42,10 @@ TEMPLATES = (
 # ---------------------------------------------------------------- settings
 def state(chat):
     import trade_panel as tp
-    a = dict(tp.settings(chat).get("airdrop") or {})
+    try:
+        a = dict(tp.settings(chat).get("airdrop") or {})
+    except Exception:                                  # no account yet (e.g. owner not registered)
+        a = {}
     a.setdefault("wallet", "")
     a.setdefault("on", False)
     a.setdefault("seen", [])
@@ -107,12 +111,28 @@ def project_name(item):
     return (t or item["title"])[:40]
 
 
+def _fetch(url):
+    """The feed, asking 'changed since?' first (ETag / Last-Modified): a 304 reuses the copy already read."""
+    etag, mod, body = _FEED_CACHE.get(url, (None, None, None))
+    h = {"User-Agent": "Mozilla/5.0 AirdropAlert/1.0"}
+    if etag:
+        h["If-None-Match"] = etag
+    if mod:
+        h["If-Modified-Since"] = mod
+    r = requests.get(url, timeout=20, headers=h)
+    if r.status_code == 304 and body is not None:
+        return body
+    r.raise_for_status()
+    _FEED_CACHE[url] = (r.headers.get("ETag"), r.headers.get("Last-Modified"), r.text)
+    return r.text
+
+
 def find(get=None):
     """Solana airdrops from the feeds, newest first, without the scams."""
     out = []
     for url in FEEDS:
         try:
-            body = get(url) if get else requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 AirdropAlert/1.0"}).text
+            body = get(url) if get else _fetch(url)
         except Exception as exc:
             logging.info("airdrop feed %s: %s", url, type(exc).__name__)
             continue

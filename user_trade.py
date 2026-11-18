@@ -263,7 +263,7 @@ def _dex_prices(mints):
     return {m: v[0] for m, v in out.items()}
 
 
-def upkeep(send, chats=None, value=None, prices=None, buy_fn=None, sell_fn=None):
+def upkeep(send, chats=None, value=None, prices=None, buy_fn=None, sell_fn=None, limits=True):
     """Every minute: confirm uncertain buys, sell positions at their TP / SL / trailing stop, fill limit orders."""
     value = value or value_usd
     buy_fn = buy_fn or buy
@@ -308,7 +308,7 @@ def upkeep(send, chats=None, value=None, prices=None, buy_fn=None, sell_fn=None)
                     uc._notify(send, chat, sell_fn(chat, mint, 100, send, reason=why))
             except Exception as exc:
                 logging.info("user trade upkeep %s: %s", mint[:6], type(exc).__name__)
-    if not want:
+    if not want or not limits:
         return
     try:
         px = prices(want) if prices else _dex_prices(want)
