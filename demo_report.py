@@ -64,7 +64,8 @@ def chart_png(series, now=None):
     if hi - lo < 1:
         lo, hi = lo - 5, hi + 5
     X = lambda t: PAD + (t - t0) / (t1 - t0) * (W - 2 * PAD)
-    Y = lambda v: H - PAD - (v - lo) / (hi - lo) * (H - 2 * PAD)
+    TOP = 125                                       # room for the title and the legend
+    Y = lambda v: H - PAD - (v - lo) / (hi - lo) * (H - PAD - TOP)
     f = video_bot._font(22, False)
     fb = video_bot._font(26)
     for i in range(5):
@@ -79,7 +80,7 @@ def chart_png(series, now=None):
         if len(xy) == 1:
             xy = [(PAD, xy[0][1]), xy[0]]
         d.line(xy, fill=color, width=4)
-        d.text((W - PAD - 330, 50 + i * 32), "■ " + name + ": " + format(c[-1][1], ".2f"), font=f, fill=color)
+        d.text((PAD + i * 430, 62), "■ " + name + ": " + format(c[-1][1], ".2f"), font=f, fill=color)
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
