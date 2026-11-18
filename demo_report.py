@@ -87,20 +87,15 @@ def chart_png(series, now=None):
 
 
 def results(chat, now=None):
-    """(text, png) with both demo wallets."""
+    """(text, png) of the big-coins robot demo wallet (owner, Nov 18: the sniper was removed)."""
     import big_bot
-    import sniper_demo
     now = now or time.time()
     bd = big_bot.demo(chat)
-    sd = sniper_demo.state(chat)
     sig = big_bot.cached_signals() or []
     bprices = {m: px for _, m, px, _, _ in sig if px}
     bval = big_bot.demo_value(bd, bprices)
-    sval = sniper_demo.value(sd, {})
-    text = ("📊 RESULTADOS DAS CARTEIRAS DE TESTE (dinheiro de mentira, preços reais)\n\n" +
-            wallet_text("Carteira fictícia ROBÔ MOEDAS GRANDES", bd, bval, now) + "\n\n" +
-            wallet_text("Carteira fictícia SNIPER", sd, sval, now) +
-            "\n\nO gráfico mostra o saldo de cada carteira hora a hora; a linha fraca é o valor inicial (acima dela = lucro).")
-    png = chart_png([("Robô moedas grandes", float(bd.get("start_usd") or 200), bd.get("curve"), (90, 200, 255)),
-                     ("Sniper", float(sd.get("start_usd") or 200), sd.get("curve"), (255, 190, 60))], now)
+    text = ("📊 RESULTADO DA CARTEIRA DE TESTE (dinheiro de mentira, preços reais)\n\n" +
+            wallet_text("Carteira fictícia ROBÔ MOEDAS GRANDES", bd, bval, now) +
+            "\n\nO gráfico mostra o saldo hora a hora; a linha fraca é o valor inicial (acima dela = lucro).")
+    png = chart_png([("Robô moedas grandes", float(bd.get("start_usd") or 200), bd.get("curve"), (90, 200, 255))], now)
     return text, png

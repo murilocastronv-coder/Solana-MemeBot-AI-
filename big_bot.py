@@ -23,7 +23,7 @@ def sl_text():
 ARM = 0.10                         # trade_panel.TRAIL_ARM / user_trade.exit_reason arm
 TRAIL = float(os.getenv("BIG_TRAIL", "0.10"))
 LOOKBACK_H = 168
-MAX_OPEN = int(os.getenv("BIG_MAX_OPEN", "2"))          # robot positions per account
+MAX_OPEN = int(os.getenv("BIG_MAX_OPEN", "6"))          # robot positions per account (owner, Nov 18: 6 at a time)
 COOLDOWN_S = 24 * 3600                                    # no rebuy of the same coin for 24 h
 CYCLE_S = int(os.getenv("BIG_CYCLE_S", "900"))
 KEY = "big_bot"
@@ -278,7 +278,7 @@ def cycle(send, owner_chat, get=None):
 
 # ---------------------------------------------------------------- DEMO account (owner, Nov 18): same rule, fake money, real prices
 DEMO_START = float(os.getenv("BIG_DEMO_USD", "200"))          # owner (Nov 18): US$ 200 demo
-DEMO_SIZE = DEMO_START / 2                     # 2 coins at most, like the real robot
+DEMO_SIZE = DEMO_START / MAX_OPEN              # up to MAX_OPEN coins at once, like the real robot
 DEMO_COST = 0.003                              # slippage + network per side, like the backtest
 DEMO_DAYS = 30
 
@@ -375,6 +375,50 @@ def demo_tick(send, chats, get=None):
             logging.info("big demo %s: %s", c, type(exc).__name__)
 
 
+def positions_text(chat, get=None, now=None):
+    """Open positions of the big-coins robot: the DEMO wallet and the REAL one, with live prices and chart links."""
+    import trade_panel as tp
+    now = now or time.time()
+    d = demo(chat)
+    real = [(m, p) for m, p in tp.positions(chat) if p.get("robot") or p.get("trade_robot")]
+    mints = sorted({p["mint"] for p in d["pos"].values()} | {m for m, _ in real})
+    try:
+        prices = dex_prices(mints, get) if mints else {}
+    except Exception:
+        prices = {}
+    L = ["📦 POSIÇÕES ABERTAS — ROBÔ MOEDAS GRANDES (máx. " + str(MAX_OPEN) + " de cada vez)", "",
+         "🧪 DEMO: " + str(len(d["pos"])) + "/" + str(MAX_OPEN) + " abertas · caixa livre US$ " + format(d["cash"], ".2f")]
+    for sym, p in sorted(d["pos"].items(), key=lambda kv: kv[1].get("t", 0)):
+        px = prices.get(p["mint"])
+        pct = (px / p["entry"] - 1) * 100 if px else None
+        hours = (now - float(p.get("t") or now)) / 3600
+        armed = p.get("peak", 1.0) >= 1 + ARM
+        L.append("• " + sym + ": comprou US$ " + format(p["cost"], ".2f") + " a US$ " + format(p["entry"], ".6g") +
+                 (" → agora US$ " + format(px, ".6g") + " (" + format(pct, "+.1f") + "%, vale US$ " + format(p["qty"] * px, ".2f") + ")" if px else "") +
+                 "\n  topo +" + format((p.get("peak", 1.0) - 1) * 100, ".1f") + "% · " +
+                 ("🚀 stop móvel ATIVO: vende se cair para " + format(p["entry"] * p["peak"] * (1 - TRAIL), ".6g") if armed else
+                  "stop móvel liga em US$ " + format(p["entry"] * (1 + ARM), ".6g") + " (+" + format(ARM * 100, "g") + "%)") +
+                 " · aberta há " + (format(hours, ".1f") + " h" if hours < 48 else format(hours / 24, ".1f") + " dias") +
+                 "\n  📈 https://dexscreener.com/solana/" + p["mint"])
+    if not d["pos"]:
+        L.append("• nenhuma" + ("" if d["on"] else " (demo desligada)"))
+    L += ["", "💵 REAL: " + str(len(real)) + "/" + str(MAX_OPEN) + " abertas"]
+    for m, p in real:
+        px = prices.get(m)
+        val = None
+        try:
+            val = tp._value(m, p)
+        except Exception:
+            pass
+        cost = float(p.get("cost_usd") or 0)
+        L.append("• " + str(p.get("symbol") or m[:6]) + ": custo US$ " + format(cost, ".2f") +
+                 (" → vale US$ " + format(val, ".2f") + " (" + format((val / cost - 1) * 100 if cost else 0, "+.1f") + "%)" if val is not None else "") +
+                 "\n  📈 https://dexscreener.com/solana/" + m)
+    if not real:
+        L.append("• nenhuma" + ("" if state(chat)["on"] else " (real desligada)"))
+    return "\n".join(L)
+
+
 def demo_value(d, prices):
     return d["cash"] + sum(p["qty"] * (prices.get(p["mint"]) or p["entry"]) for p in d["pos"].values())
 
@@ -460,13 +504,14 @@ def keyboard(chat):
              {"text": "🔁 Zerar demo", "callback_data": "trd_reset"}],
             [{"text": "💵 Desligar REAL" if r["on"] else "💵 Ligar REAL", "callback_data": "trb_off" if r["on"] else "trb_on"},
              {"text": "Valor real: " + format(r["sol"], "g") + " SOL", "callback_data": "trb_sol"}],
+            [{"text": "📦 Posições abertas", "callback_data": "trpos"}],
             [{"text": "🧪 Backtest", "callback_data": "trb_bt"}, {"text": "🔄 Atualizar", "callback_data": "trob"}]]
 
 
 # ---------------------------------------------------------------- backtest (owner, Nov 18)
 BT_DAYS = int(os.getenv("BIG_BT_DAYS", "180"))
 BT_CAPITAL = 100.0
-BT_SIZE = 50.0                     # US$ 100, US$ 50 per buy -> at most 2 open, like the robot
+BT_SIZE = BT_CAPITAL / MAX_OPEN    # the capital split in MAX_OPEN parts, like the robot
 BT_COST = 0.003                    # slippage + network per side
 _BT = threading.Lock()
 
@@ -532,7 +577,7 @@ def simulate(data, start, end, fee=0.0, drop=None, sl=None, arm=None, trail=None
                 p["peak"] = max(p["peak"], c["h"] / p["entry"])
         for s, cs in data.items():
             i = idx[s].get(t)
-            if i is None or i < LOOKBACK_H or s in pos or len(pos) >= max_open or cash < size:
+            if i is None or i < LOOKBACK_H or s in pos or len(pos) >= max_open or cash < size - 1e-6:
                 continue
             if s in last_buy and t - last_buy[s] < cooldown_s:
                 continue
