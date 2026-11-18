@@ -53,7 +53,7 @@ class FillWalletsTests(unittest.TestCase):
 class MenuTests(unittest.TestCase):
     def test_menu_has_only_copy_trade_and_bot_wallet(self):
         data = {b.get("callback_data") for row in tb.keyboard() for b in row}
-        self.assertEqual(data, {"tad_on", "tad_w", "tad_now", "wallet_withdraw", None})   # owner (Nov 18, later): only airdrops
+        self.assertEqual(data, {"sup_off", "sup_code", "sup_min", "sup_now", "wallet_withdraw", None})   # owner (Nov 18, later): only Superteam tasks
 
     def test_removed_buttons_answer_removed(self):
         tb.CTX.interactive = True
