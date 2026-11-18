@@ -521,6 +521,7 @@ def home_keyboard(chat):
             pass
         kb = kb + [extra, [{"text": "💬 Grupo no Telegram", "url": GROUP_URL}]]
         if is_owner(chat):
+            kb.append([{"text": "🎬 Vídeos automáticos", "callback_data": "vid"}])
             kb.append([{"text": "📊 Painel do dono", "callback_data": "towner"}])
         return kb
     kb = [[{"text": "🟢 Comprar", "callback_data": "tbuy"}, {"text": "🔴 Vender", "callback_data": "tsellm"}],
@@ -713,6 +714,11 @@ def handle(action, text, send, chat, tail=None, run_async=None):
     run_async = run_async or (lambda fn: threading.Thread(target=fn, daemon=True).start())
     tail = tail or []
     s = settings(chat)
+    if action in ("vid", "vid_on", "vid_off", "vid_now", "vid_yt", "/videos"):
+        if not is_owner(chat):
+            return False
+        import video_bot
+        return video_bot.handle(action, send, chat, tail, run_async)
     if action in ("sup", "sup_on", "sup_off", "sup_code", "sup_min", "sup_now", "/tarefas"):
         import superteam_bot
         return superteam_bot.handle(action, send, chat, tail, run_async)
