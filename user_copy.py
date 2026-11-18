@@ -231,7 +231,7 @@ class Uncertain(RuntimeError):
     """Sent but not confirmed yet: check the wallet before deciding."""
 
 
-def atomic_swap(chat, input_mint, output_mint, amount, fee_lamports=None, wait_s=60):
+def atomic_swap(chat, input_mint, output_mint, amount, fee_lamports=None, wait_s=60, fee_rate=None, slippage_bps=None, priority=None):
     """Swap with the fee INSIDE the same transaction (both land or neither does).
     fee_lamports=None: 4% of the SOL the swap is quoted to return (sells).
     Returns {"signature", "fee_lamports"}; raises NotSent or Uncertain."""
@@ -243,9 +243,9 @@ def atomic_swap(chat, input_mint, output_mint, amount, fee_lamports=None, wait_s
         address, kp = _keypair(chat)
         if not dest:
             raise NotSent("fee wallet missing")
-        route = lx.quote(input_mint, output_mint, int(amount), slippage_bps=SLIPPAGE_BPS)
-        fee = int(fee_lamports if fee_lamports is not None else int(route["outAmount"]) * FEE_RATE)
-        payload = lx.build_swap(route, address)
+        route = lx.quote(input_mint, output_mint, int(amount), slippage_bps=int(slippage_bps or SLIPPAGE_BPS))
+        fee = int(fee_lamports if fee_lamports is not None else int(route["outAmount"]) * (FEE_RATE if fee_rate is None else fee_rate))
+        payload = lx.build_swap(route, address, priority) if priority else lx.build_swap(route, address)
         unsigned = VersionedTransaction.from_bytes(base64.b64decode(payload["swapTransaction"], validate=True))
         try:
             msg = fee_tx.add_fee_transfer(unsigned.message, address, dest, fee)

@@ -37,14 +37,16 @@ class FindCoinTest(unittest.TestCase):
 
     def test_card_has_buy_sell_and_settings_buttons(self):
         c = tp._row(pool())
-        text = tp.card_text(c, None, None, "", (0.5, 80.0), now=1_700_000_000 + 3 * 86400)
+        text = tp.card_text(c, None, None, "", ("W", 0.5, 80.0), now=1_700_000_000 + 3 * 86400)
         self.assertIn("Popcat (POP)", text)
         self.assertIn("✅ OK", text)
         self.assertIn("criada há 3 dias", text)
-        kb = tp.card_keyboard(MINT, {"mode": "trade", "cost_usd": 10, "trade_tp": 0.5})
+        s = dict(tp.ut.default())
+        kb = tp.card_keyboard(MINT, {"mode": "trade", "cost_usd": 10, "tp": 0.5}, s)
         data = [b["callback_data"] for row in kb for b in row]
-        self.assertIn("tb:25:" + MINT, data)
+        self.assertIn("tb:0.1:" + MINT, data)
         self.assertIn("ts:50:" + MINT, data)
+        self.assertIn("tdo:" + MINT, data)
         self.assertTrue(all(len(d.encode()) <= 64 for d in data))
         self.assertIn("🎯 Alvo +50%", [b["text"] for row in kb for b in row])
 
@@ -68,24 +70,59 @@ class ExitTest(unittest.TestCase):
         self.assertEqual((sig["action"], sig["reason"]), ("sell", "trade_sl"))
 
     def test_cycle_settings(self):
-        with mock.patch.object(tp, "_position", return_value=None), mock.patch.object(tp, "_save"):
-            self.assertEqual(tp.set_option(MINT, "tp"), (0.25, False))
-            self.assertEqual(tp.set_option(MINT, "tp"), (0.5, False))
+        with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "position", return_value=None), \
+                mock.patch.object(tp, "_save"):
+            self.assertEqual(tp.set_option(1, MINT, "tp"), (0.25, False))
+            self.assertEqual(tp.set_option(1, MINT, "tp"), (0.5, False))
             for _ in range(3):
-                tp.set_option(MINT, "tp")
+                tp.set_option(1, MINT, "tp")
             self.assertEqual(tp._MEM["tp"], 0.0)                 # back to off after +200%
 
 
 class HandleTest(unittest.TestCase):
+    def setUp(self):
+        tp._MEM.clear()
+        tp.INPUT.clear()
+
     def test_typed_amount_buys(self):
         sent, bought = [], []
-        tp.INPUT.clear()
         run = lambda fn: fn()
-        with mock.patch.object(tp, "buy", side_effect=lambda m, u, s, c: bought.append((m, u))):
+        with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save"), \
+                mock.patch.object(tp, "buy", side_effect=lambda c, m, sol, s, *a: bought.append((m, sol))):
             self.assertTrue(tp.handle("tbx:" + MINT, None, lambda c, t, k=None: sent.append(t), 1, run_async=run))
-            self.assertTrue(tp.handle("15", "15", lambda c, t, k=None: sent.append(t), 1, run_async=run))
-        self.assertEqual(bought, [(MINT, 15.0)])
-        self.assertFalse(tp.handle("oi", "oi", lambda *a, **k: None, 1, run_async=run))
+            self.assertTrue(tp.handle("0.3", "0.3", lambda c, t, k=None: sent.append(t), 1, run_async=run))
+            self.assertTrue(tp.handle("tb:0.25:" + MINT, None, lambda c, t, k=None: sent.append(t), 1, run_async=run))
+            self.assertFalse(tp.handle("oi", "oi", lambda *a, **k: None, 1, run_async=run))
+        self.assertEqual(bought, [(MINT, 0.3), (MINT, 0.25)])
+
+    def test_confirm_trades_asks_first(self):
+        sent, bought = [], []
+        with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save"), \
+                mock.patch.object(tp, "buy", side_effect=lambda c, m, sol, s, *a: bought.append(sol)):
+            tp._load()["confirm"] = True
+            tp.handle("tb:0.5:" + MINT, None, lambda c, t, k=None: sent.append((t, k)), 1, run_async=lambda fn: fn())
+            self.assertEqual(bought, [])
+            self.assertIn("Confirma", sent[-1][0])
+            tp.handle(sent[-1][1][0][0]["callback_data"], None, lambda c, t, k=None: None, 1, run_async=lambda fn: fn())
+        self.assertEqual(bought, [0.5])
+
+    def test_home_has_all_menu_buttons(self):
+        with mock.patch.object(tp, "is_owner", return_value=False):
+            data = {b["callback_data"] for row in tp.home_keyboard(5) for b in row}
+        self.assertTrue({"tbuy", "tsellm", "tpl", "tlim", "tdl", "tcopy", "tscan", "twl", "wallet_withdraw", "tset", "thelp", "thome"} <= data)
+
+    def test_dca_runs_and_counts_down(self):
+        bought = []
+        with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "_save"), \
+                mock.patch.object(tp, "buy", side_effect=lambda c, m, sol, s, *a: bought.append(sol)):
+            tp._load()
+            oid = tp.add_dca(1, MINT, "POP", 0.1, 2, 1, now=1000)
+            tp.run_dca(1, lambda *a, **k: None, now=1000)
+            tp.run_dca(1, lambda *a, **k: None, now=1500)          # not yet (every 1 h)
+            self.assertEqual(tp.dcas(1)[oid]["left"], 1)
+            tp.run_dca(1, lambda *a, **k: None, now=1000 + 3600)
+            self.assertEqual(tp.dcas(1), {})
+        self.assertEqual(bought, [0.1, 0.1])
 
 
 if __name__ == "__main__":

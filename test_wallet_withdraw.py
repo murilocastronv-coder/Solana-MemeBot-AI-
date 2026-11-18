@@ -43,7 +43,7 @@ class WithdrawFlowTests(unittest.TestCase):
                 patch.object(ww, "send_sol", return_value="SIG") as sent:
             self.assertIn("ENDEREÇO", self.talk(tb, out, data="wd_start"))
             self.assertIn("inválido", self.talk(tb, out, text="nada"))
-            self.assertIn("Quanto retirar", self.talk(tb, out, text=DEST))
+            self.assertIn("Quanto sacar", self.talk(tb, out, text=DEST))
             self.assertIn("Confirma", self.talk(tb, out, text="1.5"))
             sent.assert_not_called()
             self.assertIn("SAQUE ENVIADO", self.talk(tb, out, data="wd_ok"))
@@ -55,7 +55,7 @@ class WithdrawFlowTests(unittest.TestCase):
     def test_menu_has_deposit_and_withdraw(self):
         import telegram_bot as tb
         data = {b["callback_data"] for row in tb.keyboard() for b in row}
-        self.assertTrue({"wallet_deposit", "wallet_withdraw", "wallet_balance"} <= data)
+        self.assertTrue({"wallet_deposit", "wallet_withdraw", "thome"} <= data)
 
 
 if __name__ == "__main__":

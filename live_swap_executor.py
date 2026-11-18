@@ -40,8 +40,11 @@ def quote(input_mint,output_mint,amount,slippage_bps=100):
         raise SwapError("Price impact too high")
     return data
 
-def build_swap(quote_response,public_address):
-    r=jupiter_rate_limiter.post("https://api.jup.ag/swap/v1/swap",json={"quoteResponse":quote_response,"userPublicKey":public_address,"wrapAndUnwrapSol":True,"dynamicComputeUnitLimit":True},headers=_headers(),timeout=TIMEOUT)
+def build_swap(quote_response,public_address,priority=None):
+    """priority: (level, max lamports) of the priority fee, e.g. ("veryHigh", 5_000_000) (trade speed setting)."""
+    body={"quoteResponse":quote_response,"userPublicKey":public_address,"wrapAndUnwrapSol":True,"dynamicComputeUnitLimit":True}
+    if priority:body["prioritizationFeeLamports"]={"priorityLevelWithMaxLamports":{"priorityLevel":priority[0],"maxLamports":int(priority[1])}}
+    r=jupiter_rate_limiter.post("https://api.jup.ag/swap/v1/swap",json=body,headers=_headers(),timeout=TIMEOUT)
     r.raise_for_status()
     payload=r.json()
     if not payload.get("swapTransaction"):raise SwapError("No swap transaction")

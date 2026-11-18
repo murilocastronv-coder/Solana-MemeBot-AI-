@@ -135,17 +135,9 @@ def split_message(text,limit=3800):
  if cur:parts.append(cur)
  return parts
 def keyboard():
- """Owner's menu (Nov 17): only the robô BAIXA (real money), its backtests and the bot wallet."""
- return [[{"text":"🟢 Ligar robô BAIXA (real)","callback_data":"bx_on"},{"text":"⏹️ Desligar","callback_data":"bx_off"}],
-  [{"text":"📉 Robô BAIXA: status","callback_data":"bx_status"},{"text":"📦 Posições","callback_data":"bx_pos"}],
-  [{"text":"💰 Saldo da carteira do robô","callback_data":"bx_wallet"}],
-  [{"text":"🧪 Backtest do robô (stop móvel 10%)","callback_data":"bx_bt"}],
-  [{"text":"🧪 Backtest: TODAS as moedas, stop móvel 10%","callback_data":"bx_bt_all"}],
-  [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
-  [{"text":"🪙 Trade manual (cole o contrato)","callback_data":"trade_help"},{"text":"💼 Minhas trades","callback_data":"tpl"}],
-  [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
-  [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
-  [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
+ """Owner's buttons: the trading bot home (owner, Nov 18: only the trading bot)."""
+ import trade_panel
+ return trade_panel.home_keyboard(active_chat())
 def user_keyboard():
  """Menu of a Telegram account that is not the owner: its own copy trade and its own wallet."""
  return [[{"text":"👥 Copiar (SIMULAÇÃO)","callback_data":"u_sim"},{"text":"💵 Copiar (REAL)","callback_data":"u_real"}],
@@ -153,9 +145,10 @@ def user_keyboard():
   [{"text":"📦 Minhas posições","callback_data":"u_pos"},{"text":"⚙️ Valor por cópia","callback_data":"u_size"}],
   [{"text":"👛 Minha carteira","callback_data":"wallet_create"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
-  [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
+  [{"text":"💸 Saque","callback_data":"wallet_withdraw"},{"text":"⬅️ Início","callback_data":"thome"}]]
 def keyboard_for(chat):
- return keyboard() if authorized(chat) else user_keyboard()
+ import trade_panel
+ return trade_panel.home_keyboard(chat)
 def robot_alive_line():
  if not HEARTBEAT["at"]:return "⏳ Rotina automática ainda não começou"
  ago=int(time.time()-HEARTBEAT["at"])
@@ -233,7 +226,8 @@ def discovery_text():
  if not s["qualified_wallets"]:lines.append("Ainda nenhuma aprovada. A cada 2 min o bot analisa o histórico de novas carteiras que compraram moedas em alta.")
  return "\n".join(lines)
 def menu(chat):
- send(chat,__import__("baixa_bot").status_text(),keyboard())   # owner (Nov 17): only the robô BAIXA
+ import trade_panel
+ send(chat,trade_panel.home_text(chat),trade_panel.home_keyboard(chat))   # owner (Nov 18): only the trading bot
 def fmt(v):
  if v == 0:return "0"
  return format(v, ".12f").rstrip("0").rstrip(".") if abs(v)<1 else format(v, ".12f").rstrip("0").rstrip(".")
@@ -244,6 +238,12 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
+TRADE_ACTIONS={"tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
+ "tsc","tsv","tsell","twal","tsec","towner","trade_help","/posicoes","/ordens","/config","/ajuda","/comprar","/home","/dca","/watchlist","/scanner"}
+TRADE_PREFIXES=("tb","tbx","ts","tt","tl","tr","tc","tlo","tld","tla","tlx","tsoon","tsp","tw","tdo","tdp","tdx","tbc","tsx")
+def TRADE_ROUTE(cb,action):
+ if action in TRADE_ACTIONS:return True
+ return bool(cb) and ":" in action and action.split(":")[0] in TRADE_PREFIXES
 def authorized(chat):
  return bool(active_chat()) and str(chat)==str(active_chat())
 def handle(update):
@@ -265,12 +265,35 @@ def handle(update):
    return
  if action=="/id":
   send(chat,"Seu chat ID privado: "+str(chat)+"\nIdentificação privada. O proprietário vinculado é mantido no disco persistente.");return
+ import trade_panel
+ text=(msg or {}).get("text","")
+ if TRADE_ROUTE(cb,action) or (not cb and chat in trade_panel.INPUT):
+  if trade_panel.handle(action,None if cb else text,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async):return
+ if action=="tcopy":
+  if authorized(chat):trade_panel.handle("tsoon:copy",None,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async)
+  else:user_copy_action(chat,"u_status")
+  return
+ if (action in ("/sacar","/retirar","wallet_withdraw") or action.startswith("wd_") or
+   (not cb and chat in WITHDRAW and time.time()-WITHDRAW[chat]["at"]<600 and
+    (not text.startswith("/") or text.strip()=="/cancelar"))):
+  owner_withdraw(chat,action,text.strip());return
+ if not cb and trade_panel.candidates(text) and not text.startswith("/") and not (authorized(chat) and (chat in EVAL_WALLET or chat in ADD_WALLET)):
+  send(chat,"🔎 Procurando a moeda…")
+  run_async(lambda:trade_panel.show(send,chat,text,[[{"text":"⬅️ Início","callback_data":"thome"}]]) or
+   send(chat,"⛔ Não achei essa moeda no DexScreener (só moedas da Solana com pool).",keyboard_for(chat)))
+  return
+ if not authorized(chat) and action in ("/start","/menu","help"):
+  try:address,created=user_wallets.create_or_get(chat)
+  except Exception as exc:
+   logging.warning("wallet unavailable: %s",type(exc).__name__)
+   send(chat,"⚠️ Não foi possível abrir sua carteira agora. Tente de novo em instantes.");return
+  if created:
+   send(chat,"🆕 CARTEIRA CRIADA SÓ PARA VOCÊ\nCada conta do Telegram recebe a sua própria carteira Solana.\n\n"+address+
+    "\n\n🔐 A chave privada fica criptografada no servidor. Deposite SOL nesse endereço para começar.",
+    [[{"text":"📥 Depositar","callback_data":"wallet_deposit"}]])
+  send(chat,trade_panel.home_text(chat),trade_panel.home_keyboard(chat));return
  if not authorized(chat) and action.startswith("u_"):
   user_copy_action(chat,action);return
- if authorized(chat) and (action in ("/sacar","/retirar","wallet_withdraw") or action.startswith("wd_") or
-   (not cb and chat in WITHDRAW and time.time()-WITHDRAW[chat]["at"]<600 and
-    (not (msg or {}).get("text","").startswith("/") or (msg or {}).get("text","").strip()=="/cancelar"))):
-  owner_withdraw(chat,action,(msg or {}).get("text","").strip());return
  if action in WALLET_ACTIONS or not authorized(chat):
   # every Telegram account has its own unique wallet and its own copy trade; only the owner runs the main one
   wallet_action(chat,action if action in WALLET_ACTIONS else "/start");return
@@ -284,63 +307,6 @@ def handle(update):
   if not os.getenv("SOLANA_RPC_URL"):send(chat,"Preciso do SOLANA_RPC_URL configurado no Render.",keyboard());return
   send(chat,"🔍 Auditando todas as carteiras copiadas (tempo que seguram cada moeda). Leva alguns minutos…")
   run_async(audit_job,chat);return
- if action=="bx_bt_all":
-  import baixa_bot
-  why=baixa_bot.start_backtest_all(send,chat)
-  send(chat,"⛔ "+why if why else "🧪 Backtest rodando: compra quando cai 5% do topo de 7 dias, SEM alvo, stop móvel que liga em +10% e vende 10% abaixo do topo "
-   "(com stop −35% e também sem stop), US$ 23, máx. 2 abertas, em TODAS as "
-   "moedas da Solana com 10+ dias e liquidez de US$ 70 mil a US$ 700 mil, últimos ~5,5 meses. Resultado em ~3 min. Só teste.",keyboard());return
- if action=="bx_bt":
-  import baixa_bot
-  why=baixa_bot.start_backtest(send,chat)
-  send(chat,"⛔ "+why if why else "🧪 Backtest do robô BAIXA rodando: as mesmas moedas e a mesma regra do robô real (stop móvel +"+format(baixa_bot.ARM*100,"g")+
-   "% / "+format(baixa_bot.TRAIL*100,"g")+"% abaixo do topo), "+str(baixa_bot.BT_DAYS)+" dias de velas reais. Resultado em ~2–3 min. Só teste.",keyboard());return
- if action=="bx_wallet":
-  try:send(chat,__import__("baixa_bot").wallet_text(),keyboard())
-  except Exception as exc:send(chat,"⛔ Saldo do robô: "+type(exc).__name__,keyboard())
-  return
- if action in ("bx_on","bx_off","bx_status","bx_pos"):
-  import baixa_bot
-  try:
-   if action=="bx_on":
-    live_engine.start()
-    __import__("copy_trader").set_mode(False)       # owner: remove everything else, only this robot
-    baixa_bot.set_enabled(True)
-    run_async(lambda:baixa_bot.cycle(send,chat))          # look for the coins right away (not only in 15 min)
-    send(chat,"🟢 ROBÔ BAIXA LIGADO COM DINHEIRO REAL. O copy trade foi desligado (só esse robô agora).\n"
-     "Ele confere a cada 15 min as moedas da Solana com "+str(baixa_bot.ALL_MIN_AGE_D)+"+ dias e liquidez de US$ "+format(baixa_bot.ALL_MIN_LIQ/1000,"g")+" mil a "+format(baixa_bot.ALL_MAX_LIQ/1000,"g")+" mil; quando uma cair "+format(baixa_bot.DROP*100,"g")+"% do topo de 7 dias, "
-     "compra US$ "+format(baixa_bot.USD,"g")+". Sem alvo: stop móvel liga em +"+format(baixa_bot.ARM*100,"g")+"% e vende "+format(baixa_bot.TRAIL*100,"g")+"% abaixo do topo"+
-     ("; stop −"+format(baixa_bot.SL*100,"g")+"%. " if baixa_bot.SL else "; SEM stop (moeda que despencar fica presa). ")+
-     "Máx. "+str(baixa_bot.MAX_OPEN)+" ordens abertas. Precisa de SOL na carteira (US$ "+format(baixa_bot.USD,"g")+" por compra + US$ "+format(baixa_bot.KEEP_SOL_USD,"g")+" de reserva).\n\n"+baixa_bot.status_text(),keyboard());return
-   if action=="bx_off":
-    baixa_bot.set_enabled(False)
-    send(chat,"⏹️ Robô BAIXA desligado: não compra mais. As posições abertas continuam com alvo e stop.\n\n"+baixa_bot.status_text(),keyboard());return
-   if action=="bx_pos":
-    import live_trade_state as st
-    ps=list(st._load()["positions"].items())          # every open position (none is hidden)
-    lines=["📦 Posições abertas: "+str(len(ps))+"/"+str(baixa_bot.MAX_OPEN)]
-    for m,p in ps:
-     peak=float(p.get("peak_ratio") or 0)
-     lines.append("• "+str(p.get("symbol") or m[:6])+(" (robô BAIXA)" if p.get("mode")=="baixa" else " ("+str(p.get("mode") or "?")+")")+
-      " · custo US$ "+format(float(p.get("cost_usd") or 0),".2f")+(" · topo "+format((peak-1)*100,"+.1f")+"%" if peak else "")+
-      ((" · 🚀 stop móvel ATIVO: vende se cair para "+format((peak*(1-baixa_bot.TRAIL)-1)*100,"+.1f")+"%") if p.get("mode")=="baixa" and peak>=1+baixa_bot.ARM else
-       (" · stop móvel liga em +"+format(baixa_bot.ARM*100,"g")+"% · "+("stop −"+format(baixa_bot.SL*100,"g")+"%" if baixa_bot.SL else "sem stop") if p.get("mode")=="baixa" else ""))+
-      " · aberta há "+format((time.time()-float(p.get("opened_at") or time.time()))/3600,".1f")+" h\n  https://dexscreener.com/solana/"+m)
-    if not ps:lines.append("nenhuma")
-    send(chat,"\n".join(lines),keyboard());return
-   send(chat,baixa_bot.status_text(),keyboard());return
-  except Exception as exc:send(chat,"⛔ Robô BAIXA: "+type(exc).__name__+": "+str(exc)[:200],keyboard());return
- if action=="dip_bt_meme":
-  import solid_dip_bt
-  why=solid_dip_bt.start(send,chat,"meme")
-  send(chat,"⛔ "+why if why else "📉 Backtest de MEMECOINS rodando: memecoins da Solana com liquidez ≥ US$ 250 mil hoje e 7+ dias de vida, "
-   "4 meses de velas de 1 h reais (GeckoTerminal). Compra na baixa, vende no alvo +25% ou no stop −40%. Te aviso o progresso; "
-   "resultado em ~3–5 min (o GeckoTerminal grátis limita as consultas). Só teste, nenhuma ordem real.",keyboard());return
- if action=="dip_bt":
-  import solid_dip_bt
-  why=solid_dip_bt.start(send,chat)
-  send(chat,"⛔ "+why if why else "📉 Backtest rodando: 1 ano de velas reais de SOL, JUP, BONK, WIF, JTO, RAY, PYTH, ORCA, W e RENDER. "
-   "Compra quando cai do topo, vende no alvo +25% ou no stop −40%. Resultado em ~1 min (só teste, nenhuma ordem real).",keyboard());return
  if action in ("copy_positions","/posicoes_copy"):
   import copy_trader as ct
   try:
@@ -422,18 +388,6 @@ def handle(update):
    else:pre=""
    send(chat,pre+status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
-  return
- import trade_panel
- text=(msg or {}).get("text","")
- if (cb and (action=="tpl" or action.split(":")[0] in ("tb","tbx","ts","tt","tl","tr","tc"))) or (not cb and chat in trade_panel.INPUT):
-  if trade_panel.handle(action,None if cb else text,send,chat,keyboard(),run_async):return
- if action in ("trade_help","/trade"):
-  send(chat,"🪙 TRADE MANUAL: cole aqui o contrato da moeda (ou o link do DexScreener, Pump.fun ou Birdeye). Aparece o cartão com preço, "
-   "liquidez, anti-golpe e os botões para comprar (US$ 10 / 25 / 50 / 100 ou o valor que quiser), vender 25 / 50 / 100% e "
-   "ligar alvo, stop loss e stop móvel. Dinheiro real, da carteira do robô.",keyboard());return
- if not cb and trade_panel.candidates(text) and not text.startswith("/"):
-  send(chat,"🔎 Procurando a moeda…")
-  run_async(lambda:trade_panel.show(send,chat,text,keyboard()) or send(chat,"⛔ Não achei essa moeda no DexScreener (só moedas da Solana com pool).",keyboard()))
   return
  if action in ("/start","/menu","help") or not (cb or action.startswith("/") or re.fullmatch(r"[a-z0-9]+_[a-z0-9_]+",action)):menu(chat)
  else:send(chat,"Esse controle foi removido: o bot agora é só copy trade. Use o menu abaixo.",keyboard())
@@ -517,12 +471,14 @@ def wallet_action(chat,action):
  send(chat,"👛 SUA CARTEIRA DO BOT\n"+address,kb)
 WITHDRAW={}
 def owner_withdraw(chat,action,text):
- """Owner's withdrawal of SOL from the bot wallet: address -> amount -> confirm button -> send."""
+ """Withdrawal of SOL from the account's OWN bot wallet (owner: main wallet; others: their wallet):
+ address -> amount -> confirm button -> send."""
  import wallet_withdraw as ww
- kb=keyboard()
+ kb=keyboard_for(chat);owner=authorized(chat)
+ own=None
  if action in ("/sacar","/retirar","wallet_withdraw","wd_start"):
   WITHDRAW[chat]={"step":"addr","at":time.time()}
-  send(chat,"💸 RETIRAR SOL da carteira do bot\nMande o ENDEREÇO Solana de destino (sua carteira, ex.: Phantom).\n"
+  send(chat,"💸 SACAR SOL da sua carteira do bot\nMande o ENDEREÇO Solana de destino (sua carteira, ex.: Phantom).\n"
    "Para cancelar mande /cancelar.");return
  st=WITHDRAW.get(chat)
  if action=="wd_no" or text in ("/cancelar","cancelar") or not st:
@@ -533,19 +489,20 @@ def owner_withdraw(chat,action,text):
    send(chat,"⏳ Enviando "+format(st["lamports"]/1e9,".4f")+" SOL…")
    def run():
     try:
-     sig=ww.send_sol(st["addr"],st["lamports"])
+     if owner:sig=ww.send_sol(st["addr"],st["lamports"])
+     else:sig=__import__("user_trade").withdraw(chat,st["addr"],st["lamports"])
      send(chat,"✅ SAQUE ENVIADO: "+format(st["lamports"]/1e9,".4f")+" SOL\n➡️ "+st["addr"]+"\n🔗 https://solscan.io/tx/"+str(sig),kb)
     except Exception as exc:send(chat,"⛔ Saque falhou: "+str(exc)[:200],kb)
    run_async(run);return
   if st["step"]=="addr" and not action.startswith("wd_"):
+   own=ww.get_address() if owner else user_wallets.get_address(chat)
    addr=ww.valid_address(text)
-   if not addr:send(chat,"⛔ Endereço inválido (ou é a própria carteira do bot). Mande de novo ou /cancelar.");return
-   bal=ww.balance_lamports()
+   if not addr or addr==own:send(chat,"⛔ Endereço inválido (ou é a própria carteira do bot). Mande de novo ou /cancelar.");return
+   bal=ww.balance_lamports() if owner else ww.balance_lamports(own)
    st.update(step="amount",addr=addr,at=time.time())
-   send(chat,"💰 Saldo da carteira do bot: "+format(bal/1e9,".4f")+" SOL\nQuanto retirar? Mande o valor em SOL (ex.: 0.5) ou *tudo*."
-    "\n(Posições abertas do robô BTC ficam na Jupiter e não entram nesse saldo.)");return
+   send(chat,"💰 Saldo da sua carteira do bot: "+format(bal/1e9,".4f")+" SOL\nQuanto sacar? Mande o valor em SOL (ex.: 0.5) ou *tudo*.");return
   if st["step"]=="amount" and not action.startswith("wd_"):
-   lam=ww.amount_lamports(text,ww.balance_lamports())
+   lam=ww.amount_lamports(text,ww.balance_lamports() if owner else ww.balance_lamports(user_wallets.get_address(chat)))
    st.update(step="confirm",lamports=lam,at=time.time())
    send(chat,"Confirma o saque?\n💸 "+format(lam/1e9,".4f")+" SOL\n➡️ "+st["addr"]+"\nConfira o endereço: transferência na blockchain não tem volta.",
     [[{"text":"✅ Confirmar saque","callback_data":"wd_ok"},{"text":"❌ Cancelar","callback_data":"wd_no"}]]);return
@@ -583,8 +540,12 @@ def startup_notice():
  """After a deploy/restart: say what state the robot resumed in."""
  chat=active_chat()
  if not chat:return
- import baixa_bot
- send(chat,"🔄 Bot reiniciado (deploy).\n"+baixa_bot.status_text(),keyboard())   # owner (Nov 17): only the robô BAIXA
+ import trade_panel
+ try:
+  moved=trade_panel.adopt_robot_positions()
+  if moved:send(chat,"🖐️ Os robôs foram removidos. Essas moedas agora são suas trades manuais (sem alvo / stop até você ligar no cartão): "+", ".join(moved))
+ except Exception:logging.exception("adopt robot positions failed")
+ send(chat,"🔄 Bot reiniciado (deploy).\n"+trade_panel.home_text(chat),keyboard())
  if not trade_state.status()["positions"] and not trade_state.status()["pending"]:return
  warn=leftover_btc_warning()
  if warn:send(chat,warn)
@@ -593,7 +554,7 @@ def startup_notice():
  reason=live_engine.why_stopped()
  send(chat,"🔄 Bot reiniciado (deploy). Estado salvo recuperado:\n"+
   ("🟢 Robô LIGADO e operando" if reason is None else "🔴 Robô parado: "+reason)+
-  "\n📦 Posições abertas: "+str(st["positions"])+"/"+str(__import__("baixa_bot").MAX_OPEN)+" (venda automática continua)"+
+  "\n📦 Posições abertas: "+str(st["positions"])+" (venda automática continua)"+
   ("\n⏳ "+str(st["pending"])+" ordem(ns) pendente(s): confiro sozinho nos saldos e libero em ~2 min." if st["pending"] else ""))
 HEARTBEAT={"at":0.0,"step":"iniciando"}
 def beat(step):
@@ -699,17 +660,14 @@ def copy_wallet_action(chat,action,text):
    (" com dinheiro real." if ct.real_enabled() else ". ⚠️ O copy trade está DESLIGADO: toque em 💵 Copiar (REAL) para começar.")+
    "\nCompras antigas não são copiadas.",keyboard())
  except Exception as exc:send(chat,"⛔ Carteira: "+str(exc)[:200],keyboard())
-def baixa_loop():
- """Owner (Nov 17): robô BAIXA, real money, only after the owner's LIGAR. The copy trade is switched off for good."""
- import baixa_bot
- try:__import__("copy_trader").set_mode(False)
- except Exception:logging.exception("copy off failed")
- time.sleep(60)
+def trade_loop():
+ """Trading bot upkeep every minute: limit orders, DCA orders, the users' TP / SL / trailing stops."""
+ import trade_panel
+ time.sleep(30)
  while True:
-  try:
-   if baixa_bot.enabled():baixa_bot.cycle(send,active_chat())
-  except Exception as exc:logging.warning("baixa cycle: %s: %s",type(exc).__name__,str(exc)[:150])
-  time.sleep(baixa_bot.CYCLE_S)
+  try:trade_panel.upkeep_all(send,active_chat())
+  except Exception as exc:logging.warning("trade upkeep: %s: %s",type(exc).__name__,str(exc)[:150])
+  time.sleep(60)
 def copy_loop():
  """Copy trading: read the followed wallets every COPY_POLL_SECONDS."""
  poll=max(3.0,float(os.getenv("COPY_POLL_SECONDS","5")))
@@ -880,7 +838,7 @@ def loop():
  except Exception:logging.exception("copy buy worker failed to start")
  threading.Thread(target=audit_loop,daemon=True).start()
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
- threading.Thread(target=baixa_loop,daemon=True).start()       # owner (Nov 17): robô BAIXA (buys only after LIGAR)
+ threading.Thread(target=trade_loop,daemon=True).start()       # owner (Nov 18): trading bot (limit / DCA / user exits)
  # removed BTC robots: only close a position they may still hold, then stop
  threading.Thread(target=btc_live_loop,daemon=True).start()
  threading.Thread(target=btc_leftover_loop,daemon=True).start()
