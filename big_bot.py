@@ -1,5 +1,5 @@
 """Robô das moedas grandes (owner, Nov 18): the strategy that worked on the big coins - buy when a big Solana coin
-(not a memecoin) is DROP (5%) below its 7-day top; stop loss SL (35%); trailing stop armed at +ARM (10%) that sells
+(not a memecoin) is DROP (5%) below its 7-day top; stop loss SL (off since Nov 18, owner: "sem sl"); trailing stop armed at +ARM (10%) that sells
 TRAIL (10%) below the top. Every account can switch it on for its OWN wallet (users pay the 2% trading fee).
 
 Coins: official mints written here (never found by name, so a fake copy with the same symbol is never bought), plus
@@ -14,7 +14,12 @@ import time
 import requests
 
 DROP = float(os.getenv("BIG_DROP", "0.05"))
-SL = float(os.getenv("BIG_SL", "0.35"))
+SL = float(os.getenv("BIG_SL", "0"))           # owner (Nov 18): no stop loss, live and in the backtest
+OLD_SL = 0.35                                    # shown in the backtest for comparison
+
+
+def sl_text():
+    return "stop loss −" + format(SL * 100, "g") + "%" if SL else "sem stop loss"
 ARM = 0.10                         # trade_panel.TRAIL_ARM / user_trade.exit_reason arm
 TRAIL = float(os.getenv("BIG_TRAIL", "0.10"))
 LOOKBACK_H = 168
@@ -235,7 +240,7 @@ def run_for(chat, sigs, send, now=None, buy=None):
             r["bought"][m] = now
             n_open += 1
             done.append(sym)
-            send(chat, "🤖 " + sym + ": stop loss −" + format(SL * 100, "g") + "% · stop móvel liga em +" + format(ARM * 100, "g") +
+            send(chat, "🤖 " + sym + ": " + sl_text() + " · stop móvel liga em +" + format(ARM * 100, "g") +
                  "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo.")
     r["bought"] = {k: v for k, v in r["bought"].items() if now - v < COOLDOWN_S}
     set_state(chat, r)
@@ -259,7 +264,7 @@ def status_text(chat, sigs=None):
     r = state(chat)
     L = ["🤖 ROBÔ MOEDAS GRANDES — " + ("🟢 LIGADO" if r["on"] else "🔴 DESLIGADO"),
          "Compra " + format(r["sol"], "g") + " SOL quando uma moeda grande da Solana (não é memecoin) cai " + format(DROP * 100, "g") +
-         "% do topo de 7 dias · 🛑 stop loss −" + format(SL * 100, "g") + "% · 🚀 stop móvel liga em +" + format(ARM * 100, "g") +
+         "% do topo de 7 dias · 🛑 " + sl_text() + " · 🚀 stop móvel liga em +" + format(ARM * 100, "g") +
          "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · máx. " + str(MAX_OPEN) + " moedas abertas · confere a cada " +
          str(CYCLE_S // 60) + " min",
          "Robô aberto agora: " + str(len(open_positions(chat))) + "/" + str(MAX_OPEN)]
@@ -395,7 +400,8 @@ def backtest(days=None, now=None, get=None, progress=None):
     cut = start + (end - start) * 2 // 3
     return {"start": start, "end": end, "cut": cut, "coins": sorted(data), "missing": missing,
             "full": simulate(data, start, end), "first": simulate(data, start, cut), "last": simulate(data, cut, end),
-            "fee": simulate(data, start, end, fee=0.02)}
+            "fee": simulate(data, start, end, fee=0.02),
+            "with_sl": simulate(data, start, end, sl=OLD_SL), "with_sl_last": simulate(data, cut, end, sl=OLD_SL)}
 
 
 def backtest_text(rep):
@@ -407,14 +413,13 @@ def backtest_text(rep):
         n = s["trades"]
         return ("US$ " + format(BT_CAPITAL, "g") + " → US$ " + format(s["final"], ".2f") + " (" + format(s["pnl"], "+.2f") + ", " +
                 format(s["pnl"] / BT_CAPITAL * 100, "+.1f") + "%) · " + str(n) + " vendas, " + str(s["wins"]) + " no lucro (" +
-                (format(s["wins"] / n * 100, ".0f") if n else "0") + "%) · " + str(s["trails"]) + " no stop móvel, " + str(s["stops"]) +
-                " no stop −" + format(SL * 100, "g") + "% · abertas " + str(s["open"]) + " (" + format(s["open_pnl"], "+.2f") + ") · queda máx. " +
+                (format(s["wins"] / n * 100, ".0f") if n else "0") + "%) · " + str(s["trails"]) + " no stop móvel" + (", " + str(s["stops"]) + " no stop loss" if SL else "") + " · abertas " + str(s["open"]) + " (" + format(s["open_pnl"], "+.2f") + ") · queda máx. " +
                 format(s["dd"], "g") + "%")
     full = rep["full"]
     best = sorted(full["per_coin"].items(), key=lambda kv: -kv[1][1])
     L = ["🧪 BACKTEST — ROBÔ MOEDAS GRANDES (" + d(rep["start"]) + " a " + d(rep["end"]) + ")",
-         "Regra do robô: compra quando cai " + format(DROP * 100, "g") + "% do topo de 7 dias · stop −" + format(SL * 100, "g") +
-         "% · stop móvel liga em +" + format(ARM * 100, "g") + "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · máx. " +
+         "Regra do robô: compra quando cai " + format(DROP * 100, "g") + "% do topo de 7 dias · " + sl_text() +
+         " · stop móvel liga em +" + format(ARM * 100, "g") + "% e vende " + format(TRAIL * 100, "g") + "% abaixo do topo · máx. " +
          str(MAX_OPEN) + " abertas (US$ " + format(BT_SIZE, "g") + " cada de US$ " + format(BT_CAPITAL, "g") + ") · 24 h antes de recomprar a mesma",
          "Moedas: " + ", ".join(rep["coins"]) + " · velas de 1 h reais da Binance · custo " + format(BT_COST * 100, "g") + "% por lado",
          "• período todo: " + f(full),
@@ -422,6 +427,9 @@ def backtest_text(rep):
          "• último 1/3 (" + d(rep["cut"]) + " em diante): " + f(rep["last"]),
          "• com a taxa de 2% dos usuários (por compra e venda): " + format(rep["fee"]["pnl"], "+.2f") + " USD (" +
          format(rep["fee"]["pnl"] / BT_CAPITAL * 100, "+.1f") + "%)"]
+    if "with_sl" in rep:
+        L.append("• comparação COM stop loss −" + format(OLD_SL * 100, "g") + "%: período todo " + format(rep["with_sl"]["pnl"], "+.2f") +
+                 " USD · último 1/3 " + format(rep["with_sl_last"]["pnl"], "+.2f") + " USD")
     if best:
         L.append("• por moeda (vendas / lucro US$): " + ", ".join(s + " " + str(n) + "/" + format(v, "+.2f") for s, (n, v) in best))
     L.append("⚠️ Velas de 1 h: dentro de cada hora conta o pior caso. Passado não garante futuro.")
