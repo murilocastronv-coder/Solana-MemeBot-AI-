@@ -18,7 +18,7 @@ MIN_LIQ, MAX_LIQ = 10_000.0, 200_000.0                    # owner
 MIN_AGE_H = 2.0                                           # owner: more than 2 h of life
 # Rule v2 (Nov 18, after the first 4 demo trades all hit the -8% stop in 3-12 min): they bought a 5-min bounce of coins
 # FALLING over the hour (3 of 4), with weak volume, and an -8% stop that the normal memecoin noise hits.
-RULE = "v3"
+RULE = "v4"
 MIN_VOL_5M = float(os.getenv("SNIPER_DEMO_MIN_VOL_5M", "8000"))       # v1: 3000
 MIN_TURNOVER = 0.08                                                    # 5-min volume >= 8% of the liquidity
 MIN_RATIO = float(os.getenv("SNIPER_DEMO_MIN_RATIO", "2.0"))           # v1: 1.5
@@ -28,7 +28,8 @@ MAX_AGE_H = 7 * 24.0                                                   # new: mo
 CONFIRM_S = 60                                                         # new: still up one minute after it was seen
 TP = float(os.getenv("SNIPER_DEMO_TP", "0.25"))                        # v1: +20%
 STOP = float(os.getenv("SNIPER_DEMO_STOP", "0.15"))                    # v1: -8% (inside the normal noise)
-TRAIL_ARM, TRAIL_DROP = 0.08, 0.05                                     # new: from +8%, sells 5% below the top
+TRAIL_ARM = float(os.getenv("SNIPER_DEMO_TRAIL_ARM", "0.10"))         # v4 (owner, Nov 18): trailing stop of 10%,
+TRAIL_DROP = float(os.getenv("SNIPER_DEMO_TRAIL_DROP", "0.10"))       # armed at +10%, sells 10% below the top (v2/v3: +8% / 5%)
 FLOOR_ARM, FLOOR = 0.10, 0.04          # Nov 18 (Tomás +10% -> +0.2%): after +10% never give back below +4% (covers the costs)
 REASONS = {}                            # chat -> {reason: count} of the coins refused in the last window (what blocks most)
 MAX_HOLD_MIN = float(os.getenv("SNIPER_DEMO_MAX_HOLD_MIN", "45"))      # v1: 30
@@ -262,7 +263,8 @@ def text(chat, prices=None, now=None):
     L = ["🎯 SNIPER DEMO — " + ("🟢 LIGADO" if d["on"] else "🔴 DESLIGADO") + " (dinheiro de mentira, preços reais)",
          "Regra " + RULE + ": Pump.fun no DexScreener · liquidez US$ 10–200 mil · 2 h a 7 dias de vida · só quando a última hora "
          "está subindo, volume forte e confirmação de 1 min · US$ " + format(SIZE, "g") + " por moeda, máx. " + str(MAX_OPEN) +
-         " · alvo +" + format(TP * 100, "g") + "% · stop móvel a partir de +" + format(TRAIL_ARM * 100, "g") + "% · depois de +" +
+         " · alvo +" + format(TP * 100, "g") + "% · stop móvel de " + format(TRAIL_DROP * 100, "g") + "% a partir de +" +
+         format(TRAIL_ARM * 100, "g") + "% · depois de +" +
          format(FLOOR_ARM * 100, "g") + "% nunca sai abaixo de +" + format(FLOOR * 100, "g") + "% · stop −" +
          format(STOP * 100, "g") + "% · sai em " + format(MAX_HOLD_MIN, "g") + " min",
          "Começou com US$ " + format(d["start_usd"], "g") + " · agora US$ " + format(val, ".2f") + " (" + format(val - d["start_usd"], "+.2f") + ", " +

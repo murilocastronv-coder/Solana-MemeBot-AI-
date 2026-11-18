@@ -79,8 +79,10 @@ class SniperDemoTest(unittest.TestCase):
         sd.buys(1, [pair()], None, now=NOW - 60, safety=lambda mint: "")
         sd.buys(1, [pair()], None, now=NOW, safety=lambda mint: "")
         m = "AbcPump1111111111111111111111111111111pump"
-        sd.exits(1, {m: 0.00112}, None, now=NOW + 120)                 # +12%: trailing armed
-        sd.exits(1, {m: 0.00105}, None, now=NOW + 240)                 # 6% below the top: sells with profit
+        sd.exits(1, {m: 0.00120}, None, now=NOW + 120)                 # +20%: trailing armed
+        sd.exits(1, {m: 0.00110}, None, now=NOW + 200)                 # 8% below the top: still holds (10% trailing)
+        self.assertIn(m, sd.state(1)["pos"])
+        sd.exits(1, {m: 0.00107}, None, now=NOW + 240)                 # 11% below the top: sells with profit
         h = sd.state(1)["hist"][0]
         self.assertIn("stop móvel", h["why"])
         self.assertEqual(h["rule"], sd.RULE)
@@ -90,7 +92,9 @@ class V3Test(unittest.TestCase):
     def test_profit_floor_after_10(self):
         self.assertIsNone(sd.exit_reason(1.09, 60, peak=1.09))
         self.assertIn("piso", sd.exit_reason(1.04, 60, peak=1.11))         # Tomás: +10% then back to +0.2%
-        self.assertIn("stop móvel", sd.exit_reason(1.07, 60, peak=1.13))   # trailing still first above the floor
+        self.assertIn("stop móvel", sd.exit_reason(1.10, 60, peak=1.23))   # 10% trailing above the floor
+        self.assertIsNone(sd.exit_reason(1.12, 60, peak=1.23))             # 9% below the top: holds
+        self.assertEqual((sd.TRAIL_ARM, sd.TRAIL_DROP), (0.10, 0.10))
 
     def test_refusal_funnel(self):
         sd.REASONS.clear()
