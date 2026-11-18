@@ -35,7 +35,7 @@ class SniperDemoTest(unittest.TestCase):
         self.assertIn("compradores", ok(buys=20, sells=20))
         self.assertIn("5 min", ok(up5=60))
         self.assertIn("repique", ok(up1h=-6))                     # v2: no bounce inside a falling hour (3 of the 4 losses)
-        self.assertIn("volume", ok(vol5=5000))                    # v2: the losses had US$ 4.5-5.6 mil
+        self.assertIn("volume", ok(vol5=4000))                    # v5: at least US$ 5 mil in 5 min
         self.assertIn("7 dias", ok(age_h=505))                    # v2: DIGS was 21 days old
 
     def test_demo_200_buys_then_sells_with_details(self):

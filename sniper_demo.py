@@ -18,12 +18,12 @@ MIN_LIQ, MAX_LIQ = 10_000.0, 200_000.0                    # owner
 MIN_AGE_H = 2.0                                           # owner: more than 2 h of life
 # Rule v2 (Nov 18, after the first 4 demo trades all hit the -8% stop in 3-12 min): they bought a 5-min bounce of coins
 # FALLING over the hour (3 of 4), with weak volume, and an -8% stop that the normal memecoin noise hits.
-RULE = "v4"
-MIN_VOL_5M = float(os.getenv("SNIPER_DEMO_MIN_VOL_5M", "8000"))       # v1: 3000
-MIN_TURNOVER = 0.08                                                    # 5-min volume >= 8% of the liquidity
-MIN_RATIO = float(os.getenv("SNIPER_DEMO_MIN_RATIO", "2.0"))           # v1: 1.5
+RULE = "v5"   # v5 (Nov 18, 17:45 UTC): v2-v4 bought nothing in 3 h, filters loosened (still no buying a falling hour)
+MIN_VOL_5M = float(os.getenv("SNIPER_DEMO_MIN_VOL_5M", "5000"))       # v1: 3000, v2-v4: 8000
+MIN_TURNOVER = 0.04                                                    # 5-min volume >= 4% of the liquidity (v2-v4: 8%)
+MIN_RATIO = float(os.getenv("SNIPER_DEMO_MIN_RATIO", "1.5"))           # v2-v4: 2.0
 MIN_UP, MAX_UP = 5.0, 30.0                                             # v1: 5-40
-MIN_UP1H, MIN_UP6H = 5.0, 0.0                                          # new: the hour (and 6 h) must be going UP
+MIN_UP1H, MIN_UP6H = 0.1, -10.0                                        # the hour must be going up (v2-v4: +5%, 6 h >= 0)
 MAX_AGE_H = 7 * 24.0                                                   # new: momentum of coins up to 7 days
 CONFIRM_S = 60                                                         # new: still up one minute after it was seen
 TP = float(os.getenv("SNIPER_DEMO_TP", "0.25"))                        # v1: +20%
@@ -186,6 +186,21 @@ def count(chat, reason, f, now=None):
     r["n"][key] = r["n"].get(key, 0) + 1
 
 
+_FUNNEL_LOGGED = [0.0]
+
+
+def log_funnel(now=None):
+    """Once an hour: why coins were refused, in the logs (to tune the rule from data)."""
+    now = now or time.time()
+    if now - _FUNNEL_LOGGED[0] < 3600:
+        return
+    _FUNNEL_LOGGED[0] = now
+    for chat, r in REASONS.items():
+        if r["n"]:
+            logging.info("sniper demo funnel %s: %s coins refused since %s UTC: %s", chat, len(r["coins"]),
+                         time.strftime("%H:%M", time.gmtime(r["since"])), dict(sorted(r["n"].items(), key=lambda kv: -kv[1])))
+
+
 def funnel_text(chat):
     r = REASONS.get(str(chat))
     if not r or not r["n"]:
@@ -236,6 +251,8 @@ def buys(chat, pairs, send=None, now=None, safety=None):
                                                             if k not in ("mint", "sym")}}
         d["cash"] -= SIZE
         done.append(f["sym"])
+        logging.info("sniper demo buy: %s rule %s %s", f["sym"], RULE, {k: (round(v, 2) if isinstance(v, float) else v)
+                                                                       for k, v in f.items() if k != "mint"})
         if send:
             send(chat, "🎯 SNIPER DEMO COMPROU " + f["sym"] + "\n"
                  "🪙 Moeda: " + f["sym"] + " · " + f["mint"] + "\n"
@@ -321,6 +338,7 @@ def cycle(send, chats, pairs_fn=None, prices_fn=None, safety=None):
             logging.info("sniper demo prices: %s", type(exc).__name__)
     pairs = sorted(pairs, key=lambda p: -_num((p.get("volume") or {}).get("m5")))
     import demo_report
+    log_funnel()
     for c in on:
         try:
             exits(c, prices, send)
