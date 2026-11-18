@@ -199,7 +199,7 @@ class UserCopyTests(unittest.TestCase):
             self.assertEqual(uc.load(300)["mode"], "off")              # not on before accepting
             tb.handle({"callback_query": {"id": "1", "data": "u_real_ok", "message": {"chat": {"id": 300, "type": "private"}}}})
         self.assertEqual(uc.load(300)["mode"], "real")
-        self.assertIn("u_sim", {b["callback_data"] for row in tb.user_keyboard() for b in row})
+        self.assertIn("u_sim", {b.get("callback_data") for row in tb.user_keyboard() for b in row})
 
 
 def uc_sig_placeholder():

@@ -144,13 +144,13 @@ class MinBalanceTests(unittest.TestCase):
 class TelegramMenuTests(unittest.TestCase):
     def test_menu_has_only_copy_trade_and_wallet(self):
         import telegram_bot as tb
-        data = [b["callback_data"] for row in tb.keyboard() for b in row]
+        data = [b.get("callback_data") for row in tb.keyboard() for b in row]
         self.assertNotIn("rk_on", data)                # Sniper and Diamond removed (owner, Nov 14)
         self.assertNotIn("dm_on", data)
         self.assertIn("tbuy", data)                          # owner (Nov 18): only the trading bot
         self.assertNotIn("bx_on", data)
         self.assertNotIn("copy_real", data)
-        self.assertFalse([x for x in data if x.startswith(("btc", "vol_", "launch", "lev_"))])
+        self.assertFalse([x for x in data if x and x.startswith(("btc", "vol_", "launch", "lev_"))])
 
     def test_discovery_text_without_rpc(self):
         import telegram_bot as tb

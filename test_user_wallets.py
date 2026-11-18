@@ -36,7 +36,7 @@ class UserWalletTests(unittest.TestCase):
             tb.handle({"message": {"chat": {"id": 555, "type": "private"}, "text": "/start"}})
             tb.handle({"callback_query": {"id": "1", "data": "copy_real", "message": {"chat": {"id": 555, "type": "private"}}}})
         self.assertIn("CARTEIRA CRIADA", sent[0][1])
-        buttons = {b["callback_data"] for _, _, kb in sent for row in kb for b in row}
+        buttons = {b.get("callback_data") for _, _, kb in sent for row in kb for b in row}
         self.assertFalse({"copy_real", "copy_sim", "copy_off"} & buttons)
         import copy_trader
         self.assertFalse(copy_trader.real_enabled())                  # a stranger can't switch trading on

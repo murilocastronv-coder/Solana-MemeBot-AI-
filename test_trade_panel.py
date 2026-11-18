@@ -43,7 +43,7 @@ class FindCoinTest(unittest.TestCase):
         self.assertIn("criada há 3 dias", text)
         s = dict(tp.ut.default())
         kb = tp.card_keyboard(MINT, {"mode": "trade", "cost_usd": 10, "tp": 0.5}, s)
-        data = [b["callback_data"] for row in kb for b in row]
+        data = [b.get("callback_data") for row in kb for b in row]
         self.assertIn("tb:0.1:" + MINT, data)
         self.assertIn("ts:50:" + MINT, data)
         self.assertIn("tdo:" + MINT, data)
@@ -108,7 +108,7 @@ class HandleTest(unittest.TestCase):
 
     def test_home_has_all_menu_buttons(self):
         with mock.patch.object(tp, "is_owner", return_value=False):
-            data = {b["callback_data"] for row in tp.home_keyboard(5) for b in row}
+            data = {b.get("callback_data") for row in tp.home_keyboard(5) for b in row}
         self.assertTrue({"tbuy", "tsellm", "tpl", "tlim", "tdl", "tcopy", "tscan", "twl", "wallet_withdraw", "tset", "thelp", "thome"} <= data)
 
     def test_dca_runs_and_counts_down(self):
