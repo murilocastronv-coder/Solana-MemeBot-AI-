@@ -147,7 +147,8 @@ class TelegramMenuTests(unittest.TestCase):
         data = [b["callback_data"] for row in tb.keyboard() for b in row]
         self.assertNotIn("rk_on", data)                # Sniper and Diamond removed (owner, Nov 14)
         self.assertNotIn("dm_on", data)
-        self.assertIn("bx_on", data)                         # owner (Nov 17): only the robô BAIXA
+        self.assertIn("tbuy", data)                          # owner (Nov 18): only the trading bot
+        self.assertNotIn("bx_on", data)
         self.assertNotIn("copy_real", data)
         self.assertFalse([x for x in data if x.startswith(("btc", "vol_", "launch", "lev_"))])
 

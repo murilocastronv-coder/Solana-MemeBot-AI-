@@ -24,9 +24,6 @@ REMOVED_BOT_MAX_HOLD_S = 6 * 3600
 
 def trail_text(position):
     """'sells X% below the top' for the position's trailing rule."""
-    if position.get("mode") == "baixa":
-        import baixa_bot
-        return format(baixa_bot.TRAIL * 100, ".0f")
     if position.get("mode") == "trade":
         import trade_panel
         return format(trade_panel.settings_of(position)["trail"] * 100, "g")
@@ -164,12 +161,10 @@ def position_signal(position, cost, proceeds):
         action, reason = trade_panel.exit_signal(position, ratio, peak)
         return {"action": action, "reason": reason, "change_pct": (ratio - 1) * 100, "peak_ratio": peak, "peak_pct": (peak - 1) * 100}
     if position.get("mode") == "baixa":
-        # Robô BAIXA (owner, Nov 17): fixed target +25% and stop -40%, same as its backtest
-        import baixa_bot
+        # Robô BAIXA removed (owner, Nov 18): its coins are adopted as panel trades at startup; until then, hold
         ratio = float(proceeds) / float(cost) if cost else 0.0
         peak = max(ratio, float(position.get("peak_ratio") or 0))
-        action, reason = baixa_bot.exit_signal(ratio, peak)
-        return {"action": action, "reason": reason, "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
+        return {"action": "hold", "reason": "baixa_hold", "change_pct": (ratio - 1) * 100, "peak_ratio": peak}
     if position.get("mode") == "snipe":
         # Sniper 24 h: same rule the backtest uses (snipe_bot.exit_signal)
         import snipe_bot
