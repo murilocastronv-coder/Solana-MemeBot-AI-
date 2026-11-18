@@ -200,3 +200,15 @@ class ResendOnceTest(unittest.TestCase):
         self.assertEqual(ab.run_for(1, lambda c, t, kb=None: sent.append(kb), items), 2)
         self.assertIn("in_reply_to", sent[0][0][0]["url"])
         self.assertEqual(ab.run_for(1, lambda *a, **k: None, items), 0)          # and never again
+
+
+class SearchTermsTest(unittest.TestCase):
+    def test_each_airdrop_gets_its_own_search(self):
+        a = ab.search_terms({"name": "Solana", "title": "Kamino Finance opens season 3 airdrop on Solana - CoinDesk"})
+        b = ab.search_terms({"name": "Solana", "title": "Jupiter Jupuary airdrop eligibility checker live - The Block"})
+        c = ab.search_terms({"name": "Fooswap", "title": "Fooswap Airdrop"})
+        self.assertEqual(a, "Kamino Finance")
+        self.assertEqual(b, "Jupiter Jupuary")
+        self.assertEqual(c, "Fooswap")
+        self.assertNotEqual(ab.x_search({"name": "Solana", "title": "Kamino Finance airdrop"}),
+                            ab.x_search({"name": "Solana", "title": "Drift Protocol airdrop"}))

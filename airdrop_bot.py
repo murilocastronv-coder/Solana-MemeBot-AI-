@@ -224,8 +224,28 @@ def x_link(text, tweet=None):
     return "https://twitter.com/intent/tweet?" + urllib.parse.urlencode(q)
 
 
-def x_search(name):
-    q = (name if good_name(name) else "solana") + " airdrop"
+STOP = {"the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "with", "is", "are", "its", "it", "how", "what", "why",
+        "new", "now", "live", "launches", "launch", "announces", "announced", "opens", "open", "season", "claim", "claims",
+        "eligible", "eligibility", "check", "guide", "free", "token", "tokens", "crypto", "airdrop", "airdrops", "solana", "sol",
+        "o", "a", "os", "as", "de", "do", "da", "dos", "das", "e", "em", "no", "na", "para", "com", "um", "uma", "como",
+        "le", "la", "les", "des", "du", "et", "pour", "sur", "un", "une", "largage", "aérien", "projet", "projeto"}
+
+
+def search_terms(item):
+    """Words that identify THIS airdrop on X (Nov 18: every card searched the same 'solana airdrop')."""
+    if good_name(item.get("name")):
+        return item["name"]
+    title = re.sub(r"\s+[-–|]\s+[^-–|]{2,40}$", "", str(item.get("title") or ""))
+    words = [w for w in re.findall(r"[$@#]?[A-Za-zÀ-ÿ0-9][\w.]*", title) if w.lower().strip("$@#") not in STOP and len(w) > 1]
+    caps = [w for w in words if w[0].isupper() or w[0] in "$@#"]
+    pick = (caps or words)[:3]
+    return " ".join(pick) if pick else "solana"
+
+
+def x_search(item):
+    if isinstance(item, str):
+        item = {"name": item}
+    q = search_terms(item) + " airdrop"
     return "https://x.com/search?" + urllib.parse.urlencode({"q": q, "f": "live"})
 
 
@@ -245,7 +265,7 @@ def card(item, wallet, used=()):
     else:
         lines.append("Esse aviso não trouxe o post do projeto. Toque em 🔎 Achar o post no X, abra o post OFICIAL do airdrop, "
                      "copie o link dele e cole aqui no bot: eu preparo o comentário certo nesse post.")
-        kb = [[{"text": "🔎 Achar o post no X", "url": x_search(item.get("name"))}]]
+        kb = [[{"text": "🔎 Achar o post no X: " + search_terms(item)[:30], "url": x_search(item)}]]
     lines.append("⚠️ Nunca conecte a carteira em site de 'resgate' nem passe frase secreta: airdrop de verdade não pede isso.")
     if item.get("link"):
         kb.append([{"text": "📄 Ver o airdrop", "url": item["link"]}])
@@ -253,7 +273,7 @@ def card(item, wallet, used=()):
 
 
 # ---------------------------------------------------------------- per account
-SEEN_V = 2          # Nov 18: the airdrops sent before 'Comentar no X' are sent again ONCE with the right buttons
+SEEN_V = 3          # Nov 18: sent again ONCE with the right buttons (v3: each card searches its own airdrop on X)
 
 
 def run_for(chat, send, items, now=None, force=False):
