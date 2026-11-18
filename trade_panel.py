@@ -750,7 +750,7 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         return True
     if action in ("trb_bt", "/backtest"):
         import big_bot
-        why = big_bot.start_backtest(send, chat)
+        why = big_bot.start_backtest(send, chat, run_async)
         send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
              " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
         return True

@@ -428,7 +428,9 @@ def backtest_text(rep):
     return "\n".join(L)
 
 
-def start_backtest(send, chat):
+def start_backtest(send, chat, run=None):
+    """run: the caller's thread starter (telegram_bot.run_async keeps 'answer to a button', so the result is never
+    held back as a repeated notice - Nov 18: the second backtest's result was held back)."""
     if not _BT.acquire(blocking=False):
         return "já tem um backtest rodando"
 
@@ -440,5 +442,5 @@ def start_backtest(send, chat):
             send(chat, "⛔ Backtest falhou: " + type(exc).__name__)
         finally:
             _BT.release()
-    threading.Thread(target=go, daemon=True).start()
+    (run or (lambda fn: threading.Thread(target=fn, daemon=True).start()))(go)
     return ""
