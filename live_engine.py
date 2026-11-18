@@ -135,6 +135,7 @@ EXIT_TEXT = {
     "baixa": "📉 Robô BAIXA: 🚀 stop móvel liga em +" + format(float(os.getenv("BAIXA_ARM", "0.10")) * 100, ".0f") + "% e vende " +
              format(float(os.getenv("BAIXA_TRAIL", "0.10")) * 100, ".0f") + "% abaixo do topo" +
              (" | 🛑 stop -" + format(float(os.getenv("BAIXA_SL", "0.35")) * 100, ".0f") + "%" if float(os.getenv("BAIXA_SL", "0.35")) else " | sem stop"),
+    "trade": "🖐️ Trade manual: alvo, stop loss e stop móvel nos botões do cartão da moeda (cole o contrato de novo para ver)",
     "normal": "🛑 Stop -8% | 🚀 a partir de +15% deixa o lucro correr (vende 10% abaixo do topo)",
     "tradeB": "🎯 Alvo +15% | 🛑 Stop −8%",
     "copy": "👥 Vende quando a carteira copiada vender (sem alvo/stop fixo)",
@@ -177,7 +178,7 @@ def _execute_buy(p, mint, symbol, send, chat, wallet, fraction, mode, usd=None, 
                 REPORT_EVERY_SECONDS)
         return None
     _tried[mint] = time.monotonic()
-    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) ", "dev": "🧑‍💻 DEV ", "snipe": "🎯 SNIPER 24h ", "grad": "🎓 GRADUADOS ", "baixa": "📉 ROBÔ BAIXA "}.get(mode, "")
+    tag = {"sniper": "🎯 SNIPER ", "pumpfun": "🟣 PUMP.FUN ", "tradeB": "📈 ESTRATÉGIA B ", "copy": "👥 COPY ", "clone": "🤖 ESTRATÉGIA ", "consensus": "🤝 CONSENSO ", "signal": "📡 SINAL ", "dip": "📉 DIP BOT ", "rocket": "🚀 SNIPER ", "manual": "📡 SINAL (sua compra) ", "dev": "🧑‍💻 DEV ", "snipe": "🎯 SNIPER 24h ", "grad": "🎓 GRADUADOS ", "baixa": "📉 ROBÔ BAIXA ", "trade": "🖐️ TRADE MANUAL "}.get(mode, "")
     liq = liquidity_line(mint, p)
     send(chat, "🟡 " + tag + "COMPRANDO (dinheiro real) US$ " + format(order_usd, ".2f") + " de " + symbol +
          " (" + pct + " da conta de US$ " + format(value, ".2f") + ")\n" + (liq + "\n" if liq else "") + mint)
@@ -360,7 +361,11 @@ def sell_message(symbol, signal, settled):
            "signal_be": "↩️ Sinal: voltou à entrada depois do TP1",
            "signal_tp2_back": "↩️ Sinal: voltou ao TP1 depois do TP2",
            "signal_expired": "⏱️ Sinal: tempo esgotado",
-           "signal_safety_stop": "🛑 Sinal: stop de segurança"}.get(signal["reason"], "🛑 Stop loss")
+           "signal_safety_stop": "🛑 Sinal: stop de segurança",
+           "trade_tp": "🎯 Trade manual: alvo atingido",
+           "trade_sl": "🛑 Trade manual: stop loss",
+           "trade_trail": "🚀 Trade manual: stop móvel (topo +" + format(signal.get("peak_pct", 0), ".1f") + "%)",
+           "trade_manual": "🖐️ Você mandou vender"}.get(signal["reason"], "🛑 Stop loss")
     summary = state.pnl_summary()
     won, closed = summary["trades_won"], summary["trades_closed"]
     return (("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — VENDEU " + symbol + "\n"
@@ -495,7 +500,8 @@ def exit_cycle(send, chat):
             state.set_position_amount(mint, held)  # transfer-fee tokens: sell what we really hold
             amount = held
         label = {"take_profit": "🚀 STOP MÓVEL ACIONADO", "time_stop": "⏱️ TEMPO ESGOTADO",
-                 "liquidity_drained": "💧 SEM LIQUIDEZ", "copy_breakeven": "🛡️ STOP NA ENTRADA ACIONADO"}.get(signal["reason"], "🛑 STOP LOSS ACIONADO")
+                 "liquidity_drained": "💧 SEM LIQUIDEZ", "copy_breakeven": "🛡️ STOP NA ENTRADA ACIONADO",
+                 "trade_tp": "🎯 ALVO ATINGIDO", "trade_trail": "🚀 STOP MÓVEL ACIONADO"}.get(signal["reason"], "🛑 STOP LOSS ACIONADO")
         send(chat, label + " (" + format(signal["change_pct"], "+.2f") + "%) — VENDENDO " + symbol + "\n" + mint)
         try:
             state.mark_exit_reason(mint, signal["reason"])

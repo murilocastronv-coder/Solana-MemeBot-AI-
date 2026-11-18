@@ -928,7 +928,7 @@ def recover_real_orphans(force=False):
         known = set(d["positions"])
         wallets = list(d["wallets"])
     for mint, lp in live.items():
-        if mint in known or lp.get("mode") in ("clone", "signal", "dip", "rocket", "baixa") or lp.get("copy_recovered"):
+        if mint in known or lp.get("mode") in ("clone", "signal", "dip", "rocket", "baixa", "trade") or lp.get("copy_recovered"):
             # the robô BAIXA's positions are never taken over by the copy trade (owner, Nov 17: BLOB lost its trailing stop)
             continue
         holder = lp.get("copy_wallet")

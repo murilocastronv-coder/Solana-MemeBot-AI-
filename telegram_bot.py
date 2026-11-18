@@ -142,6 +142,7 @@ def keyboard():
   [{"text":"🧪 Backtest do robô (stop móvel 10%)","callback_data":"bx_bt"}],
   [{"text":"🧪 Backtest: TODAS as moedas, stop móvel 10%","callback_data":"bx_bt_all"}],
   [{"text":"📉 Backtest: moedas sólidas","callback_data":"dip_bt"},{"text":"📉 Backtest: memecoins","callback_data":"dip_bt_meme"}],
+  [{"text":"🪙 Trade manual (cole o contrato)","callback_data":"trade_help"},{"text":"💼 Minhas trades","callback_data":"tpl"}],
   [{"text":"🔧 Destravar robô","callback_data":"unstick"}],
   [{"text":"📥 Depositar SOL","callback_data":"wallet_deposit"},{"text":"💰 Ver saldo","callback_data":"wallet_balance"}],
   [{"text":"💸 Saque","callback_data":"wallet_withdraw"}]]
@@ -421,6 +422,18 @@ def handle(update):
    else:pre=""
    send(chat,pre+status_text(),keyboard())
   except Exception as exc:send(chat,"⛔ Copy trade: "+str(exc)[:200],keyboard())
+  return
+ import trade_panel
+ text=(msg or {}).get("text","")
+ if (cb and (action=="tpl" or action.split(":")[0] in ("tb","tbx","ts","tt","tl","tr","tc"))) or (not cb and chat in trade_panel.INPUT):
+  if trade_panel.handle(action,None if cb else text,send,chat,keyboard(),run_async):return
+ if action in ("trade_help","/trade"):
+  send(chat,"🪙 TRADE MANUAL: cole aqui o contrato da moeda (ou o link do DexScreener, Pump.fun ou Birdeye). Aparece o cartão com preço, "
+   "liquidez, anti-golpe e os botões para comprar (US$ 10 / 25 / 50 / 100 ou o valor que quiser), vender 25 / 50 / 100% e "
+   "ligar alvo, stop loss e stop móvel. Dinheiro real, da carteira do robô.",keyboard());return
+ if not cb and trade_panel.candidates(text) and not text.startswith("/"):
+  send(chat,"🔎 Procurando a moeda…")
+  run_async(lambda:trade_panel.show(send,chat,text,keyboard()) or send(chat,"⛔ Não achei essa moeda no DexScreener (só moedas da Solana com pool).",keyboard()))
   return
  if action in ("/start","/menu","help") or not (cb or action.startswith("/") or re.fullmatch(r"[a-z0-9]+_[a-z0-9_]+",action)):menu(chat)
  else:send(chat,"Esse controle foi removido: o bot agora é só copy trade. Use o menu abaixo.",keyboard())
