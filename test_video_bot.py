@@ -80,3 +80,10 @@ class VideoBotTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AutomaticTest(unittest.TestCase):
+    def test_on_by_default(self):
+        vb._MEM.clear()
+        with mock.patch("pg_store.enabled", return_value=False):
+            self.assertTrue(vb._load()["on"])

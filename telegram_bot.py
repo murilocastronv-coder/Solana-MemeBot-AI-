@@ -687,7 +687,7 @@ def trade_loop():
    except Exception as exc:logging.warning("big robot: %s: %s",type(exc).__name__,str(exc)[:150])
   time.sleep(60)
 def video_loop():
- """Owner (Nov 18): trending-topic videos to YouTube / Instagram at the scheduled hours (only after ▶️ Ligar)."""
+ """Owner (Nov 18): trending-topic videos to YouTube / Instagram at the scheduled hours, automatic (⏸️ Desligar stops it)."""
  import video_bot
  time.sleep(45)
  while True:
@@ -881,7 +881,7 @@ def loop():
  threading.Thread(target=wallet_discovery_loop,daemon=True).start()
  threading.Thread(target=trade_loop,daemon=True).start()
  threading.Thread(target=airdrop_loop,daemon=True).start()
- threading.Thread(target=video_loop,daemon=True).start()       # owner (Nov 18): automatic videos (off until ▶️ Ligar)     # owner (Nov 18): only the airdrop hunter       # owner (Nov 18): trading bot (limit / DCA / user exits)
+ threading.Thread(target=video_loop,daemon=True).start()       # owner (Nov 18): automatic videos, on by default     # owner (Nov 18): only the airdrop hunter       # owner (Nov 18): trading bot (limit / DCA / user exits)
  # removed BTC robots: only close a position they may still hold, then stop
  threading.Thread(target=btc_live_loop,daemon=True).start()
  threading.Thread(target=btc_leftover_loop,daemon=True).start()
