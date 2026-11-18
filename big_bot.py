@@ -277,7 +277,7 @@ def cycle(send, owner_chat, get=None):
 
 
 # ---------------------------------------------------------------- DEMO account (owner, Nov 18): same rule, fake money, real prices
-DEMO_START = float(os.getenv("BIG_DEMO_USD", "100"))
+DEMO_START = float(os.getenv("BIG_DEMO_USD", "200"))          # owner (Nov 18): US$ 200 demo
 DEMO_SIZE = DEMO_START / 2                     # 2 coins at most, like the real robot
 DEMO_COST = 0.003                              # slippage + network per side, like the backtest
 DEMO_DAYS = 30
@@ -295,6 +295,9 @@ def demo(chat):
     d.setdefault("hist", [])
     d.setdefault("bought", {})
     d.setdefault("started", 0)
+    d.setdefault("start_usd", DEMO_START if not d["hist"] and not d["pos"] else float(d.get("cash") or DEMO_START))
+    if not d["hist"] and not d["pos"] and float(d["start_usd"]) != DEMO_START:
+        d.update(cash=DEMO_START, start_usd=DEMO_START)       # nothing traded yet: start with the new demo amount
     return d
 
 
@@ -306,7 +309,7 @@ def set_demo(chat, d):
 
 def demo_reset(chat, now=None):
     d = demo(chat)
-    d.update(cash=DEMO_START, pos={}, hist=[], bought={}, started=now or time.time())
+    d.update(cash=DEMO_START, start_usd=DEMO_START, pos={}, hist=[], bought={}, started=now or time.time())
     set_demo(chat, d)
     return d
 
@@ -331,12 +334,23 @@ def demo_exits(chat, prices, send=None, now=None):
             back = p["qty"] * px * (1 - DEMO_COST)
             d["cash"] += back
             pnl = back - p["cost"]
-            d["hist"].append({"sym": sym, "pnl": round(pnl, 4), "t": now, "why": why})
+            d["hist"].append({"sym": sym, "pnl": round(pnl, 4), "t": now, "why": why, "entry": p["entry"], "exit": px,
+                              "cost": p["cost"], "back": round(back, 4), "bought_at": p.get("t")})
             del d["pos"][sym]
             sold.append(sym)
             if send:
-                send(chat, ("💰" if pnl >= 0 else "🔻") + " DEMO VENDEU " + sym + " (" + why + ", topo +" + format((p["peak"] - 1) * 100, ".1f") +
-                     "%): " + format(pnl, "+.2f") + " USD · saldo demo US$ " + format(demo_value(d, prices), ".2f"))
+                hours = (now - float(p.get("t") or now)) / 3600
+                h = d["hist"]
+                send(chat, ("💰 LUCRO" if pnl >= 0 else "🔻 PREJUÍZO") + " — 🧪 DEMO VENDEU " + sym + "\n"
+                     "🪙 Moeda: " + sym + " · " + p["mint"] + "\n"
+                     "📉 Motivo: " + why + " (subiu até +" + format((p["peak"] - 1) * 100, ".1f") + "% e caiu " + format(TRAIL * 100, "g") +
+                     "% do topo)\n"
+                     "💲 Comprou a US$ " + format(p["entry"], ".6g") + " → vendeu a US$ " + format(px, ".6g") + " (" +
+                     format((px / p["entry"] - 1) * 100, "+.1f") + "%) · ficou " + (format(hours, ".1f") + " h" if hours < 48 else format(hours / 24, ".1f") + " dias") + "\n"
+                     "💵 US$ " + format(p["cost"], ".2f") + " → US$ " + format(back, ".2f") + " · P/L " + format(pnl, "+.2f") + " USD\n"
+                     "📊 Demo: US$ " + format(demo_value(d, prices), ".2f") + " de US$ " + format(float(d["start_usd"]), "g") + " · " +
+                     str(sum(1 for x in h if x["pnl"] > 0)) + "/" + str(len(h)) + " vendas no lucro\n"
+                     "📈 Gráfico: https://dexscreener.com/solana/" + p["mint"])
     set_demo(chat, d)
     return sold
 
@@ -378,8 +392,14 @@ def demo_run(chat, sigs, send=None, now=None):
         d["bought"][m] = now
         done.append(sym)
         if send:
-            send(chat, "🧪 DEMO COMPROU " + sym + " (US$ " + format(size, ".2f") + " de mentira) a US$ " + format(px, ".6g") + ", " +
-                 format((1 - px / top) * 100, ".1f") + "% abaixo do topo de 7 dias")
+            send(chat, "🧪 DEMO COMPROU " + sym + "\n"
+                 "🪙 Moeda: " + sym + " · " + m + "\n"
+                 "💲 Preço real agora: US$ " + format(px, ".6g") + " (" + format((1 - px / top) * 100, ".1f") + "% abaixo do topo de 7 dias, US$ " +
+                 format(top, ".6g") + ")\n"
+                 "💵 Valor: US$ " + format(size, ".2f") + " de mentira · sobra US$ " + format(d["cash"], ".2f") + "\n"
+                 "🚀 Vende pelo stop móvel: liga em +" + format(ARM * 100, "g") + "% (US$ " + format(px * (1 + ARM), ".6g") + ") e vende " +
+                 format(TRAIL * 100, "g") + "% abaixo do topo · " + sl_text() + "\n"
+                 "📈 Gráfico: https://dexscreener.com/solana/" + m)
     d["bought"] = {k: v for k, v in d["bought"].items() if now - v < COOLDOWN_S}
     set_demo(chat, d)
     return done
@@ -394,11 +414,13 @@ def demo_text(chat, prices=None, now=None):
     h = d["hist"]
     wins = sum(1 for x in h if x["pnl"] > 0)
     L = ["🧪 CONTA DEMO — " + ("🟢 LIGADA" if d["on"] else "🔴 DESLIGADA") + " (dinheiro de mentira, preços reais)",
-         "Começou com US$ " + format(DEMO_START, "g") + " · agora US$ " + format(val, ".2f") + " (" + format(val - DEMO_START, "+.2f") + ", " +
-         format((val / DEMO_START - 1) * 100, "+.1f") + "%)",
+         "Começou com US$ " + format(float(d["start_usd"]), "g") + " · agora US$ " + format(val, ".2f") + " (" +
+         format(val - float(d["start_usd"]), "+.2f") + ", " + format((val / float(d["start_usd"]) - 1) * 100, "+.1f") + "%)",
          "📅 Dia " + format(min(days, 999), ".0f") + " de " + str(DEMO_DAYS) + (" ✅ teste de 1 mês completo" if days >= DEMO_DAYS else ""),
          "Vendas: " + str(len(h)) + " (" + str(wins) + " no lucro" + (", " + format(wins / len(h) * 100, ".0f") + "%" if h else "") + ") · "
          "lucro das vendas " + format(sum(x["pnl"] for x in h), "+.2f") + " USD"]
+    for x in h[-5:]:
+        L.append("• vendeu " + x["sym"] + ": " + format(x["pnl"], "+.2f") + " USD (" + x.get("why", "") + ")")
     for sym, p in d["pos"].items():
         px = prices.get(p["mint"])
         L.append("• aberta " + sym + ": US$ " + format(p["cost"], ".2f") + (" → " + format(p["qty"] * px, ".2f") + " (" +

@@ -154,7 +154,7 @@ class DemoTest(unittest.TestCase):
         sigs = [("JUP", "MJ", 0.90, 1.0, True), ("RAY", "MR", 1.80, 2.0, True), ("PYTH", "MP", 0.5, 0.6, True)]
         msgs = []
         send = lambda c, t, *a: msgs.append(t)
-        self.assertEqual(bb.demo_run(1, sigs, send, now=2000), ["JUP", "RAY"])           # max 2, US$ 50 each
+        self.assertEqual(bb.demo_run(1, sigs, send, now=2000), ["JUP", "RAY"])           # max 2, US$ 100 each
         self.assertAlmostEqual(bb.demo(1)["cash"], 0.0)
         bb.demo_exits(1, {"MJ": 0.40, "MR": 1.80}, send, now=3000)                         # -55%: no stop loss, keeps it
         self.assertIn("JUP", bb.demo(1)["pos"])
@@ -163,7 +163,9 @@ class DemoTest(unittest.TestCase):
         d = bb.demo(1)
         self.assertNotIn("JUP", d["pos"])
         self.assertEqual(len(d["hist"]), 1)
-        self.assertTrue(any("DEMO VENDEU JUP" in m for m in msgs))
+        self.assertTrue(any("DEMO VENDEU JUP" in m and "dexscreener.com/solana/MJ" in m for m in msgs))
+        self.assertTrue(any("DEMO COMPROU JUP" in m and "Moeda: JUP" in m for m in msgs))
+        self.assertEqual(bb.DEMO_START, 200)
         text = bb.demo_text(1, {"MR": 1.80}, now=1000 + 31 * 86400)
         self.assertIn("teste de 1 mês completo", text)
         self.assertIn("1 no lucro", text)
