@@ -255,6 +255,7 @@ def handle(update):
   threading.Thread(target=answer_callback,args=(cb["id"],),daemon=True).start()
  else:
   chat=(msg or {}).get("chat",{}).get("id");action=(msg or {}).get("text","").split(" ")[0]
+  if "btc full margin" in (msg or {}).get("text","").lower() or action.lower() in ("/btc","btc"):action="bfm"   # typed / forwarded button text
  if not chat:return
  chat_type=(cb.get("message",{}).get("chat",{}).get("type") if cb else (msg or {}).get("chat",{}).get("type"))
  if chat_type!="private":return
