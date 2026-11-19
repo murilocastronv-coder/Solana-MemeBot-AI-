@@ -521,7 +521,7 @@ def home_keyboard(chat):
         if not is_owner(chat):
             return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
         import forex_bot
-        return forex_bot.keyboard()
+        return forex_bot.keyboard() + [[{"text": "₿ BTC Full Margin (Jupiter)", "callback_data": "bfm"}]]
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
         kb = [[{"text": "📊 Resultados da carteira de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat)
@@ -849,6 +849,11 @@ def handle(action, text, send, chat, tail=None, run_async=None):
             return False
         import forex_bot
         return forex_bot.handle(action, send, chat, run_async)
+    import btc_fullmargin
+    if action in btc_fullmargin.ACTIONS:
+        if not is_owner(chat):
+            return False
+        return btc_fullmargin.handle(action, send, chat, run_async)
     if AIRDROP_ONLY and HOME == "forex" and action not in ("thome", "/home"):
         send(chat, "💱 O bot agora é só o robô de forex. Essa função foi removida.", home_keyboard(chat))
         return True
