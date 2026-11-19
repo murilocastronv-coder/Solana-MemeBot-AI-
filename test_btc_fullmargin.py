@@ -171,6 +171,85 @@ class Cycle(Base):
         self.assertIn("solscan.io/tx/SIG", self.msgs[-1])
 
 
+class Results(Base):
+    def close_one(self, exit_price, mode="demo"):
+        d = bfm._load(mode)
+        d["pos"] = {"entry": 100.0, "size_usd": 500.0, "collateral_usd": 100.0, "risk": 1.0, "stop": 101.0}
+        bfm._close(d, exit_price, "🎯 ALVO")
+        bfm._save(d)
+        return d
+
+    def test_fees_are_taken_out(self):
+        gross, fees, net = bfm.breakdown({"entry": 100.0, "size_usd": 500.0, "opened": NOW - 3600}, 99.0, now=NOW)
+        self.assertAlmostEqual(gross, 5.0)
+        self.assertAlmostEqual(fees, 500 * (0.0012 + 0.0001))
+        self.assertAlmostEqual(net, gross - fees)
+
+    def test_close_notification_shows_gross_fees_net_and_balance(self):
+        self.turn_on()
+        d = self.close_one(99.0)
+        t = bfm.close_text(d, "🎯 ALVO", 99.0, 100.0)
+        self.assertIn("✅ LUCRO +4.40 USD (depois das taxas)", t)
+        self.assertIn("Bruto +5.00 · taxas −0.60 · líquido +4.40", t)
+        self.assertIn("Saldo da conta: US$ 104.40", t)
+        self.assertIn("Total desde o início: +4.40", t)
+
+    def test_loss_notification(self):
+        self.turn_on()
+        d = self.close_one(101.0)
+        self.assertIn("❌ PREJUÍZO -5.60", bfm.close_text(d, "🛑 STOP", 101.0, 100.0))
+
+    def test_lifetime_totals_survive_a_new_day(self):
+        self.turn_on()
+        self.close_one(99.0)
+        self.close_one(101.0)
+        d = bfm._load("demo")
+        bfm.new_day(d, NOW + 86400)
+        tt = d["total"]
+        self.assertEqual((tt["trades"], tt["wins"], tt["losses"]), (2, 1, 1))
+        self.assertAlmostEqual(tt["net"], 4.4 - 5.6)
+        self.assertEqual(d["capital"], 100.0)
+
+    def test_results_say_if_it_is_making_money(self):
+        self.turn_on()
+        self.close_one(99.0)
+        t = bfm.results_text()
+        self.assertIn("LÍQUIDO +4.40", t)
+        self.assertIn("LUCRANDO", t)
+        self.assertIn("Ainda sem operações", t)          # the real account
+        self.assertIn("Total desde o início", bfm.account_text("demo"))
+
+    def test_results_chart(self):
+        self.turn_on()
+        self.close_one(99.0)
+        png = bfm.results_png()
+        self.assertTrue(png.startswith(b"\x89PNG"))
+
+    def test_real_result_is_measured_on_chain(self):
+        self.turn_on("real")
+        bal = [10.0]
+
+        class JP:
+            @staticmethod
+            def usdc_balance(owner):
+                return bal[0]
+
+            @staticmethod
+            def close_position(side, price):
+                bal[0] += 103.0                         # collateral 100 came back with +3 net
+                return {"signature": "S"}
+
+            @staticmethod
+            def usdc_to_sol():
+                return None
+
+        with patch.dict("sys.modules", {"jupiter_perps": JP}), \
+                patch("bot_wallet_service.get_address", return_value="11111111111111111111111111111111"):
+            d = self.close_one(99.0, mode="real")
+        self.assertAlmostEqual(d["last_close"]["net"], 3.0)
+        self.assertAlmostEqual(d["capital"], 103.0)
+
+
 class Telegram(Base):
     def test_keyboard_callbacks_are_routed(self):
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
@@ -178,6 +257,7 @@ class Telegram(Base):
         self.assertIn("bfm_on_real", cbs)
         self.assertIn("wallet_deposit", cbs)
         self.assertIn("wallet_withdraw", cbs)
+        self.assertIn("bfm_res", cbs)
         for cb in cbs:
             self.assertIn(cb, bfm.ACTIONS | {"wallet_deposit", "wallet_withdraw", "wallet_balance"})
 

@@ -32,6 +32,8 @@ RR = 1.5
 BE_R, TRAIL_START_R, TRAIL_DIST_R = 0.6, 1.0, 0.5
 PAUSE_LOSSES, PAUSE_S = 2, 15 * 60
 FEE_RATE = 0.0006               # per side, on the position size
+BORROW_RATE_H = 0.0001          # Jupiter borrow fee estimate: ~0.01% of the size per hour held
+PHOTO = None                    # telegram_bot sets this to its send_photo (charts in the results)
 CHECK_EVERY_S = 20
 TF = 300
 MODES = ("demo", "real")
@@ -191,10 +193,17 @@ def stop_distance(closed, a, price, lev):
     return min(dist, price * 0.6 / lev)
 
 
-def pnl_usd(pos, price):
-    """Short P/L in USD after the open and close fees."""
+def breakdown(pos, price, now=None):
+    """Short result in USD: (gross, fees, net). Fees = open + close (0.06% each) + borrow fee per hour held."""
     gross = pos["size_usd"] * (pos["entry"] - price) / pos["entry"]
-    return gross - pos["size_usd"] * FEE_RATE * 2
+    hours = max(0.0, ((now or time.time()) - pos["opened"]) / 3600) if pos.get("opened") else 0.0
+    fees = pos["size_usd"] * (FEE_RATE * 2 + BORROW_RATE_H * hours)
+    return gross, fees, gross - fees
+
+
+def pnl_usd(pos, price):
+    """Short P/L in USD after all the fees (what is left in the account)."""
+    return breakdown(pos, price)[2]
 
 
 def manage(pos, price):
@@ -247,19 +256,31 @@ def _open(d, price, dist, why):
 
 
 def _close(d, price, why):
+    """Closes the short. Result after the fees goes into the account; lifetime totals and the curve are updated."""
     pos = d["pos"]
     sig = None
+    gross, fees, net = breakdown(pos, price)
     if d["mode"] == "real":
         import jupiter_perps as jp
+        from solders.pubkey import Pubkey
+        from bot_wallet_service import get_address
+        owner = Pubkey.from_string(get_address())
+        before = jp.usdc_balance(owner)
         out = jp.close_position("short", price)
         sig = out.get("signature")
+        try:                                  # the real result: USDC that came back minus the collateral put in
+            received = jp.usdc_balance(owner) - before
+            if received > 0:
+                net = received - pos["collateral_usd"]
+                fees = gross - net
+        except Exception as exc:
+            logging.warning("btc full margin: real result read failed: %s", type(exc).__name__)
         try:
             jp.usdc_to_sol()
         except Exception as exc:
             logging.warning("btc full margin: USDC -> SOL failed: %s", type(exc).__name__)
-    pnl = pnl_usd(pos, price)
-    d["capital"] = max(0.0, d["capital"] + pnl)
-    if pnl >= 0:
+    d["capital"] = max(0.0, d["capital"] + net)
+    if net >= 0:
         d["wins"] += 1
         d["consec"] = 0
     else:
@@ -268,10 +289,35 @@ def _close(d, price, why):
         if d["consec"] >= PAUSE_LOSSES:
             d["consec"] = 0
             d["pause_until"] = int(time.time()) + PAUSE_S
-    d["hist"] = (d.get("hist") or [])[-49:] + [{"entry": pos["entry"], "exit": price, "pnl": round(pnl, 2),
+    tot = d.setdefault("total", {"trades": 0, "wins": 0, "losses": 0, "gross": 0.0, "fees": 0.0, "net": 0.0,
+                                 "best": 0.0, "worst": 0.0, "since": int(time.time())})
+    tot["trades"] += 1
+    tot["wins" if net >= 0 else "losses"] += 1
+    tot["gross"] = round(tot["gross"] + gross, 4)
+    tot["fees"] = round(tot["fees"] + fees, 4)
+    tot["net"] = round(tot["net"] + net, 4)
+    tot["best"] = max(tot["best"], net)
+    tot["worst"] = min(tot["worst"], net)
+    d["curve"] = (d.get("curve") or [])[-499:] + [[int(time.time()), round(tot["net"], 2)]]
+    d["last_close"] = {"gross": round(gross, 2), "fees": round(fees, 2), "net": round(net, 2)}
+    d["hist"] = (d.get("hist") or [])[-49:] + [{"entry": pos["entry"], "exit": price, "pnl": round(net, 2),
+                                                 "gross": round(gross, 2), "fees": round(fees, 2),
                                                  "why": why, "t": int(time.time())}]
     d["pos"] = None
-    return pnl, sig
+    return net, sig
+
+
+def close_text(d, why, price, entry):
+    """Notification of a closed short: gross, fees, net, account balance and the total so far."""
+    lc, tot = d["last_close"], d["total"]
+    head = ("✅ LUCRO " if lc["net"] >= 0 else "❌ PREJUÍZO ") + format(lc["net"], "+.2f") + " USD (depois das taxas)"
+    return ("₿ BTC FULL MARGIN " + NAME[d["mode"]] + " — " + why + "\n" + head +
+            "\nShort: entrada $" + format(entry, ",.0f") + " → saída $" + format(price, ",.0f") +
+            "\n💵 Bruto " + format(lc["gross"], "+.2f") + " · taxas −" + format(lc["fees"], ".2f") +
+            " · líquido " + format(lc["net"], "+.2f") +
+            "\n💼 Saldo da conta: US$ " + format(d["capital"], ".2f") + " (hoje " + format(d["capital"] - CAPITAL_USD, "+.2f") + ")" +
+            "\n📈 Total desde o início: " + format(tot["net"], "+.2f") + " USD em " + str(tot["trades"]) + " operações (" +
+            format(tot["wins"] / tot["trades"] * 100, ".0f") + "% no lucro)")
 
 
 def _tx(sig):
@@ -305,6 +351,7 @@ def cycle(mode, send, chat, now=None, klines=None):
         if d["on"] and not d["done_why"] and (hit or eq <= CAPITAL_USD * (1 - MAX_LOSS)):
             if pos:
                 _close(d, price, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA")
+                send(chat, close_text(d, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA", price, pos["entry"]))
             d["done_why"] = "META DO DIA BATIDA" if hit else "LIMITE DE PERDA DO DIA"
             _save(d)
             send(chat, ("🎯 BTC FULL MARGIN " + tag + ": META DO DIA BATIDA! " if hit else
@@ -318,9 +365,7 @@ def cycle(mode, send, chat, now=None, klines=None):
             if why:
                 pnl, sig = _close(d, price, why)
                 _save(d)
-                send(chat, "₿ BTC FULL MARGIN " + tag + " — " + why + "\nShort fechado em $" + format(price, ",.0f") +
-                     " (entrada $" + format(pos["entry"], ",.0f") + ") → " + format(pnl, "+.2f") + " USD · conta US$ " +
-                     format(d["capital"], ".2f") + _tx(sig) +
+                send(chat, close_text(d, why, price, pos["entry"]) + _tx(sig) +
                      ("\n⏸️ 2 perdas seguidas: pausa de 15 min." if d["pause_until"] > now else ""))
                 return "fechou"
             _save(d)
@@ -376,13 +421,18 @@ def account_text(mode):
     eq = equity(d, price)
     state = ("🟢 ligada" if d["on"] else "🔴 desligada") + (" · ⛔ " + d["done_why"] + " (volta amanhã)" if d["on"] and d["done_why"] else "")
     L = [NAME[mode] + " — " + state + " · " + str(d["leverage"]) + "x",
-         "💰 Hoje: US$ " + format(CAPITAL_USD, ".0f") + " → US$ " + format(eq, ".2f") + " (" + format(eq - CAPITAL_USD, "+.2f") +
-         ") · 🎯 meta US$ " + format(TARGET_USD, ".0f")]
+         "💼 Saldo da conta: US$ " + format(eq, ".2f") + " (hoje " + format(eq - CAPITAL_USD, "+.2f") + " · começou com US$ " +
+         format(CAPITAL_USD, ".0f") + " · 🎯 meta US$ " + format(TARGET_USD, ".0f") + ")"]
     prog = max(0.0, min(1.0, (eq - CAPITAL_USD) / (TARGET_USD - CAPITAL_USD)))
     L.append("▕" + "█" * int(prog * 10) + "░" * (10 - int(prog * 10)) + "▏ " + format(prog * 100, ".0f") + "% da meta")
     tot = d["wins"] + d["losses"]
     L.append("📊 Operações " + str(d["trades"]) + " · ganhos " + str(d["wins"]) + " · perdas " + str(d["losses"]) +
              (" · acerto " + format(d["wins"] / tot * 100, ".0f") + "%" if tot else ""))
+    tt = d.get("total") or {}
+    if tt.get("trades"):
+        L.append("📈 Total desde o início: " + format(tt["net"], "+.2f") + " USD líquido (taxas pagas " + format(tt["fees"], ".2f") +
+                 ") · " + str(tt["trades"]) + " operações · " + format(tt["wins"] / tt["trades"] * 100, ".0f") + "% no lucro · " +
+                 ("✅ LUCRANDO" if tt["net"] > 0 else "❌ NO PREJUÍZO"))
     pos = d.get("pos")
     if pos:
         L.append("📉 Short aberto: entrada $" + format(pos["entry"], ",.0f") + " · stop $" + format(pos["stop"], ",.0f") +
@@ -394,6 +444,45 @@ def account_text(mode):
     if days:
         L.append("📅 Últimos dias: " + " · ".join(x["day"][5:] + " " + format(x["result"], "+.0f") for x in days))
     return "\n".join(L)
+
+
+def results_text():
+    """Full report of both accounts: is the robot making money after the fees?"""
+    L = ["📊 RESULTADOS DO ROBÔ BTC FULL MARGIN (líquido = depois das taxas da Jupiter)"]
+    for m in MODES:
+        d = _load(m)
+        tt = d.get("total") or {}
+        L += ["", NAME[m] + " — saldo de hoje US$ " + format(d["capital"], ".2f")]
+        if not tt.get("trades"):
+            L.append("Ainda sem operações fechadas.")
+            continue
+        days = d.get("days") or []
+        L += ["Desde " + time.strftime("%d/%m", time.gmtime(tt["since"])) + ": " + str(tt["trades"]) + " operações · ganhos " +
+              str(tt["wins"]) + " · perdas " + str(tt["losses"]) + " · acerto " + format(tt["wins"] / tt["trades"] * 100, ".0f") + "%",
+              "💵 Bruto " + format(tt["gross"], "+.2f") + " · taxas −" + format(tt["fees"], ".2f") + " · LÍQUIDO " +
+              format(tt["net"], "+.2f") + " USD",
+              "🏆 Melhor " + format(tt["best"], "+.2f") + " · pior " + format(tt["worst"], "+.2f"),
+              "🎯 Dias com meta batida: " + str(sum(1 for x in days if "META" in (x.get("why") or ""))) + " de " + str(len(days)) +
+              " dias fechados",
+              ("✅ O robô está LUCRANDO nessa conta." if tt["net"] > 0 else "❌ O robô está NO PREJUÍZO nessa conta.")]
+        for x in days[-7:]:
+            L.append("  " + x["day"][5:] + ": " + format(x["result"], "+.2f") + (" 🎯" if "META" in (x.get("why") or "") else ""))
+        last = (d.get("hist") or [])[-5:]
+        if last:
+            L.append("Últimas: " + " · ".join(format(h["pnl"], "+.2f") for h in last))
+    return "\n".join(L)
+
+
+def results_png():
+    import demo_report
+    series = []
+    for m, color in (("demo", (90, 200, 255)), ("real", (255, 196, 0))):
+        d = _load(m)
+        curve = [[t, CAPITAL_USD + v] for t, v in (d.get("curve") or [])]
+        if curve:
+            curve.insert(0, [min(curve[0][0] - 60, (d.get("total") or {}).get("since") or curve[0][0] - 60), CAPITAL_USD])
+            series.append((NAME[m].split(" ", 1)[1].title() + " (resultado acumulado)", CAPITAL_USD, curve, color))
+    return demo_report.chart_png(series) if series else None
 
 
 def status_text():
@@ -418,11 +507,11 @@ def keyboard():
     rows.append([{"text": ("✅ " if lev == x else "") + str(x) + "x", "callback_data": "bfm_lev" + str(x)} for x in LEVERAGES])
     rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
-    rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
+    rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}, {"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
-ACTIONS = ({"bfm", "/btc", "bfm_real_ok"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
+ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
            {p + m for p in ("bfm_on_", "bfm_off_", "bfm_close_") for m in MODES})
 
 
@@ -449,6 +538,16 @@ def _start(mode, send, chat, run_async):
 def handle(action, send, chat, run_async):
     if action in ("bfm", "/btc"):
         send(chat, status_text(), keyboard())
+    elif action in ("bfm_res", "/resultados_btc"):
+        def go():
+            try:
+                png = results_png()
+                if png and PHOTO:
+                    PHOTO(chat, png, "📈 Resultado acumulado das contas (linha fraca = começo, acima dela = lucro)")
+            except Exception as exc:
+                logging.warning("btc full margin chart failed: %s", type(exc).__name__)
+            send(chat, results_text(), keyboard())
+        run_async(go)
     elif action.startswith("bfm_lev"):
         lev = int(action[7:])
         with _LOCK:
@@ -490,8 +589,7 @@ def handle(action, send, chat, run_async):
                     price = klines_5m(2)[-1]["c"]
                     pnl, sig = _close(d, price, "fechado por você")
                     _save(d)
-                    send(chat, "❌ " + NAME[mode] + ": short fechado em $" + format(price, ",.0f") + " → " +
-                         format(pnl, "+.2f") + " USD · conta US$ " + format(d["capital"], ".2f") + _tx(sig), keyboard())
+                    send(chat, close_text(d, "fechado por você", price, d["hist"][-1]["entry"]) + _tx(sig), keyboard())
                 except Exception as exc:
                     send(chat, "⛔ Não consegui fechar: " + str(exc)[:200], keyboard())
         run_async(go)
