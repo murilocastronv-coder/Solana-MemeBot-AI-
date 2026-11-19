@@ -3,7 +3,7 @@
 //|                                                                  |
 //| Voce liga quando quiser operar. Ele guarda o capital da hora em  |
 //| que foi ligado e opera scalp no par do grafico ate:              |
-//|  - bater a META (ex.: 50 -> 150)  -> fecha tudo e para;          |
+//|  - bater a META DO DIA (saldo 300) -> fecha e para ate 00:00;    |
 //|  - ou bater o LIMITE DE PERDA     -> fecha tudo e para.          |
 //| Para operar de novo (ex.: no dia seguinte) e so ligar de novo.   |
 //|                                                                  |
@@ -25,15 +25,16 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.10"
-#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para sozinho na meta (ex.: 50 -> 150) ou no limite de perda. Alto risco."
+#property version   "4.20"
+#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para na META DO DIA (saldo 300) ou no limite de perda e volta depois da meia-noite. Alto risco."
 
 #include <Trade\Trade.mqh>
 
 enum ENUM_SIDE { SIDE_BOTH = 0, SIDE_BUY = 1, SIDE_SELL = 2 };
 input ENUM_SIDE InpSide      = SIDE_SELL; // Lado: 0 = compra e venda, 1 = SO COMPRA, 2 = SO VENDA
 input bool   InpEnterNow     = true;   // Abrir a 1a ordem assim que ligar
-input double InpTargetUSD    = 210.0;  // META em dinheiro: para de operar quando o capital chegar nisso (0 = usar o multiplicador)
+input double InpTargetUSD    = 300.0;  // META DO DIA: saldo em dinheiro; ao chegar para ate a meia-noite (0 = usar o multiplicador)
+input bool   InpDaily        = true;   // Todo dia depois da meia-noite (servidor) recomeca e tenta a meta de novo
 input double InpTargetMult   = 3.0;    // META por multiplicador (so se a meta em dinheiro for 0): 3 = 50 -> 150
 input double InpMaxLossPct   = 50.0;   // LIMITE DE PERDA da sessao em % (para tudo)
 input double InpMarginUse    = 100.0;  // % da margem livre usada por ordem (100 = FULL MARGIN, lote maximo)
@@ -73,7 +74,37 @@ double   gLastLot = 0;
 double Equity() { return(AccountInfoDouble(ACCOUNT_EQUITY)); }
 
 //--- meta da sessao: valor fixo (ex.: 210) ou capital inicial x multiplicador
-double Target() { return(InpTargetUSD > 0 ? InpTargetUSD : gStart * InpTargetMult); }
+double   gFirstStart = 0;    // capital do 1o dia (para a meta % quando ja comeca acima da meta)
+int      gDay = 0;           // dia do servidor (AAAAMMDD) da sessao atual
+bool     gDayDone = false;   // meta/limite do dia batido: espera a meia-noite
+double   gDayTarget = 0;
+
+int Today() { MqlDateTime t; TimeToStruct(TimeCurrent(), t); return(t.year * 10000 + t.mon * 100 + t.day); }
+
+//--- meta do dia: saldo fixo (ex.: 300). Se o dia ja comeca acima dele, busca o mesmo crescimento % do 1o dia.
+double Target()
+  {
+   if(InpTargetUSD <= 0) return(gStart * InpTargetMult);
+   if(gStart < InpTargetUSD) return(InpTargetUSD);
+   double mult = (gFirstStart > 0 && gFirstStart < InpTargetUSD) ? InpTargetUSD / gFirstStart : 2.0;
+   return(gStart * mult);
+  }
+
+//--- comeca um dia novo: capital de agora, contadores zerados, abre a 1a ordem de novo
+void NewDay()
+  {
+   gDay = Today();
+   gStart = Equity();
+   if(gFirstStart <= 0) gFirstStart = gStart;
+   gPeak = gStart;
+   gDayTarget = Target();
+   gStopped = false;
+   gStopWhy = "";
+   gDayDone = false;
+   gTrades = 0; gWins = 0; gLosses = 0; gConsecLoss = 0; gPauseUntil = 0;
+   gEntered = false;
+   Print("Full Margin: dia ", gDay, " - capital ", DoubleToString(gStart, 2), " meta do dia ", DoubleToString(gDayTarget, 2));
+  }
 
 bool HasPosition()
   {
@@ -287,11 +318,17 @@ void ManagePosition()
 
 void Cycle()
   {
+   //--- depois da meia-noite: dia novo (so sem ordem aberta)
+   if(InpDaily && Today() != gDay && !HasPosition())
+     {
+      if(gDay != 0 && gDayDone) Alert("Full Margin: novo dia - tentando a meta do dia de novo");
+      NewDay();
+     }
    if(gStopped) return;
    double eq = Equity();
    if(eq > gPeak) gPeak = eq;
-   if(eq >= Target()) { StopSession("META BATIDA"); return; }
-   if(eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA"); return; }
+   if(eq >= gDayTarget) { StopSession("META DO DIA BATIDA"); gDayDone = true; return; }
+   if(eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA DO DIA"); gDayDone = true; return; }
    if(HasPosition()) { ManagePosition(); return; }
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
 
@@ -351,7 +388,7 @@ void Line(int row, const string text, color c, int size = 10, const string font 
 
 void Dashboard()
   {
-   double eq = Equity(), target = Target(), lossFloor = gStart * (1.0 - InpMaxLossPct / 100.0);
+   double eq = Equity(), target = gDayTarget, lossFloor = gStart * (1.0 - InpMaxLossPct / 100.0);
    double pnl = eq - gStart;
    double prog = (target > gStart) ? MathMax(0, MathMin(1, (eq - gStart) / (target - gStart))) : 0;
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
@@ -361,7 +398,7 @@ void Dashboard()
    Line(0, "FULL MARGIN", CLR_GOLD, 15, "Arial Black");
    bool algo = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
    if(gStopped)
-      Line(1, "■ PARADO: " + gStopWhy, gStopWhy == "META BATIDA" ? CLR_GREEN : CLR_RED, 10, "Arial Bold");
+      Line(1, "■ " + gStopWhy + (gDayDone && InpDaily ? " - volta 00:00" : ""), StringFind(gStopWhy, "META") >= 0 ? CLR_GREEN : CLR_RED, 10, "Arial Bold");
    else if(!algo)
       Line(1, "● ligue o Algo Trading", CLR_RED, 10, "Arial Bold");
    else if(TimeCurrent() < gPauseUntil)
@@ -369,11 +406,11 @@ void Dashboard()
    else
       Line(1, "● OPERANDO  " + _Symbol + (InpSide == SIDE_SELL ? "  SO VENDA" : (InpSide == SIDE_BUY ? "  SO COMPRA" : "  candles M1")), CLR_GREEN, 10, "Arial Bold");
 
-   Line(3, "Comecou com : " + DoubleToString(gStart, 2) + " " + cur, CLR_TXT);
+   Line(3, "Comecou hoje: " + DoubleToString(gStart, 2) + " " + cur, CLR_TXT);
    Line(4, "Capital     : " + DoubleToString(eq, 2) + " " + cur, CLR_TXT, 11);
    Line(5, "Resultado   : " + (pnl >= 0 ? "+" : "") + DoubleToString(pnl, 2) + "  (" +
            (gStart > 0 ? DoubleToString(pnl / gStart * 100.0, 1) : "0") + "%)", pnl >= 0 ? CLR_GREEN : CLR_RED, 11);
-   Line(6, "Meta        : " + DoubleToString(target, 2) + "   Limite: " + DoubleToString(lossFloor, 2), CLR_DIM);
+   Line(6, "Meta do dia : " + DoubleToString(target, 2) + "   Limite: " + DoubleToString(lossFloor, 2), CLR_DIM);
 
    //--- barra de progresso ate a meta
    int bx = 26, by = 32 + 7 * 21 + 14, bw = 340;
@@ -410,17 +447,9 @@ int OnInit()
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(20);
    trade.SetTypeFillingBySymbol(_Symbol);
-   gStart = Equity();
-   if(InpTargetUSD > 0 && gStart >= InpTargetUSD)
-     {
-      gStopped = true;
-      gStopWhy = "capital ja esta acima da meta";
-      Alert("Full Margin: o capital (", DoubleToString(gStart, 2), ") ja esta acima da meta de ", DoubleToString(InpTargetUSD, 2),
-            ". Aumente a meta para operar.");
-     }
-   gPeak = gStart;
+   NewDay();
    gStartTime = TimeCurrent();
-   Print("Full Margin ligado: capital ", DoubleToString(gStart, 2), " meta ", DoubleToString(Target(), 2),
+   Print("Full Margin ligado: capital ", DoubleToString(gStart, 2), " meta do dia ", DoubleToString(gDayTarget, 2),
          " limite ", DoubleToString(gStart * (1.0 - InpMaxLossPct / 100.0), 2));
    EventSetTimer(1);
    Dashboard();
