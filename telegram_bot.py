@@ -238,7 +238,7 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
-TRADE_ACTIONS={"bfm","/btc","bfm_demo","bfm_real","bfm_real_ok","bfm_off","bfm_close","bfm_lev2","bfm_lev3","bfm_lev5","bfm_lev10","fx","fx_on","fx_off","fx_deploy","fx_close","/forex","trpos","/posicoes_robo","tsn_on","tsn_off","tsn_reset","trd_on","trd_off","trd_reset","vid","vid_on","vid_off","vid_now","vid_yt","/videos","sup","sup_on","sup_off","sup_code","sup_min","sup_now","/tarefas","tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
+TRADE_ACTIONS={"bfm","/btc","bfm_real_ok","bfm_on_demo","bfm_on_real","bfm_off_demo","bfm_off_real","bfm_close_demo","bfm_close_real","bfm_lev2","bfm_lev3","bfm_lev5","bfm_lev10","fx","fx_on","fx_off","fx_deploy","fx_close","/forex","trpos","/posicoes_robo","tsn_on","tsn_off","tsn_reset","trd_on","trd_off","trd_reset","vid","vid_on","vid_off","vid_now","vid_yt","/videos","sup","sup_on","sup_off","sup_code","sup_min","sup_now","/tarefas","tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
  "tsc","tsv","tsell","twal","tsec","towner","trade_help","/posicoes","/ordens","/config","/ajuda","/comprar","/home","/dca","/watchlist","/scanner"}
 TRADE_PREFIXES=("tb","tbx","ts","tt","tl","tr","tc","tlo","tld","tla","tlx","tsoon","tsp","tw","tdo","tdp","tdx","tbc","tsx")
 def TRADE_ROUTE(cb,action):
@@ -883,16 +883,14 @@ def btc_live_loop():
     BTC_LIVE_ERR.update(last=msg,at=time.time());logging.warning("btc live cycle failed: %s",msg)
 BFM_ERR={}
 def btc_fullmargin_loop():
- """BTC Full Margin (owner, Nov 19): short-only robot on Jupiter Perps; checks every 20 s while on or holding a short."""
+ """BTC Full Margin (owner, Nov 19): demo + real accounts, US$ 100/day, stop at US$ 210; checks every 20 s."""
  import btc_fullmargin as bfm
  while True:
   time.sleep(bfm.CHECK_EVERY_S)
   try:
    chat=active_chat()
    if not chat:continue
-   d=bfm._load()
-   if d["on"]:bfm.cycle(send,chat)
-   elif d.get("pos"):bfm.manage_open(send,chat)
+   bfm.cycle_all(send,chat)
   except Exception as exc:
    msg=type(exc).__name__+": "+str(exc)[:120]
    bfm.LAST["why"]="erro: "+msg
