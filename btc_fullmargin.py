@@ -9,8 +9,8 @@ Two separate accounts (owner, Nov 19): a DEMO account (fake money, real prices, 
 - SHORT ONLY, leverage chosen by the owner (2x-15x, default 5x), one position per account, day and night;
 - reads the BTC 5-minute chart (score -9..+9: trend M15 + H1, last 10 candles, highs/lows, EMA20, candle patterns,
   strong candle); opens a short right away at the start of the day/when switched on, then shorts at score <= -4;
-- stop behind the last 5 candles (0.8-2.5 ATR, far from liquidation); target 1.5x the risk; stop to the entry at
-  +0.6 risk and trailing stop from +1 risk; 2 losses in a row = 15 min pause.
+- stop behind the last 5 candles (0.8-2.5 ATR, far from liquidation); target 2x the risk (at least 0.6%); stop locks the
+  fees + 0.12% at +0.8 risk and trailing stop from +1.2 risk; 2 losses in a row = 15 min pause.
 Both start OFF. The REAL account needs the SOL in the bot wallet (swapped to USDC collateral for each short).
 """
 import json
@@ -28,8 +28,10 @@ TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "250"))
 MAX_LOSS = 0.5
 LEVERAGES = (2, 3, 5, 10, 15)
 DEFAULT_LEVERAGE = 5
-RR = 1.5
-BE_R, TRAIL_START_R, TRAIL_DIST_R = 0.6, 1.0, 0.5
+RR = 2.0                        # owner, Nov 19: bigger target (the fees ate the small wins)
+BE_R, TRAIL_START_R, TRAIL_DIST_R = 0.8, 1.2, 0.5
+MIN_STOP_PCT = 0.003            # risk at least 0.3% of the price -> target >= 0.6%, 5x the 0.12% fees
+BE_LOCK_PCT = 0.0012            # the "stop in profit" locks the fees (0.12%) + 0.12% net
 PAUSE_LOSSES, PAUSE_S = 2, 15 * 60
 FEE_RATE = 0.0006               # per side, on the position size
 BORROW_RATE_H = 0.0001          # Jupiter borrow fee estimate: ~0.01% of the size per hour held
@@ -203,7 +205,7 @@ def read_chart(closed):
 def stop_distance(closed, a, price, lev):
     """Short: stop above the high of the last 5 candles (+0.2 ATR), 0.8-2.5 ATR, at most 60% of the way to liquidation."""
     ref = max(c["h"] for c in closed[-5:]) + 0.2 * a - price
-    dist = min(max(ref, 0.8 * a), 2.5 * a)
+    dist = max(min(max(ref, 0.8 * a), 2.5 * a), price * MIN_STOP_PCT)   # never a target too small for the fees
     return min(dist, price * 0.6 / lev)
 
 
@@ -225,10 +227,11 @@ def manage(pos, price):
     R = pos["risk"]
     prof = pos["entry"] - price
     stop = pos["stop"]
-    if prof >= BE_R * R:
-        stop = min(stop, pos["entry"] * (1 - FEE_RATE * 2))      # covers the fees
+    lock = pos["entry"] * (1 - FEE_RATE * 2 - BE_LOCK_PCT)       # pays the fees AND keeps a real profit
+    if prof >= BE_R * R and price < lock:
+        stop = min(stop, lock)
     if prof >= TRAIL_START_R * R:
-        stop = min(stop, price + TRAIL_DIST_R * R)
+        stop = min(stop, price + TRAIL_DIST_R * R, lock)
     if price <= pos["entry"] - RR * R:
         return "🎯 ALVO", stop
     if price >= stop:

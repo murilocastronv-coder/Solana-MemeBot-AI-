@@ -59,18 +59,35 @@ class Manage(unittest.TestCase):
     def pos(self):
         return {"entry": 100.0, "size_usd": 500.0, "collateral_usd": 100.0, "risk": 1.0, "stop": 101.0}
 
-    def test_target(self):
-        self.assertEqual(bfm.manage(self.pos(), 98.4)[0], "🎯 ALVO")
+    def test_target_is_2x_the_risk(self):
+        self.assertEqual(bfm.manage(self.pos(), 98.4)[0], "")
+        self.assertEqual(bfm.manage(self.pos(), 98.0)[0], "🎯 ALVO")
 
     def test_stop(self):
         self.assertEqual(bfm.manage(self.pos(), 101.0)[0], "🛑 STOP")
 
-    def test_breakeven_and_trailing(self):
+    def test_stop_in_profit_pays_the_fees_and_keeps_a_profit(self):
         p = self.pos()
-        why, stop = bfm.manage(p, 99.3)
+        self.assertEqual(bfm.manage(p, 99.3)[1], 101.0)              # +0.7 R: not yet
+        why, stop = bfm.manage(p, 99.1)                               # +0.9 R: locks fees + 0.12%
         self.assertEqual(why, "")
-        self.assertLess(stop, 100.0)
-        self.assertAlmostEqual(bfm.manage(p, 99.0)[1], 99.5)
+        self.assertAlmostEqual(stop, 100.0 * (1 - 0.0012 - 0.0012))
+        p["stop"] = stop
+        why, _ = bfm.manage(p, stop)
+        self.assertEqual(why, "🛡️ STOP NO LUCRO")
+        self.assertGreater(bfm.pnl_usd(p, stop), 0)                  # net positive after the fees
+
+    def test_trailing(self):
+        self.assertAlmostEqual(bfm.manage(self.pos(), 98.7)[1], 99.2)
+
+    def test_min_risk_is_big_enough_for_the_fees(self):
+        cs = candles()[:-1]
+        price = cs[-1]["c"]
+        dist = bfm.stop_distance(cs, price * 0.0001, price, 15)      # tiny ATR
+        self.assertAlmostEqual(dist, price * bfm.MIN_STOP_PCT)
+        size = 100 * 15
+        gross_at_target = size * bfm.RR * dist / price
+        self.assertGreater(gross_at_target, 4 * size * bfm.FEE_RATE * 2)
 
     def test_pnl_short_with_fees(self):
         self.assertAlmostEqual(bfm.pnl_usd(self.pos(), 99.0), 5.0 - 0.6)
