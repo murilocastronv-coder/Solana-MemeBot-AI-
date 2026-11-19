@@ -25,7 +25,7 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.00"
+#property version   "4.10"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para sozinho na meta (ex.: 50 -> 150) ou no limite de perda. Alto risco."
 
 #include <Trade\Trade.mqh>
@@ -33,7 +33,8 @@
 enum ENUM_SIDE { SIDE_BOTH = 0, SIDE_BUY = 1, SIDE_SELL = 2 };
 input ENUM_SIDE InpSide      = SIDE_SELL; // Lado: 0 = compra e venda, 1 = SO COMPRA, 2 = SO VENDA
 input bool   InpEnterNow     = true;   // Abrir a 1a ordem assim que ligar
-input double InpTargetMult   = 3.0;    // META: capital x este numero (3 = 50 -> 150; 100 -> 300)
+input double InpTargetUSD    = 210.0;  // META em dinheiro: para de operar quando o capital chegar nisso (0 = usar o multiplicador)
+input double InpTargetMult   = 3.0;    // META por multiplicador (so se a meta em dinheiro for 0): 3 = 50 -> 150
 input double InpMaxLossPct   = 50.0;   // LIMITE DE PERDA da sessao em % (para tudo)
 input double InpMarginUse    = 100.0;  // % da margem livre usada por ordem (100 = FULL MARGIN, lote maximo)
 input double InpMaxLot       = 100.0;  // Lote maximo por ordem (limite de seguranca)
@@ -70,6 +71,9 @@ double   gLastLot = 0;
 
 //+------------------------------------------------------------------+
 double Equity() { return(AccountInfoDouble(ACCOUNT_EQUITY)); }
+
+//--- meta da sessao: valor fixo (ex.: 210) ou capital inicial x multiplicador
+double Target() { return(InpTargetUSD > 0 ? InpTargetUSD : gStart * InpTargetMult); }
 
 bool HasPosition()
   {
@@ -286,7 +290,7 @@ void Cycle()
    if(gStopped) return;
    double eq = Equity();
    if(eq > gPeak) gPeak = eq;
-   if(eq >= gStart * InpTargetMult) { StopSession("META BATIDA"); return; }
+   if(eq >= Target()) { StopSession("META BATIDA"); return; }
    if(eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA"); return; }
    if(HasPosition()) { ManagePosition(); return; }
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
@@ -347,7 +351,7 @@ void Line(int row, const string text, color c, int size = 10, const string font 
 
 void Dashboard()
   {
-   double eq = Equity(), target = gStart * InpTargetMult, lossFloor = gStart * (1.0 - InpMaxLossPct / 100.0);
+   double eq = Equity(), target = Target(), lossFloor = gStart * (1.0 - InpMaxLossPct / 100.0);
    double pnl = eq - gStart;
    double prog = (target > gStart) ? MathMax(0, MathMin(1, (eq - gStart) / (target - gStart))) : 0;
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
@@ -389,7 +393,7 @@ void Dashboard()
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   if(InpTargetMult <= 1.0 || InpMaxLossPct <= 0 || InpMaxLossPct >= 100 || InpMarginUse <= 0 || InpMarginUse > 100)
+   if((InpTargetUSD <= 0 && InpTargetMult <= 1.0) || InpMaxLossPct <= 0 || InpMaxLossPct >= 100 || InpMarginUse <= 0 || InpMarginUse > 100)
      {
       Alert("Full Margin: confira meta (>1), limite de perda (1-99%) e margem usada (1-100%)");
       return(INIT_PARAMETERS_INCORRECT);
@@ -407,9 +411,16 @@ int OnInit()
    trade.SetDeviationInPoints(20);
    trade.SetTypeFillingBySymbol(_Symbol);
    gStart = Equity();
+   if(InpTargetUSD > 0 && gStart >= InpTargetUSD)
+     {
+      gStopped = true;
+      gStopWhy = "capital ja esta acima da meta";
+      Alert("Full Margin: o capital (", DoubleToString(gStart, 2), ") ja esta acima da meta de ", DoubleToString(InpTargetUSD, 2),
+            ". Aumente a meta para operar.");
+     }
    gPeak = gStart;
    gStartTime = TimeCurrent();
-   Print("Full Margin ligado: capital ", DoubleToString(gStart, 2), " meta ", DoubleToString(gStart * InpTargetMult, 2),
+   Print("Full Margin ligado: capital ", DoubleToString(gStart, 2), " meta ", DoubleToString(Target(), 2),
          " limite ", DoubleToString(gStart * (1.0 - InpMaxLossPct / 100.0), 2));
    EventSetTimer(1);
    Dashboard();
