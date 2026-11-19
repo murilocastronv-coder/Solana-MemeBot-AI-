@@ -6,7 +6,7 @@ Two separate accounts (owner, Nov 19): a DEMO account (fake money, real prices, 
   collateral of each short, so a win makes the next short bigger;
 - DAILY TARGET: when the account reaches TARGET_USD (250) it closes and STOPS until the next day;
   DAILY LOSS LIMIT: at 50% of the capital (US$ 50) it also closes and stops until the next day;
-- SHORT ONLY, leverage chosen by the owner (2x-10x, default 5x), one position per account, day and night;
+- SHORT ONLY, leverage chosen by the owner (2x-15x, default 5x), one position per account, day and night;
 - reads the BTC 5-minute chart (score -9..+9: trend M15 + H1, last 10 candles, highs/lows, EMA20, candle patterns,
   strong candle); opens a short right away at the start of the day/when switched on, then shorts at score <= -4;
 - stop behind the last 5 candles (0.8-2.5 ATR, far from liquidation); target 1.5x the risk; stop to the entry at
@@ -26,7 +26,7 @@ MIN_SCORE = int(os.getenv("BTCFM_MIN_SCORE", "4"))
 CAPITAL_USD = float(os.getenv("BTCFM_CAPITAL_USD", "100"))
 TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "250"))
 MAX_LOSS = 0.5
-LEVERAGES = (2, 3, 5, 10)
+LEVERAGES = (2, 3, 5, 10, 15)
 DEFAULT_LEVERAGE = 5
 RR = 1.5
 BE_R, TRAIL_START_R, TRAIL_DIST_R = 0.6, 1.0, 0.5

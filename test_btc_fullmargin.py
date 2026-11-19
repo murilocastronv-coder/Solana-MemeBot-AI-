@@ -186,6 +186,14 @@ class Telegram(Base):
         self.assertEqual(bfm._load("demo")["leverage"], 10)
         self.assertEqual(bfm._load("real")["leverage"], 10)
 
+    def test_max_leverage_15(self):
+        self.assertEqual(max(bfm.LEVERAGES), 15)
+        bfm.handle("bfm_lev15", self.send, "1", lambda fn: fn())
+        self.assertEqual(bfm._load("real")["leverage"], 15)
+        cs = candles()[:-1]
+        price = cs[-1]["c"]
+        self.assertLessEqual(bfm.stop_distance(cs, price, price, 15), price * 0.6 / 15 + 1e-9)
+
     def test_real_asks_confirmation(self):
         bfm.handle("bfm_on_real", self.send, "1", lambda fn: fn())
         self.assertFalse(bfm._load("real")["on"])
