@@ -34,6 +34,10 @@ PAUSE_LOSSES, PAUSE_S = 2, 15 * 60
 FEE_RATE = 0.0006               # per side, on the position size
 BORROW_RATE_H = 0.0001          # Jupiter borrow fee estimate: ~0.01% of the size per hour held
 PHOTO = None                    # telegram_bot sets this to its send_photo (charts in the results)
+EDIT = None                     # telegram_bot sets this to edit a message in place (live view)
+LIVE_EVERY_S = 5
+LIVE_FOR_S = 15 * 60
+LIVE = {}                       # chat -> {"mode", "until", "hi", "lo"}
 CHECK_EVERY_S = 20
 TF = 300
 MODES = ("demo", "real")
@@ -112,6 +116,16 @@ def klines_5m(limit=1000):
                        "end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end))}):
             rows[int(r[0])] = {"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "o": float(r[3]), "c": float(r[4])}
     return [rows[t] for t in sorted(rows)]
+
+
+def price_now():
+    """Current BTC price (light call for the live view)."""
+    for url in ("https://api.binance.com/api/v3/ticker/price", "https://api.binance.us/api/v3/ticker/price"):
+        try:
+            return float(_get(url, {"symbol": "BTCUSDT"})["price"])
+        except Exception:
+            continue
+    return float(_get("https://api.exchange.coinbase.com/products/BTC-USD/ticker")["price"])
 
 
 def ema(values, n):
@@ -446,6 +460,81 @@ def account_text(mode):
     return "\n".join(L)
 
 
+def live_text(mode, price, now=None, track=None):
+    """Live view of an account: floating result of the open short (after the fees), stop/target distance."""
+    now = now or time.time()
+    d = _load(mode)
+    pos = d.get("pos")
+    L = ["📺 AO VIVO — " + NAME[mode] + " (atualiza a cada " + str(LIVE_EVERY_S) + " s)",
+         "₿ BTC agora: $" + format(price, ",.2f")]
+    if not pos:
+        L.append("⏳ Nenhum short aberto agora " + ("— esperando sinal nos candles de 5 min." if d["on"] else "— conta desligada."))
+        L.append("💼 Saldo da conta: US$ " + format(d["capital"], ".2f") + " (hoje " + format(d["capital"] - CAPITAL_USD, "+.2f") + ")")
+    else:
+        gross, fees, net = breakdown(pos, price, now)
+        if track is not None:
+            track["hi"] = max(track.get("hi", net), net)
+            track["lo"] = min(track.get("lo", net), net)
+        col = pos["collateral_usd"]
+        move = (price / pos["entry"] - 1) * 100
+        target = pos["entry"] - RR * pos["risk"]
+        L += ["📉 SHORT " + str(round(pos["size_usd"] / col)) + "x · entrada $" + format(pos["entry"], ",.2f") +
+              " · garantia US$ " + format(col, ".2f") + " (posição US$ " + format(pos["size_usd"], ",.0f") + ")",
+              ("🟢 " if net >= 0 else "🔴 ") + "FLUTUAÇÃO: " + format(net, "+.2f") + " USD (" + format(net / col * 100, "+.1f") +
+              "% da garantia) — já com as taxas",
+              "💵 Bruto " + format(gross, "+.2f") + " · taxas −" + format(fees, ".2f") + " · BTC " + format(move, "+.2f") +
+              "% desde a entrada (" + ("a favor" if move < 0 else "contra") + ")",
+              "🛑 Stop $" + format(pos["stop"], ",.0f") + " (falta " + format((pos["stop"] / price - 1) * 100, "+.2f") + "%) · 🎯 Alvo $" +
+              format(target, ",.0f") + " (falta " + format((target / price - 1) * 100, "+.2f") + "%)"]
+        span = pos["stop"] - target
+        if span > 0:
+            k = int(round(max(0.0, min(1.0, (pos["stop"] - price) / span)) * 14))
+            L.append("🛑 " + "─" * k + "●" + "─" * (14 - k) + " 🎯")
+        if track is not None:
+            L.append("📊 Nesta tela: máx " + format(track["hi"], "+.2f") + " · mín " + format(track["lo"], "+.2f") + " USD")
+        L.append("💼 Saldo da conta agora: US$ " + format(d["capital"] + net, ".2f") + " (hoje " +
+                 format(d["capital"] + net - CAPITAL_USD, "+.2f") + ") · 🎯 meta US$ " + format(TARGET_USD, ".0f"))
+        L.append("⏱️ Aberta há " + str(int((now - pos.get("opened", now)) // 60)) + " min")
+    L.append("🕒 " + time.strftime("%H:%M:%S", time.gmtime(now)) + " UTC")
+    return "\n".join(L)
+
+
+def live_keyboard():
+    return [[{"text": "⏹️ Parar ao vivo", "callback_data": "bfm_live_stop"}, {"text": "⬅️ Robô BTC", "callback_data": "bfm"}]]
+
+
+def start_live(mode, send, chat):
+    """Sends the live message and edits it every LIVE_EVERY_S for LIVE_FOR_S (or until ⏹️)."""
+    track = {}
+    LIVE[str(chat)] = {"mode": mode, "until": time.time() + LIVE_FOR_S, "id": None}
+    me = LIVE[str(chat)]
+    price = price_now()
+    r = send(chat, live_text(mode, price, track=track), live_keyboard()) or {}
+    msg_id = (r.get("result") or {}).get("message_id")
+    if not msg_id or not EDIT:
+        return
+    me["id"] = msg_id
+    last = ""
+    while LIVE.get(str(chat)) is me and time.time() < me["until"]:
+        time.sleep(LIVE_EVERY_S)
+        if LIVE.get(str(chat)) is not me:
+            break
+        try:
+            text = live_text(mode, price_now(), track=track)
+            if text != last:
+                EDIT(chat, msg_id, text, live_keyboard())
+                last = text
+        except Exception as exc:
+            logging.info("btc live view: %s", type(exc).__name__)
+    if LIVE.get(str(chat)) is me:
+        LIVE.pop(str(chat), None)
+        try:
+            EDIT(chat, msg_id, live_text(mode, price_now()) + "\n⏹️ Ao vivo encerrado (15 min). Toque em 📺 para ver de novo.",
+                 [[{"text": "📺 Ao vivo de novo", "callback_data": "bfm_live_" + mode}, {"text": "⬅️ Robô BTC", "callback_data": "bfm"}]])
+        except Exception:
+            pass
+
+
 def results_text():
     """Full report of both accounts: is the robot making money after the fees?"""
     L = ["📊 RESULTADOS DO ROBÔ BTC FULL MARGIN (líquido = depois das taxas da Jupiter)"]
@@ -507,11 +596,13 @@ def keyboard():
     rows.append([{"text": ("✅ " if lev == x else "") + str(x) + "x", "callback_data": "bfm_lev" + str(x)} for x in LEVERAGES])
     rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
+    rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}, {"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
-ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
+ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
+            "/aovivo"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
            {p + m for p in ("bfm_on_", "bfm_off_", "bfm_close_") for m in MODES})
 
 
@@ -538,6 +629,12 @@ def _start(mode, send, chat, run_async):
 def handle(action, send, chat, run_async):
     if action in ("bfm", "/btc"):
         send(chat, status_text(), keyboard())
+    elif action in ("bfm_live_demo", "bfm_live_real", "/aovivo"):
+        mode = "real" if action == "bfm_live_real" else "demo"
+        run_async(lambda: start_live(mode, send, chat))
+    elif action == "bfm_live_stop":
+        LIVE.pop(str(chat), None)
+        send(chat, "⏹️ Ao vivo parado.", keyboard())
     elif action in ("bfm_res", "/resultados_btc"):
         def go():
             try:

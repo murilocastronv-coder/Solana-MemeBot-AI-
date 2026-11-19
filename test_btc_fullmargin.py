@@ -250,6 +250,57 @@ class Results(Base):
         self.assertAlmostEqual(d["capital"], 103.0)
 
 
+class Live(Base):
+    def open_pos(self, mode="demo"):
+        self.turn_on(mode)
+        d = bfm._load(mode)
+        d["pos"] = {"entry": 100.0, "size_usd": 500.0, "collateral_usd": 100.0, "risk": 1.0, "stop": 101.0, "opened": NOW - 600}
+        bfm._save(d)
+
+    def test_floating_positive(self):
+        self.open_pos()
+        t = bfm.live_text("demo", 99.5, now=NOW, track={})
+        self.assertIn("🟢 FLUTUAÇÃO: +1.89 USD", t)
+        self.assertIn("já com as taxas", t)
+        self.assertIn("●", t)
+        self.assertIn("máx +1.89", t)
+
+    def test_floating_negative(self):
+        self.open_pos()
+        self.assertIn("🔴 FLUTUAÇÃO: -3.11", bfm.live_text("demo", 100.5, now=NOW))
+
+    def test_no_position(self):
+        self.turn_on()
+        self.assertIn("Nenhum short aberto", bfm.live_text("demo", 90000.0))
+
+    def test_live_edits_the_same_message_and_stops(self):
+        self.open_pos()
+        edits, prices = [], iter([99.5, 99.0, 98.8, 98.9, 99.1])
+        sent = []
+
+        def send(chat, text, kb=None):
+            sent.append(text)
+            return {"result": {"message_id": 7}}
+
+        with patch.object(bfm, "price_now", lambda: next(prices)), patch.object(bfm, "LIVE_EVERY_S", 0), \
+                patch.object(bfm, "LIVE_FOR_S", 0.05), patch.object(bfm, "EDIT", lambda c, m, t, kb=None: edits.append((m, t))):
+            real_sleep = __import__("time").sleep
+            with patch("time.sleep", lambda s: real_sleep(0.02)):
+                bfm.start_live("demo", send, "1")
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(edits)
+        self.assertTrue(all(m == 7 for m, _ in edits))
+        self.assertIn("Ao vivo encerrado", edits[-1][1])
+        self.assertNotIn("1", bfm.LIVE)
+
+    def test_buttons(self):
+        cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
+        self.assertIn("bfm_live_demo", cbs)
+        bfm.LIVE["1"] = {"mode": "demo"}
+        bfm.handle("bfm_live_stop", self.send, "1", lambda fn: fn())
+        self.assertNotIn("1", bfm.LIVE)
+
+
 class Telegram(Base):
     def test_keyboard_callbacks_are_routed(self):
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
