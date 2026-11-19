@@ -691,15 +691,7 @@ def trade_loop():
    next_deposit=time.time()+180
    try:owner_notify.check_deposits()
    except Exception as exc:logging.warning("deposit check: %s",type(exc).__name__)
-  if trade_panel.HOME=="forex":
-   import forex_bot
-   if time.time()>=next_robot:
-    next_robot=time.time()+forex_bot.CYCLE_S
-    try:
-     r=forex_bot.cycle(send,active_chat())
-     if r not in ("desligado","sem sinal","não configurado"):logging.info("forex cycle: %s",r)
-     forex_bot.refresh()
-    except Exception as exc:logging.warning("forex cycle: %s: %s",type(exc).__name__,str(exc)[:150])
+  if trade_panel.HOME=="btc":       # the BTC robot runs in its own loop (btc_fullmargin_loop)
    time.sleep(60)
    continue
   if trade_panel.HOME=="robot":

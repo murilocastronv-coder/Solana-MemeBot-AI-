@@ -18,7 +18,9 @@ import user_trade as ut
 import user_wallets
 
 AIRDROP_ONLY = os.getenv("AIRDROP_ONLY", "true").strip().lower() != "false"   # owner (Nov 18): trading switched off
-HOME = os.getenv("BOT_HOME", "forex").strip().lower()   # owner (Nov 18, latest): only the FOREX robot (MT5 via MetaApi)
+HOME = os.getenv("BOT_HOME", "btc").strip().lower()   # owner (Nov 19, latest): only the BTC FULL MARGIN robot (demo + real)
+if HOME == "forex":                                      # owner (Nov 19): forex removed, the BTC robot replaced it
+    HOME = "btc"
 GROUP_URL = os.getenv("TELEGRAM_GROUP_URL", "https://t.me/+fKaHJ2Dg_nIzM2U0")   # owner (Nov 18): community group
 
 MODE = "trade"
@@ -490,7 +492,7 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 
 # ------------------------------------------------------------------ home screen
 def home_text(chat):
-    if AIRDROP_ONLY and HOME == "forex":
+    if AIRDROP_ONLY and HOME == "btc":
         if not is_owner(chat):
             return "🔒 Este bot agora é privado. Se você tem SOL na carteira do bot, toque em 💸 Sacar SOL."
         import btc_fullmargin              # owner, Nov 19: the BTC robot (demo + real) is the home screen
@@ -517,7 +519,7 @@ def home_text(chat):
 
 
 def home_keyboard(chat):
-    if AIRDROP_ONLY and HOME == "forex":
+    if AIRDROP_ONLY and HOME == "btc":
         if not is_owner(chat):
             return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
         import btc_fullmargin
@@ -844,18 +846,15 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         send(chat, "⛔ " + why if why else "🧪 Backtest do robô moedas grandes rodando: " + str(big_bot.BT_DAYS) +
              " dias de velas reais de 1 h da Binance, a mesma regra do robô. Resultado em ~1 min. Só teste, nenhuma ordem real.", tail)
         return True
-    if action in ("fx", "fx_on", "fx_off", "fx_deploy", "fx_close", "/forex"):
-        if not is_owner(chat):
-            return False
-        import forex_bot
-        return forex_bot.handle(action, send, chat, run_async)
     import btc_fullmargin
+    if action in ("fx", "fx_on", "fx_off", "fx_deploy", "fx_close", "/forex"):     # forex removed (owner, Nov 19)
+        action = "bfm"
     if action in btc_fullmargin.ACTIONS:
         if not is_owner(chat):
             return False
         return btc_fullmargin.handle(action, send, chat, run_async)
-    if AIRDROP_ONLY and HOME == "forex" and action not in ("thome", "/home"):
-        send(chat, "💱 O bot agora é só o robô de forex. Essa função foi removida.", home_keyboard(chat))
+    if AIRDROP_ONLY and HOME == "btc" and action not in ("thome", "/home"):
+        send(chat, "₿ O bot agora é só o robô BTC Full Margin (contas demo e real). Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("trpos", "/posicoes_robo"):
         import big_bot

@@ -108,7 +108,7 @@ class Cycle(Base):
         self.assertGreater(d["capital"], 100.0)
 
     def test_daily_target_stops_until_tomorrow(self):
-        self.turn_on(capital=212.0, trades=3)
+        self.turn_on(capital=252.0, trades=3)
         self.assertEqual(self.cyc(candles()), "META DO DIA BATIDA")
         self.assertIn("META DO DIA", self.msgs[-1])
         self.assertEqual(self.cyc(candles()), "parado até amanhã")
@@ -119,14 +119,14 @@ class Cycle(Base):
         self.assertEqual(self.cyc(candles(), now=NOW + 86400), "abriu")
         d = bfm._load("demo")
         self.assertEqual(d["pos"]["collateral_usd"], 100.0)
-        self.assertEqual(d["days"][-1]["result"], 112.0)
+        self.assertEqual(d["days"][-1]["result"], 152.0)
 
     def test_target_closes_the_open_short(self):
-        self.turn_on(capital=205.0, trades=1)
+        self.turn_on(capital=245.0, trades=1)
         cs = candles()
         price = cs[-1]["c"]
         d = bfm._load("demo")
-        d["pos"] = {"entry": price * 1.02, "size_usd": 1000.0, "collateral_usd": 205.0, "risk": price, "stop": price * 2}
+        d["pos"] = {"entry": price * 1.02, "size_usd": 1000.0, "collateral_usd": 245.0, "risk": price, "stop": price * 2}
         bfm._save(d)
         self.assertEqual(self.cyc(cs), "META DO DIA BATIDA")
         self.assertIsNone(bfm._load("demo")["pos"])
@@ -176,8 +176,10 @@ class Telegram(Base):
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
         self.assertIn("bfm_on_demo", cbs)
         self.assertIn("bfm_on_real", cbs)
+        self.assertIn("wallet_deposit", cbs)
+        self.assertIn("wallet_withdraw", cbs)
         for cb in cbs:
-            self.assertIn(cb, bfm.ACTIONS | {"fx"})
+            self.assertIn(cb, bfm.ACTIONS | {"wallet_deposit", "wallet_withdraw", "wallet_balance"})
 
     def test_leverage_applies_to_both(self):
         bfm.handle("bfm_lev10", self.send, "1", lambda fn: fn())
