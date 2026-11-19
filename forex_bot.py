@@ -356,7 +356,8 @@ def keyboard():
     d = _load()
     return [[{"text": "⏸️ Desligar robô" if d.get("on") else "▶️ Ligar robô", "callback_data": "fx_off" if d.get("on") else "fx_on"},
              {"text": "🔄 Atualizar", "callback_data": "fx"}],
-            [{"text": "🔌 Ligar conta no MetaApi", "callback_data": "fx_deploy"}, {"text": "❌ Fechar todas", "callback_data": "fx_close"}]]
+            [{"text": "🔌 Ligar conta no MetaApi", "callback_data": "fx_deploy"}, {"text": "❌ Fechar todas", "callback_data": "fx_close"}],
+            [{"text": "₿ Voltar ao BTC Full Margin", "callback_data": "bfm"}]]
 
 
 def handle(action, send, chat, run_async):

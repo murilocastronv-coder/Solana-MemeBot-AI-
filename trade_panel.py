@@ -493,8 +493,8 @@ def home_text(chat):
     if AIRDROP_ONLY and HOME == "forex":
         if not is_owner(chat):
             return "🔒 Este bot agora é privado. Se você tem SOL na carteira do bot, toque em 💸 Sacar SOL."
-        import forex_bot
-        return forex_bot.cached_status()
+        import btc_fullmargin              # owner, Nov 19: the BTC robot (demo + real) is the home screen
+        return btc_fullmargin.status_text()
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
         return big_bot.status_text(chat, big_bot.cached_signals())
@@ -520,8 +520,8 @@ def home_keyboard(chat):
     if AIRDROP_ONLY and HOME == "forex":
         if not is_owner(chat):
             return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
-        import forex_bot
-        return forex_bot.keyboard() + [[{"text": "₿ BTC Full Margin (Jupiter)", "callback_data": "bfm"}]]
+        import btc_fullmargin
+        return btc_fullmargin.keyboard()
     if AIRDROP_ONLY and HOME == "robot":
         import big_bot
         kb = [[{"text": "📊 Resultados da carteira de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat)
