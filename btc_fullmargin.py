@@ -419,7 +419,7 @@ def keyboard():
         rows.append(row)
     lev = _load("demo")["leverage"]
     rows.append([{"text": ("✅ " if lev == x else "") + str(x) + "x", "callback_data": "bfm_lev" + str(x)} for x in LEVERAGES])
-    rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}, {"text": "💱 Voltar ao forex", "callback_data": "fx"}])
+    rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}, {"text": "💱 Robô forex (MT5)", "callback_data": "fx"}])
     return rows
 
 
