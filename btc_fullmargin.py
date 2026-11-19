@@ -4,7 +4,7 @@ Two separate accounts (owner, Nov 19): a DEMO account (fake money, real prices, 
 (the bot wallet on Jupiter Perps). Each one trades a capital of US$ 100 per day:
 - every day (UTC) the account starts again with CAPITAL_USD (100); "full margin" = the whole account balance is the
   collateral of each short, so a win makes the next short bigger;
-- DAILY TARGET: when the account reaches TARGET_USD (210) it closes and STOPS until the next day;
+- DAILY TARGET: when the account reaches TARGET_USD (250) it closes and STOPS until the next day;
   DAILY LOSS LIMIT: at 50% of the capital (US$ 50) it also closes and stops until the next day;
 - SHORT ONLY, leverage chosen by the owner (2x-10x, default 5x), one position per account, day and night;
 - reads the BTC 5-minute chart (score -9..+9: trend M15 + H1, last 10 candles, highs/lows, EMA20, candle patterns,
@@ -24,7 +24,7 @@ import requests
 
 MIN_SCORE = int(os.getenv("BTCFM_MIN_SCORE", "4"))
 CAPITAL_USD = float(os.getenv("BTCFM_CAPITAL_USD", "100"))
-TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "210"))
+TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "250"))
 MAX_LOSS = 0.5
 LEVERAGES = (2, 3, 5, 10)
 DEFAULT_LEVERAGE = 5
@@ -408,18 +408,17 @@ def status_text():
 
 
 def keyboard():
-    rows = []
-    for m in MODES:
-        d = _load(m)
-        label = "Demo" if m == "demo" else "Real"
-        row = [{"text": ("⏸️ Desligar " if d["on"] else "▶️ Ligar ") + label,
-                "callback_data": ("bfm_off_" if d["on"] else "bfm_on_") + m}]
-        if d.get("pos"):
-            row.append({"text": "❌ Fechar short " + label, "callback_data": "bfm_close_" + m})
-        rows.append(row)
+    acc = {m: _load(m) for m in MODES}
+    rows = [[{"text": ("⏸️ Desligar " if acc[m]["on"] else ("🧪 Ligar " if m == "demo" else "💰 Ligar ")) + m.upper(),
+              "callback_data": ("bfm_off_" if acc[m]["on"] else "bfm_on_") + m} for m in MODES]]
+    closes = [{"text": "❌ Fechar short " + m.upper(), "callback_data": "bfm_close_" + m} for m in MODES if acc[m].get("pos")]
+    if closes:
+        rows.append(closes)
     lev = _load("demo")["leverage"]
     rows.append([{"text": ("✅ " if lev == x else "") + str(x) + "x", "callback_data": "bfm_lev" + str(x)} for x in LEVERAGES])
-    rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}, {"text": "💱 Robô forex (MT5)", "callback_data": "fx"}])
+    rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
+                 {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
+    rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
