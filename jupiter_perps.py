@@ -38,6 +38,12 @@ BTC_CUSTODY = Pubkey.from_string("5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm")
 USDC_CUSTODY = Pubkey.from_string("G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa")
 USDC_MINT = Pubkey.from_string("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
 WBTC_MINT = Pubkey.from_string("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh")
+SOL_CUSTODY = Pubkey.from_string("7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz")
+ETH_CUSTODY = Pubkey.from_string("AQCGyheWPLeo6Qp9WpYS9m3Qj479t7R636N9ey1rEjEn")
+WSOL_MINT = Pubkey.from_string("So11111111111111111111111111111111111111112")
+WETH_MINT = Pubkey.from_string("7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs")
+CUSTODY = {"BTC": BTC_CUSTODY, "SOL": SOL_CUSTODY, "ETH": ETH_CUSTODY}      # market traded
+LONG_MINT = {"BTC": WBTC_MINT, "SOL": WSOL_MINT, "ETH": WETH_MINT}        # longs keep the asset itself as collateral
 TOKEN_PROGRAM = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 ATA_PROGRAM = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
 SYSTEM_PROGRAM = Pubkey.from_string("11111111111111111111111111111111")
@@ -73,13 +79,13 @@ def ata(owner, mint):
     return Pubkey.find_program_address([bytes(owner), bytes(TOKEN_PROGRAM), bytes(mint)], ATA_PROGRAM)[0]
 
 
-def collateral_custody(side):
-    return BTC_CUSTODY if side == "long" else USDC_CUSTODY
+def collateral_custody(side, asset="BTC"):
+    return CUSTODY[asset] if side == "long" else USDC_CUSTODY
 
 
-def position_pda(owner, side):
+def position_pda(owner, side, asset="BTC"):
     return Pubkey.find_program_address(
-        [b"position", bytes(owner), bytes(POOL), bytes(BTC_CUSTODY), bytes(collateral_custody(side)),
+        [b"position", bytes(owner), bytes(POOL), bytes(CUSTODY[asset]), bytes(collateral_custody(side, asset)),
          bytes([SIDE[side]])], PROGRAM_ID)[0]
 
 
@@ -98,33 +104,33 @@ def _tail():
             _meta(EVENT_AUTHORITY), _meta(PROGRAM_ID)]
 
 
-def increase_ix(owner, side, collateral_usdc_raw, size_usd_raw, price_limit_raw, jupiter_min_out, counter):
-    position = position_pda(owner, side)
+def increase_ix(owner, side, collateral_usdc_raw, size_usd_raw, price_limit_raw, jupiter_min_out, counter, asset="BTC"):
+    position = position_pda(owner, side, asset)
     request = request_pda(position, counter, True)
     data = (_disc("createIncreasePositionMarketRequest") + _u64(size_usd_raw) + _u64(collateral_usdc_raw) +
             bytes([SIDE[side]]) + _u64(price_limit_raw) + _opt_u64(jupiter_min_out) + _u64(counter))
     accounts = [_meta(owner, True, True), _meta(ata(owner, USDC_MINT), True), _meta(PERPETUALS), _meta(POOL),
                 _meta(position, True), _meta(request, True), _meta(ata(request, USDC_MINT), True),
-                _meta(BTC_CUSTODY), _meta(collateral_custody(side)), _meta(USDC_MINT)] + _tail()
+                _meta(CUSTODY[asset]), _meta(collateral_custody(side, asset)), _meta(USDC_MINT)] + _tail()
     return Instruction(PROGRAM_ID, data, accounts)
 
 
-def decrease_ix(owner, side, price_limit_raw, counter, size_raw=0, collateral_raw=0):
+def decrease_ix(owner, side, price_limit_raw, counter, size_raw=0, collateral_raw=0, asset="BTC"):
     """Close the entire position, or (size_raw > 0) only that part of it."""
-    position = position_pda(owner, side)
+    position = position_pda(owner, side, asset)
     request = request_pda(position, counter, False)
     data = (_disc("createDecreasePositionMarketRequest") + _u64(collateral_raw) + _u64(size_raw) + _u64(price_limit_raw) +
             _opt_u64(None) + _opt_bool(None if size_raw else True) + _u64(counter))
     accounts = [_meta(owner, True, True), _meta(ata(owner, USDC_MINT), True), _meta(PERPETUALS), _meta(POOL),
                 _meta(position), _meta(request, True), _meta(ata(request, USDC_MINT), True),
-                _meta(BTC_CUSTODY), _meta(collateral_custody(side)), _meta(USDC_MINT)] + _tail()
+                _meta(CUSTODY[asset]), _meta(collateral_custody(side, asset)), _meta(USDC_MINT)] + _tail()
     return Instruction(PROGRAM_ID, data, accounts)
 
 
 # ------------------------------------------------------------------ on-chain reads
-def read_position(owner, side):
+def read_position(owner, side, asset="BTC"):
     """Decoded Position account (sizes/prices in USD), or None if it does not exist."""
-    info = rpc("getAccountInfo", [str(position_pda(owner, side)), {"encoding": "base64", "commitment": "confirmed"}])
+    info = rpc("getAccountInfo", [str(position_pda(owner, side, asset)), {"encoding": "base64", "commitment": "confirmed"}])
     value = (info or {}).get("value")
     if not value:
         return None
@@ -168,10 +174,10 @@ def _send(instructions):
     return rpc("sendTransaction", [encoded, {"encoding": "base64", "skipPreflight": True, "maxRetries": 3}])
 
 
-def _wait(owner, side, opened, min_size=0.0, max_size=None):
+def _wait(owner, side, opened, min_size=0.0, max_size=None, asset="BTC"):
     deadline = time.monotonic() + CONFIRM_TIMEOUT
     while time.monotonic() < deadline:
-        pos = read_position(owner, side)
+        pos = read_position(owner, side, asset)
         size = (pos or {}).get("size_usd", 0)
         if opened and size > min_size + 0.01:
             return pos
@@ -182,7 +188,7 @@ def _wait(owner, side, opened, min_size=0.0, max_size=None):
                      "dinheiro volta para a carteira)")
 
 
-def open_position(side, collateral_usd, leverage, btc_price, min_size=0.0):
+def open_position(side, collateral_usd, leverage, btc_price, min_size=0.0, asset="BTC"):
     """Open (or add to) a BTC position with USDC collateral. Returns the on-chain position.
     For an add, pass the current size as min_size so we wait until the keeper increased it."""
     owner = Pubkey.from_string(get_address())
@@ -195,24 +201,24 @@ def open_position(side, collateral_usd, leverage, btc_price, min_size=0.0):
     min_out = None
     if side == "long":  # the program swaps USDC -> BTC collateral; guard the swap
         from jupiter_v2_executor import order
-        out = int(order(str(USDC_MINT), str(WBTC_MINT), collateral_raw)["outAmount"])
+        out = int(order(str(USDC_MINT), str(LONG_MINT[asset]), collateral_raw)["outAmount"])
         min_out = int(out * (1 - SLIPPAGE))
-    sig = _send([increase_ix(owner, side, collateral_raw, size_raw, int(limit * 1e6), min_out, counter)])
-    pos = _wait(owner, side, opened=True, min_size=min_size)
+    sig = _send([increase_ix(owner, side, collateral_raw, size_raw, int(limit * 1e6), min_out, counter, asset)])
+    pos = _wait(owner, side, opened=True, min_size=min_size, asset=asset)
     pos["signature"] = sig
     return pos
 
 
-def close_position(side, btc_price):
+def close_position(side, btc_price, asset="BTC"):
     """Close the whole position back to USDC. Returns the final on-chain state."""
     owner = Pubkey.from_string(get_address())
-    current = read_position(owner, side)
+    current = read_position(owner, side, asset)
     if not current or current["size_usd"] == 0:
         return {"size_usd": 0, "already_closed": True}
     counter = random.getrandbits(63)
     limit = btc_price * (1 - SLIPPAGE if side == "long" else 1 + SLIPPAGE)
-    sig = _send([decrease_ix(owner, side, int(limit * 1e6), counter)])
-    pos = _wait(owner, side, opened=False)
+    sig = _send([decrease_ix(owner, side, int(limit * 1e6), counter, asset=asset)])
+    pos = _wait(owner, side, opened=False, asset=asset)
     pos["signature"] = sig
     return pos
 

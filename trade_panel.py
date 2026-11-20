@@ -854,7 +854,7 @@ def handle(action, text, send, chat, tail=None, run_async=None):
             return False
         return btc_fullmargin.handle(action, send, chat, run_async)
     if AIRDROP_ONLY and HOME == "btc" and action not in ("thome", "/home"):
-        send(chat, "₿ O bot agora é só o robô BTC Full Margin (contas demo e real). Essa função foi removida.", home_keyboard(chat))
+        send(chat, "O bot agora é só o robô Full Margin SOL (contas demo e real). Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("trpos", "/posicoes_robo"):
         import big_bot
