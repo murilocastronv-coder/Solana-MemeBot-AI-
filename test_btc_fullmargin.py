@@ -406,10 +406,31 @@ class Backtest(Base):
         self.assertTrue(d["hist"])
         self.assertTrue(all(h["side"] == "short" for h in d["hist"]))
         runs = []
-        with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None: runs.append((days, asset, only))):
+        with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None, plan=None: runs.append((days, asset, only))):
             bfm.handle("bfm_bts90_eth", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bts_sol", self.send, "1", lambda fn: fn())
         self.assertEqual(runs, [(90, "ETH", "short"), (30, "SOL", "short")])
+
+    def test_dynamic_leverage_plan(self):
+        bfm.LEV_PLAN["demo"] = bfm.DYN_PLAN
+        self.addCleanup(bfm.LEV_PLAN.pop, "demo", None)
+        cs = candles()
+        self.turn_on(trades=1)
+        self.cyc(cs)
+        pos = bfm._load("demo")["pos"]
+        self.assertEqual(pos["size_usd"], 30.0 * 15)                       # 1st order at 15x
+        o = cs[-1]["c"] * 1.006
+        later = cs[:-1] + [dict(cs[-2], t=cs[-1]["t"], o=o * 1.001, c=o, h=o * 1.001, l=o), dict(cs[-2], t=cs[-1]["t"] + 300, c=o)]
+        with patch.object(bfm, "read_chart", return_value=(-5, 10.0, "leitura -5")):
+            self.assertEqual(self.cyc(later), "reforço")
+        pos = bfm._load("demo")["pos"]
+        self.assertAlmostEqual(pos["size_usd"], 30.0 * 15 + 17.5 * 20)        # 1st recovery at 20x
+        self.assertIn("20x", self.msgs[-1])
+        self.assertAlmostEqual(bfm.effective_lev(pos), (450 + 350) / 47.5)
+        runs = []
+        with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None, plan=None: runs.append((days, asset, plan))):
+            bfm.handle("bfm_btd90_sol", self.send, "1", lambda fn: fn())
+        self.assertEqual(runs, [(90, "SOL", bfm.DYN_PLAN)])
 
     def test_button(self):
         self.assertIn("bfm_bt", [b["callback_data"] for row in bfm.keyboard() for b in row])
@@ -419,7 +440,7 @@ class Backtest(Base):
         for cb in ("bfm_bt_sol", "bfm_bt90_sol", "bfm_bt_eth", "bfm_bt90_eth"):
             self.assertIn(cb, cbs)
         runs = []
-        with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None: runs.append((days, asset))):
+        with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None, plan=None: runs.append((days, asset))):
             bfm.handle("bfm_bt90_sol", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt_eth", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt", self.send, "1", lambda fn: fn())
