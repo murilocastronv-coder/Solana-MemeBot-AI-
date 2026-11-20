@@ -1,17 +1,18 @@
-"""BTC FULL MARGIN (owner, Nov 19): the MT5 "Full Margin" robot ported to BTC on Jupiter Perpetuals.
+"""BTC FULL MARGIN (owner, Nov 20): the same strategy as the owner's MT5 robot FullMargin_7, on BTC (Jupiter Perps).
 
-Two separate accounts (owner, Nov 19): a DEMO account (fake money, real prices, fees included) and a REAL account
-(the bot wallet on Jupiter Perps). Each one trades a capital of US$ 100 per day:
-- every day (UTC) the account starts again with CAPITAL_USD (100); "full margin" = the whole account balance is the
-  collateral of each short, so a win makes the next short bigger;
-- DAILY TARGET: when the account reaches TARGET_USD (150) it closes and STOPS until the next day;
-  DAILY LOSS LIMIT: at 50% of the capital (US$ 50) it also closes and stops until the next day;
-- SHORT ONLY, leverage chosen by the owner (2x-15x, default 5x), one position per account, day and night;
-- reads the BTC 5-minute chart (score -9..+9: trend M15 + H1, last 10 candles, highs/lows, EMA20, candle patterns,
-  strong candle); opens a short right away at the start of the day/when switched on, then shorts at score <= -4;
-- stop behind the last 5 candles (0.8-2.5 ATR, far from liquidation); target 2x the risk (at least 0.6%); stop locks the
-  fees + 0.12% at +0.8 risk and trailing stop from +1.2 risk; 2 losses in a row = 15 min pause.
-Both start OFF. The REAL account needs the SOL in the bot wallet (swapped to USDC collateral for each short).
+Two separate accounts: DEMO (fake money, real prices, fees included) and REAL (the bot wallet on Jupiter Perps).
+Each one starts every day (00:00 UTC) with US$ 100 (minimum capital), day and night:
+- BUY (long) AND SELL (short). Reads the BTC 5-minute chart (score -9..+9);
+- STRONG MOVE: BTC moved >= 1.5 ATR of the 1 h chart in the last 6 h and is on that side of the 1 h EMA50 ->
+  trades MORE in that direction (score 3, full lot); otherwise trades MUCH LESS (score 7, at most 1 entry per
+  hour, half lot). The first order of the day opens right away to the side of the reading;
+- AVERAGE PRICE: if the price goes 0.5% against the last order, it opens one more on the same side (up to 5) and
+  CLOSES ALL when the orders together are 0.4% above the average price (BTC version of "20 pips / +10 pips";
+  0.4% leaves profit after the ~0.12% Jupiter fees);
+- MARGIN: 100% of the balance split across the 5 orders while the balance is under US$ 150, then 40%;
+- the day stops at the TARGET (US$ 300, like the MT5 robot) or at the LOSS LIMIT (50% = US$ 50);
+  a protection closes everything before the liquidation price (60% of the way).
+Both start OFF. The REAL account needs SOL in the bot wallet (swapped to USDC collateral for each order).
 """
 import json
 import logging
@@ -24,28 +25,32 @@ import requests
 
 MIN_SCORE = int(os.getenv("BTCFM_MIN_SCORE", "4"))
 CAPITAL_USD = float(os.getenv("BTCFM_CAPITAL_USD", "100"))
-TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "150"))   # owner, Nov 20: daily target US$ 150
+TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "300"))   # owner, Nov 20: same as the MT5 robot (target 300)
 MAX_LOSS = 0.5
-BASE_RISK = 0.5                 # owner, Nov 20: always 50% of the balance as collateral
-RISK_DOWN_FROM = 200.0          # ... and only above US$ 200 the risk goes down
-MIN_RISK = 0.1
+GRID_MAX = 5                    # up to 5 orders on the same side (average price)
+GRID_STEP_PCT = 0.005           # next order when the price goes 0.5% against the last one
+BASKET_TP_PCT = 0.004           # close ALL at +0.4% over the average price
+STRONG_ATR = 1.5                # strong move: >= 1.5 ATR(1 h) in 6 h, on that side of the 1 h EMA50
+SCORE_STRONG, SCORE_WEAK = 3, 7
+WEAK_EVERY_S = 3600             # no strong move: at most 1 entry per hour
+WEAK_LOT = 0.5                  # ... with half the lot
+TOTAL_MARGIN, SAFE_FROM, SAFE_MARGIN = 1.0, 150.0, 0.4
+LIQ_GUARD = 0.6                 # closes everything at 60% of the way to the liquidation price
 
 
-def risk_pct(capital):
-    """Share of the balance used as collateral: 50% with any balance up to US$ 200; above that
-    50% x (200 / balance)^2 (250 -> 32%, 300 -> 22%, 400 -> 12.5%), never under 10%."""
-    if capital <= RISK_DOWN_FROM:
-        return BASE_RISK
-    return max(MIN_RISK, BASE_RISK * (RISK_DOWN_FROM / capital) ** 2)
+def total_margin(capital):
+    """Share of the balance used by the 5 orders together: 100% under US$ 150, 40% from US$ 150."""
+    return TOTAL_MARGIN if capital < SAFE_FROM else SAFE_MARGIN
+
+
+def order_collateral(capital, factor=1.0):
+    """Collateral of ONE order: the total margin split across the GRID_MAX orders."""
+    return round(capital * total_margin(capital) / GRID_MAX * factor, 2)
+
+
 LEVERAGES = (2, 3, 5, 10, 15)
 DEFAULT_LEVERAGE = 5
-RR = 2.0                        # owner, Nov 19: bigger target (the fees ate the small wins)
-BE_R, TRAIL_START_R, TRAIL_DIST_R = 0.8, 1.2, 0.5
-MIN_STOP_PCT = 0.003            # risk at least 0.3% of the price -> target >= 0.6%, 5x the 0.12% fees
-BE_LOCK_PCT = 0.0012            # the "stop in profit" locks the fees (0.12%) + 0.12% net
 PAUSE_LOSSES, PAUSE_S = 2, 15 * 60
-LOSSES_DAY = 2                  # owner, Nov 20: 2 losses in the day -> stops until the next day
-AFTER_WIN = 4                   # owner, Nov 20: after each win, at most 4 more shorts that day
 FEE_RATE = 0.0006               # per side, on the position size
 BORROW_RATE_H = 0.0001          # Jupiter borrow fee estimate: ~0.01% of the size per hour held
 PHOTO = None                    # telegram_bot sets this to its send_photo (charts in the results)
@@ -103,7 +108,7 @@ def new_day(d, now=None):
                                                      "result": round(d["capital"] - CAPITAL_USD, 2),
                                                      "why": d.get("done_why") or ""}]
     d.update(day=today(now), capital=CAPITAL_USD, done_why="", wins=0, losses=0, trades=0, consec=0,
-             pause_until=0, last_bar=0, budget=-1)
+             pause_until=0, last_bar=0, last_entry=0)
 
 
 # ------------------------------------------------------------------ market data
@@ -215,41 +220,57 @@ def read_chart(closed):
     return sc, a, "leitura " + format(sc, "+d") + (" " + name if name else "")
 
 
-def stop_distance(closed, a, price, lev):
-    """Short: stop above the high of the last 5 candles (+0.2 ATR), 0.8-2.5 ATR, at most 60% of the way to liquidation."""
-    ref = max(c["h"] for c in closed[-5:]) + 0.2 * a - price
-    dist = max(min(max(ref, 0.8 * a), 2.5 * a), price * MIN_STOP_PCT)   # never a target too small for the fees
-    return min(dist, price * 0.6 / lev)
+def strong_move(closed):
+    """(direction, size): +1 strong rise / -1 strong fall / 0, and the 6 h move in ATRs of the 1 h chart."""
+    hourly = group(closed, 3600)
+    if len(hourly) < 60:
+        return 0, 0.0
+    a = atr(hourly[-100:])
+    if a <= 0:
+        return 0, 0.0
+    price = closed[-1]["c"]
+    move = (price - hourly[-7]["c"]) / a
+    e50 = ema([c["c"] for c in hourly], 50)[-1]
+    if move <= -STRONG_ATR and price < e50:
+        return -1, move
+    if move >= STRONG_ATR and price > e50:
+        return 1, move
+    return 0, move
+
+
+def _sgn(pos):
+    return 1 if pos.get("side", "short") == "long" else -1
 
 
 def breakdown(pos, price, now=None):
-    """Short result in USD: (gross, fees, net). Fees = open + close (0.06% each) + borrow fee per hour held."""
-    gross = pos["size_usd"] * (pos["entry"] - price) / pos["entry"]
+    """Result in USD of the open orders: (gross, fees, net). Fees = open + close (0.06% each) + borrow per hour."""
+    gross = pos["size_usd"] * (price - pos["entry"]) / pos["entry"] * _sgn(pos)
     hours = max(0.0, ((now or time.time()) - pos["opened"]) / 3600) if pos.get("opened") else 0.0
     fees = pos["size_usd"] * (FEE_RATE * 2 + BORROW_RATE_H * hours)
     return gross, fees, gross - fees
 
 
-def pnl_usd(pos, price):
-    """Short P/L in USD after all the fees (what is left in the account)."""
-    return breakdown(pos, price)[2]
+def pnl_usd(pos, price, now=None):
+    """P/L in USD after all the fees (what is left in the account)."""
+    return breakdown(pos, price, now)[2]
 
 
-def manage(pos, price):
-    """Moves the stop (breakeven / trailing) and says whether to close: returns (why or '', new_stop)."""
-    R = pos["risk"]
-    prof = pos["entry"] - price
-    stop = pos["stop"]
-    lock = pos["entry"] * (1 - FEE_RATE * 2 - BE_LOCK_PCT)       # pays the fees AND keeps a real profit
-    if prof >= BE_R * R and price < lock:
-        stop = min(stop, lock)
-    if prof >= TRAIL_START_R * R:
-        stop = min(stop, price + TRAIL_DIST_R * R, lock)
-    if price <= pos["entry"] - RR * R:
-        return "🎯 ALVO", stop
-    if price >= stop:
-        return ("🛡️ STOP NO LUCRO" if stop < pos["entry"] else "🛑 STOP"), stop
-    return "", stop
+def basket_pct(pos, price):
+    """How far the price is from the average price, in the favour of the orders (0.004 = +0.4%)."""
+    return (price - pos["entry"]) / pos["entry"] * _sgn(pos)
+
+
+def tp_price(pos):
+    return pos["entry"] * (1 + BASKET_TP_PCT * _sgn(pos))
+
+
+def next_grid_price(pos):
+    return pos.get("last", pos["entry"]) * (1 - GRID_STEP_PCT * _sgn(pos))
+
+
+def side_name(pos_or_side):
+    side = pos_or_side if isinstance(pos_or_side, str) else pos_or_side.get("side", "short")
+    return "COMPRA (long)" if side == "long" else "VENDA (short)"
 
 
 # ------------------------------------------------------------------ money
@@ -258,47 +279,59 @@ def sol_usd():
     return float(ct._sol_usd())
 
 
-def equity(d, price=None):
+def equity(d, price=None, now=None):
     """Account value: the day's capital (100 + realized P/L) + the open short's P/L."""
     v = d["capital"]
     if d.get("pos") and price:
-        v += pnl_usd(d["pos"], price)
+        v += pnl_usd(d["pos"], price, now)
     return v
 
 
-def _open(d, price, dist, why):
+def _open(d, price, side, why, factor=1.0, now=None):
+    """Opens the first order or ADDS one to the average price (same side). Returns the position."""
     lev = d["leverage"]
-    col = round(d["capital"] * risk_pct(d["capital"]), 2)   # 50% of the balance, less above US$ 200
-    if col < 5:
-        raise RuntimeError("saldo da conta abaixo de US$ 5")
-    pos = {"entry": price, "size_usd": col * lev, "collateral_usd": col, "risk": dist, "stop": price + dist,
-           "opened": int(time.time()), "why": why}
+    col = order_collateral(d["capital"], factor)
+    if col < 2:
+        raise RuntimeError("saldo da conta baixo demais para mais uma ordem")
+    pos = d.get("pos")
+    sig = None
+    onchain_avg = None
     if d["mode"] == "real":
         import jupiter_perps as jp
         jp.ensure_usdc(col, sol_usd())
-        out = jp.open_position("short", col, lev, price)
-        pos["entry"] = float(out.get("price") or price)
-        pos["stop"] = pos["entry"] + dist
-        pos["signature"] = out.get("signature")
-    d["pos"] = pos
+        out = jp.open_position(side, col, lev, price, min_size=(pos or {}).get("size_usd", 0.0))
+        onchain_avg = float(out.get("price") or 0) or None
+        sig = out.get("signature")
+    add = col * lev
+    t = int(now or time.time())
+    if pos:
+        size = pos["size_usd"] + add
+        entry = size / (pos["size_usd"] / pos["entry"] + add / price)        # average price of the USD notional
+        pos.update(size_usd=size, entry=onchain_avg or entry, collateral_usd=pos["collateral_usd"] + col,
+                   n=pos.get("n", 1) + 1, last=price)
+    else:
+        pos = {"side": side, "entry": onchain_avg or price, "size_usd": add, "collateral_usd": col, "n": 1,
+               "last": price, "opened": t, "why": why, "factor": factor}
+        d["pos"] = pos
+    if sig:
+        pos["signature"] = sig
     d["trades"] += 1
-    if d.get("budget", -1) > 0:
-        d["budget"] -= 1
+    d["last_entry"] = t
     return pos
 
 
-def _close(d, price, why):
+def _close(d, price, why, now=None):
     """Closes the short. Result after the fees goes into the account; lifetime totals and the curve are updated."""
     pos = d["pos"]
     sig = None
-    gross, fees, net = breakdown(pos, price)
+    gross, fees, net = breakdown(pos, price, now)
     if d["mode"] == "real":
         import jupiter_perps as jp
         from solders.pubkey import Pubkey
         from bot_wallet_service import get_address
         owner = Pubkey.from_string(get_address())
         before = jp.usdc_balance(owner)
-        out = jp.close_position("short", price)
+        out = jp.close_position(pos.get("side", "short"), price)
         sig = out.get("signature")
         try:                                  # the real result: USDC that came back minus the collateral put in
             received = jp.usdc_balance(owner) - before
@@ -315,7 +348,6 @@ def _close(d, price, why):
     if net >= 0:
         d["wins"] += 1
         d["consec"] = 0
-        d["budget"] = AFTER_WIN
     else:
         d["losses"] += 1
         d["consec"] += 1
@@ -333,19 +365,22 @@ def _close(d, price, why):
     tot["worst"] = min(tot["worst"], net)
     d["curve"] = (d.get("curve") or [])[-499:] + [[int(time.time()), round(tot["net"], 2)]]
     d["last_close"] = {"gross": round(gross, 2), "fees": round(fees, 2), "net": round(net, 2)}
-    d["hist"] = (d.get("hist") or [])[-49:] + [{"entry": pos["entry"], "exit": price, "pnl": round(net, 2),
+    d["hist"] = (d.get("hist") or [])[-49:] + [{"side": pos.get("side", "short"), "n": pos.get("n", 1),
+                                                 "entry": pos["entry"], "exit": price, "pnl": round(net, 2),
                                                  "gross": round(gross, 2), "fees": round(fees, 2),
                                                  "why": why, "t": int(time.time())}]
     d["pos"] = None
     return net, sig
 
 
-def close_text(d, why, price, entry):
-    """Notification of a closed short: gross, fees, net, account balance and the total so far."""
+def close_text(d, why, price, entry, pos=None):
+    """Notification of closed orders: gross, fees, net, account balance and the total so far."""
+    pos = pos or (d.get("hist") or [{}])[-1]
     lc, tot = d["last_close"], d["total"]
     head = ("✅ LUCRO " if lc["net"] >= 0 else "❌ PREJUÍZO ") + format(lc["net"], "+.2f") + " USD (depois das taxas)"
     return ("₿ BTC FULL MARGIN " + NAME[d["mode"]] + " — " + why + "\n" + head +
-            "\nShort: entrada $" + format(entry, ",.0f") + " → saída $" + format(price, ",.0f") +
+            "\n" + side_name(pos.get("side", "short")) + " · " + str(pos.get("n", 1)) + " ordem(ns) · preço médio $" +
+            format(entry, ",.0f") + " → saída $" + format(price, ",.0f") +
             "\n💵 Bruto " + format(lc["gross"], "+.2f") + " · taxas −" + format(lc["fees"], ".2f") +
             " · líquido " + format(lc["net"], "+.2f") +
             "\n💼 Saldo da conta: US$ " + format(d["capital"], ".2f") + " (hoje " + format(d["capital"] - CAPITAL_USD, "+.2f") + ")" +
@@ -379,12 +414,12 @@ def cycle(mode, send, chat, now=None, klines=None):
                 send(chat, "🌅 BTC FULL MARGIN " + tag + ": novo dia, capital de volta a US$ " + format(CAPITAL_USD, ".0f") +
                      " · meta US$ " + format(TARGET_USD, ".0f") + ". Ontem: " + format(d["days"][-1]["result"], "+.2f") + " USD.")
         # daily target / loss limit
-        eq = equity(d, price)
+        eq = equity(d, price, now)
         hit = eq >= TARGET_USD
         if d["on"] and not d["done_why"] and (hit or eq <= CAPITAL_USD * (1 - MAX_LOSS)):
             if pos:
-                _close(d, price, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA")
-                send(chat, close_text(d, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA", price, pos["entry"]))
+                _close(d, price, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA", now)
+                send(chat, close_text(d, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA", price, pos["entry"], pos))
             d["done_why"] = "META DO DIA BATIDA" if hit else "LIMITE DE PERDA DO DIA"
             _save(d)
             send(chat, ("🎯 BTC FULL MARGIN " + tag + ": META DO DIA BATIDA! " if hit else
@@ -393,27 +428,37 @@ def cycle(mode, send, chat, now=None, klines=None):
                  ". Parou de operar hoje; volta sozinho amanhã (00:00 UTC) com US$ " + format(CAPITAL_USD, ".0f") + ".")
             return d["done_why"]
         if pos:
-            why, new_stop = manage(pos, price)
-            pos["stop"] = new_stop
+            bp = basket_pct(pos, price)
+            why = ""
+            if bp >= BASKET_TP_PCT:
+                why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO"
+            elif bp <= -LIQ_GUARD / d["leverage"]:
+                why = "🛑 PROTEÇÃO (perto da liquidação)"
             if why:
-                pnl, sig = _close(d, price, why)
+                pnl, sig = _close(d, price, why, now)
                 _save(d)
-                send(chat, close_text(d, why, price, pos["entry"]) + _tx(sig) +
-                     ("\n⏸️ 2 perdas seguidas: pausa de 15 min." if d["pause_until"] > now else ""))
+                send(chat, close_text(d, why, price, pos["entry"], pos) + _tx(sig))
                 return "fechou"
+            # average price: the price went 0.5% against the last order -> one more on the same side (up to 5)
+            if d["on"] and not d["done_why"] and pos.get("n", 1) < GRID_MAX and \
+                    (price - next_grid_price(pos)) * _sgn(pos) <= 0:
+                try:
+                    _open(d, price, pos["side"], "preço médio", pos.get("factor", 1.0), now)
+                except Exception as exc:
+                    _save(d)
+                    send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem do preço médio (" + str(exc)[:160] + ").")
+                    return "erro"
+                _save(d)
+                send(chat, "➕ BTC FULL MARGIN " + tag + " — ordem " + str(pos["n"]) + "/" + str(GRID_MAX) + " (" +
+                     side_name(pos) + ") em $" + format(price, ",.0f") + "\nPreço médio agora $" + format(pos["entry"], ",.0f") +
+                     " · fecha tudo em $" + format(tp_price(pos), ",.0f") + " (+" + format(BASKET_TP_PCT * 100, ".1f") +
+                     "%)" + _tx(pos.get("signature")))
+                return "preço médio"
             _save(d)
             return "posição aberta"
         if not d["on"]:
             _save(d)
             return "desligado"
-        if not d["done_why"] and (d["losses"] >= LOSSES_DAY or d.get("budget", -1) == 0):
-            d["done_why"] = (str(d["losses"]) + " PERDAS NO DIA" if d["losses"] >= LOSSES_DAY else
-                             "FEZ AS " + str(AFTER_WIN) + " ORDENS DEPOIS DO GANHO")
-            _save(d)
-            send(chat, "⏹️ BTC FULL MARGIN " + tag + ": " + d["done_why"] + ". Parou de operar hoje com US$ " +
-                 format(d["capital"], ".2f") + " (" + format(d["capital"] - CAPITAL_USD, "+.2f") +
-                 "); volta sozinho amanhã (00:00 UTC) com US$ " + format(CAPITAL_USD, ".0f") + ".")
-            return d["done_why"]
         if d["done_why"]:
             _save(d)
             return "parado até amanhã"
@@ -422,27 +467,40 @@ def cycle(mode, send, chat, now=None, klines=None):
         if bar == d["last_bar"] and not first:
             return "esperando candle"
         d["last_bar"] = bar
-        if d["pause_until"] > now and not first:
-            _save(d)
-            return "pausa"
         score, a, reading = read_chart(closed)
-        LAST.update(score=score, reading=reading)
-        if not first and score > -MIN_SCORE:
-            _save(d)
-            return "sem sinal (" + reading + ")"
-        dist = stop_distance(closed, a, price, d["leverage"])
-        why = ("início do dia, " if first else "") + reading
+        sdir, move = strong_move(closed)
+        LAST.update(score=score, reading=reading, strong=sdir, move=round(move, 2))
+        if first:
+            side_dir, factor = (1 if score >= 0 else -1), 1.0
+        else:
+            if d["pause_until"] > now and not sdir:
+                _save(d)
+                return "pausa"
+            if not sdir and now - d.get("last_entry", 0) < WEAK_EVERY_S:
+                _save(d)
+                return "sem movimento forte: 1 entrada por hora"
+            need_buy = SCORE_STRONG if sdir == 1 else SCORE_WEAK
+            need_sell = SCORE_STRONG if sdir == -1 else SCORE_WEAK
+            side_dir = 1 if score >= need_buy else (-1 if score <= -need_sell else 0)
+            if not side_dir:
+                _save(d)
+                return "sem sinal (" + reading + ")"
+            factor = 1.0 if side_dir == sdir else WEAK_LOT
+        side = "long" if side_dir == 1 else "short"
+        label = {1: " [ALTA FORTE]", -1: " [QUEDA FORTE]"}.get(sdir, "")
+        why = ("início do dia, " if first else "") + reading + label
         try:
-            pos = _open(d, price, dist, why)
+            pos = _open(d, price, side, why, factor, now)
         except Exception as exc:
             _save(d)
-            send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri o short (" + str(exc)[:160] + ").")
+            send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem (" + str(exc)[:160] + ").")
             return "erro"
         _save(d)
-        send(chat, "₿ BTC FULL MARGIN " + tag + " — SHORT aberto\n" + why + "\nEntrada $" + format(pos["entry"], ",.0f") +
-             " · garantia US$ " + format(pos["collateral_usd"], ".2f") + " · " + str(d["leverage"]) + "x (posição US$ " +
-             format(pos["size_usd"], ",.0f") + ")\n🛑 Stop $" + format(pos["stop"], ",.0f") + " · 🎯 Alvo $" +
-             format(pos["entry"] - RR * dist, ",.0f") + _tx(pos.get("signature")))
+        send(chat, "₿ BTC FULL MARGIN " + tag + " — " + side_name(side) + " aberta (ordem 1/" + str(GRID_MAX) + ")\n" + why +
+             "\nEntrada $" + format(pos["entry"], ",.0f") + " · garantia US$ " + format(pos["collateral_usd"], ".2f") + " · " +
+             str(d["leverage"]) + "x (posição US$ " + format(pos["size_usd"], ",.0f") + ")" +
+             "\n🎯 Fecha tudo em $" + format(tp_price(pos), ",.0f") + " (+" + format(BASKET_TP_PCT * 100, ".1f") +
+             "%) · ➕ próxima ordem se for a $" + format(next_grid_price(pos), ",.0f") + _tx(pos.get("signature")))
         return "abriu"
 
 
@@ -467,10 +525,9 @@ def account_text(mode):
     prog = max(0.0, min(1.0, (eq - CAPITAL_USD) / (TARGET_USD - CAPITAL_USD)))
     L.append("▕" + "█" * int(prog * 10) + "░" * (10 - int(prog * 10)) + "▏ " + format(prog * 100, ".0f") + "% da meta")
     tot = d["wins"] + d["losses"]
-    L.append("🛡️ Risco agora: " + format(risk_pct(d["capital"]) * 100, ".0f") + "% do saldo como garantia (US$ " +
-             format(d["capital"] * risk_pct(d["capital"]), ".2f") + ") — fixo até US$ " + format(RISK_DOWN_FROM, ".0f") + ", depois diminui")
-    L.append("📊 Operações " + str(d["trades"]) + " · ganhos " + str(d["wins"]) + " · perdas " + str(d["losses"]) + "/" +
-             str(LOSSES_DAY) + (" · ordens restantes " + str(d["budget"]) if d.get("budget", -1) >= 0 else "") +
+    L.append("🛡️ Margem: " + format(total_margin(d["capital"]) * 100, ".0f") + "% do saldo em até " + str(GRID_MAX) +
+             " ordens (US$ " + format(order_collateral(d["capital"]), ".2f") + " cada) — 40% a partir de US$ " + format(SAFE_FROM, ".0f"))
+    L.append("📊 Ordens " + str(d["trades"]) + " · fechamentos no lucro " + str(d["wins"]) + " · no prejuízo " + str(d["losses"]) +
              (" · acerto " + format(d["wins"] / tot * 100, ".0f") + "%" if tot else ""))
     tt = d.get("total") or {}
     if tt.get("trades"):
@@ -479,8 +536,8 @@ def account_text(mode):
                  ("✅ LUCRANDO" if tt["net"] > 0 else "❌ NO PREJUÍZO"))
     pos = d.get("pos")
     if pos:
-        L.append("📉 Short aberto: entrada $" + format(pos["entry"], ",.0f") + " · stop $" + format(pos["stop"], ",.0f") +
-                 " · alvo $" + format(pos["entry"] - RR * pos["risk"], ",.0f") +
+        L.append(("📈 " if pos.get("side") == "long" else "📉 ") + side_name(pos) + ": " + str(pos.get("n", 1)) + "/" + str(GRID_MAX) +
+                 " ordens · preço médio $" + format(pos["entry"], ",.0f") + " · fecha tudo em $" + format(tp_price(pos), ",.0f") +
                  (" · agora " + format(pnl_usd(pos, price), "+.2f") + " USD" if price else ""))
     if d["pause_until"] > time.time():
         L.append("⏸️ Pausa até " + time.strftime("%H:%M", time.gmtime(d["pause_until"])) + " UTC (perdas seguidas)")
@@ -498,7 +555,7 @@ def live_text(mode, price, now=None, track=None):
     L = ["📺 AO VIVO — " + NAME[mode] + " (atualiza a cada " + str(LIVE_EVERY_S) + " s)",
          "₿ BTC agora: $" + format(price, ",.2f")]
     if not pos:
-        L.append("⏳ Nenhum short aberto agora " + ("— esperando sinal nos candles de 5 min." if d["on"] else "— conta desligada."))
+        L.append("⏳ Nenhuma ordem aberta agora " + ("— esperando sinal nos candles de 5 min." if d["on"] else "— conta desligada."))
         L.append("💼 Saldo da conta: US$ " + format(d["capital"], ".2f") + " (hoje " + format(d["capital"] - CAPITAL_USD, "+.2f") + ")")
     else:
         gross, fees, net = breakdown(pos, price, now)
@@ -507,19 +564,21 @@ def live_text(mode, price, now=None, track=None):
             track["lo"] = min(track.get("lo", net), net)
         col = pos["collateral_usd"]
         move = (price / pos["entry"] - 1) * 100
-        target = pos["entry"] - RR * pos["risk"]
-        L += ["📉 SHORT " + str(round(pos["size_usd"] / col)) + "x · entrada $" + format(pos["entry"], ",.2f") +
-              " · garantia US$ " + format(col, ".2f") + " (posição US$ " + format(pos["size_usd"], ",.0f") + ")",
+        tp, nxt = tp_price(pos), next_grid_price(pos)
+        L += [("📈 " if pos.get("side") == "long" else "📉 ") + side_name(pos) + " · " + str(pos.get("n", 1)) + "/" + str(GRID_MAX) +
+              " ordens · preço médio $" + format(pos["entry"], ",.2f") + " · garantia US$ " + format(col, ".2f") +
+              " (posição US$ " + format(pos["size_usd"], ",.0f") + ")",
               ("🟢 " if net >= 0 else "🔴 ") + "FLUTUAÇÃO: " + format(net, "+.2f") + " USD (" + format(net / col * 100, "+.1f") +
               "% da garantia) — já com as taxas",
               "💵 Bruto " + format(gross, "+.2f") + " · taxas −" + format(fees, ".2f") + " · BTC " + format(move, "+.2f") +
-              "% desde a entrada (" + ("a favor" if move < 0 else "contra") + ")",
-              "🛑 Stop $" + format(pos["stop"], ",.0f") + " (falta " + format((pos["stop"] / price - 1) * 100, "+.2f") + "%) · 🎯 Alvo $" +
-              format(target, ",.0f") + " (falta " + format((target / price - 1) * 100, "+.2f") + "%)"]
-        span = pos["stop"] - target
-        if span > 0:
-            k = int(round(max(0.0, min(1.0, (pos["stop"] - price) / span)) * 14))
-            L.append("🛑 " + "─" * k + "●" + "─" * (14 - k) + " 🎯")
+              "% desde o preço médio (" + ("a favor" if move * _sgn(pos) > 0 else "contra") + ")",
+              "🎯 Fecha tudo em $" + format(tp, ",.0f") + " (falta " + format((tp / price - 1) * 100, "+.2f") + "%)" +
+              (" · ➕ próxima ordem em $" + format(nxt, ",.0f") if pos.get("n", 1) < GRID_MAX else " · grade completa")]
+        lo, hi = (nxt, tp) if pos.get("side") == "long" else (tp, nxt)
+        if hi > lo:
+            k = int(round(max(0.0, min(1.0, (price - lo) / (hi - lo))) * 14))
+            bar = "─" * k + "●" + "─" * (14 - k)
+            L.append(("➕ " + bar + " 🎯") if pos.get("side") == "long" else ("🎯 " + bar + " ➕"))
         if track is not None:
             L.append("📊 Nesta tela: máx " + format(track["hi"], "+.2f") + " · mín " + format(track["lo"], "+.2f") + " USD")
         L.append("💼 Saldo da conta agora: US$ " + format(d["capital"] + net, ".2f") + " (hoje " +
@@ -605,9 +664,12 @@ def results_png():
 
 
 def status_text():
-    L = ["₿ BTC FULL MARGIN — Jupiter Perps · só VENDA (short)",
-         "Cada conta começa o dia com US$ " + format(CAPITAL_USD, ".0f") + ", usa tudo como garantia e PARA quando chega em US$ " +
-         format(TARGET_USD, ".0f") + " (ou cai a US$ " + format(CAPITAL_USD * (1 - MAX_LOSS), ".0f") + "). Recomeça todo dia às 00:00 UTC.",
+    L = ["₿ BTC FULL MARGIN — Jupiter Perps · COMPRA e VENDA · preço médio",
+         "Cada conta começa o dia com US$ " + format(CAPITAL_USD, ".0f") + ". Movimento forte: opera mais para esse lado; "
+         "sem movimento forte: bem menos. Se o preço vai " + format(GRID_STEP_PCT * 100, ".1f") + "% contra, abre mais uma ordem "
+         "(até " + str(GRID_MAX) + ") e fecha tudo com +" + format(BASKET_TP_PCT * 100, ".1f") + "% sobre o preço médio. "
+         "Para no dia em US$ " + format(TARGET_USD, ".0f") + " (ou se cair a US$ " + format(CAPITAL_USD * (1 - MAX_LOSS), ".0f") +
+         "). Recomeça todo dia às 00:00 UTC.",
          "", account_text("demo"), "", account_text("real")]
     if LAST.get("price"):
         L += ["", "₿ BTC agora: $" + format(LAST["price"], ",.0f") + (" · " + LAST["reading"] if LAST.get("reading") else "")]
@@ -619,7 +681,7 @@ def keyboard():
     acc = {m: _load(m) for m in MODES}
     rows = [[{"text": ("⏸️ Desligar " if acc[m]["on"] else ("🧪 Ligar " if m == "demo" else "💰 Ligar ")) + m.upper(),
               "callback_data": ("bfm_off_" if acc[m]["on"] else "bfm_on_") + m} for m in MODES]]
-    closes = [{"text": "❌ Fechar short " + m.upper(), "callback_data": "bfm_close_" + m} for m in MODES if acc[m].get("pos")]
+    closes = [{"text": "❌ Fechar ordens " + m.upper(), "callback_data": "bfm_close_" + m} for m in MODES if acc[m].get("pos")]
     if closes:
         rows.append(closes)
     lev = _load("demo")["leverage"]
@@ -646,7 +708,7 @@ def _start(mode, send, chat, run_async):
             new_day(d)
         _save(d)
     send(chat, "▶️ BTC FULL MARGIN " + NAME[mode] + " ligada: US$ " + format(d["capital"], ".2f") + " · meta do dia US$ " +
-         format(TARGET_USD, ".0f") + " · " + str(d["leverage"]) + "x · só short. Abrindo o 1º short…")
+         format(TARGET_USD, ".0f") + " · " + str(d["leverage"]) + "x · compra e venda. Abrindo a 1ª ordem…")
 
     def go():
         try:
@@ -683,14 +745,14 @@ def handle(action, send, chat, run_async):
                 if lev in LEVERAGES and not d.get("pos"):
                     d["leverage"] = lev
                     _save(d)
-        send(chat, "⚙️ Alavancagem: " + str(lev) + "x nas duas contas (vale para o próximo short).", keyboard())
+        send(chat, "⚙️ Alavancagem: " + str(lev) + "x nas duas contas (vale para a próxima ordem).", keyboard())
     elif action == "bfm_on_demo":
         _start("demo", send, chat, run_async)
     elif action == "bfm_on_real":
         send(chat, "⚠️ CONTA REAL: usa US$ " + format(CAPITAL_USD, ".0f") + " da carteira do bot (em SOL, trocado por USDC) como "
-             "garantia de um SHORT de BTC com " + str(_load("real")["leverage"]) + "x no Jupiter Perps, até a meta de US$ " +
-             format(TARGET_USD, ".0f") + " por dia. Deixe pelo menos US$ 110 em SOL na carteira. Se o BTC subir rápido, "
-             "você pode perder a garantia toda. Não existe garantia de lucro.",
+             "garantia de ordens de COMPRA e VENDA de BTC (até " + str(GRID_MAX) + ", preço médio) com " + str(_load("real")["leverage"]) + "x no Jupiter Perps, até a meta de US$ " +
+             format(TARGET_USD, ".0f") + " por dia. Deixe pelo menos US$ 110 em SOL na carteira. Se o BTC andar rápido contra as "
+             "ordens, você pode perder a garantia toda. Não existe garantia de lucro.",
              [[{"text": "✅ Entendi, ligar a conta REAL", "callback_data": "bfm_real_ok"}],
               [{"text": "↩️ Cancelar", "callback_data": "bfm"}]])
     elif action == "bfm_real_ok":
@@ -701,8 +763,8 @@ def handle(action, send, chat, run_async):
             d = _load(mode)
             d["on"] = False
             _save(d)
-        send(chat, "⏸️ " + NAME[mode] + " desligada: não abre shorts novos." +
-             (" O short aberto continua com stop e alvo; toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
+        send(chat, "⏸️ " + NAME[mode] + " desligada: não abre ordens novas." +
+             (" As ordens abertas continuam até o +" + format(BASKET_TP_PCT * 100, ".1f") + "% do preço médio; toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
     elif action.startswith("bfm_close_"):
         mode = action[10:]
 
@@ -710,7 +772,7 @@ def handle(action, send, chat, run_async):
             with _LOCK:
                 d = _load(mode)
                 if not d.get("pos"):
-                    send(chat, "Nenhum short aberto na " + NAME[mode] + ".", keyboard())
+                    send(chat, "Nenhuma ordem aberta na " + NAME[mode] + ".", keyboard())
                     return
                 try:
                     price = klines_5m(2)[-1]["c"]
