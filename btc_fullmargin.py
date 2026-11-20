@@ -48,7 +48,7 @@ def order_collateral(capital, factor=1.0):
     return round(capital * total_margin(capital) / GRID_MAX * factor, 2)
 
 
-LEVERAGES = (2, 3, 5, 10, 15)
+LEVERAGES = (2, 3, 5, 10, 15, 20, 30, 50)   # owner, Nov 20: max 50x
 DEFAULT_LEVERAGE = 5
 PAUSE_LOSSES, PAUSE_S = 2, 15 * 60
 FEE_RATE = 0.0006               # per side, on the position size
@@ -685,7 +685,8 @@ def keyboard():
     if closes:
         rows.append(closes)
     lev = _load("demo")["leverage"]
-    rows.append([{"text": ("✅ " if lev == x else "") + str(x) + "x", "callback_data": "bfm_lev" + str(x)} for x in LEVERAGES])
+    levs = [{"text": ("✅ " if lev == x else "") + str(x) + "x", "callback_data": "bfm_lev" + str(x)} for x in LEVERAGES]
+    rows += [levs[i:i + 4] for i in range(0, len(levs), 4)]
     rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
