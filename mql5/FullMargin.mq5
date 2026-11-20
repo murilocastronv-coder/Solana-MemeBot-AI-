@@ -15,7 +15,8 @@
 //|  - depois: nota >= +4 compra, <= -4 vende (InpMinScore);         |
 //|  - stop atras dos ultimos 5 candles; ALVO = 2x o risco;          |
 //|  - stop na entrada com +0,8 risco e stop movel com +1,2 risco;   |
-//|  - 2 perdas seguidas = pausa de 15 min.                          |
+//|  - 2 perdas no dia = para e volta amanha; depois de cada ganho   |
+//|    abre no maximo mais 4 ordens no dia;                          |
 //| Lote: FULL MARGIN - usa InpMarginUse % (padrao 100%) da margem   |
 //| livre = lote maximo; a cada ganho o capital sobe e o proximo     |
 //| lote fica maior (juros compostos) ate bater a meta.              |
@@ -25,7 +26,7 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "5.00"
+#property version   "5.10"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; meta do dia 150 (para ate a meia-noite e volta); quanto maior o saldo, menor o risco. Alto risco."
 
 #include <Trade\Trade.mqh>
@@ -49,6 +50,8 @@ input double InpTrailDistR   = 0.5;    // Distancia do stop movel (em riscos)
 input int    InpEMAFast      = 20;     // EMA do recuo no M1
 input int    InpEMATrend     = 50;     // EMA de tendencia no M5 e no M15
 input int    InpMinScore     = 4;      // Forca minima da leitura dos candles para entrar (1 a 8)
+input int    InpLossesDay    = 2;      // Perdeu esta quantidade de vezes no dia: PARA e volta no dia seguinte (0 = desliga)
+input int    InpAfterWin     = 4;      // Depois de cada ganho abre no maximo mais X ordens no dia (0 = sem limite)
 input int    InpPauseLosses  = 2;      // Perdas seguidas para pausar
 input int    InpPauseMin     = 15;     // Minutos de pausa depois dessas perdas
 input int    InpMaxSpread    = 50;     // Spread maximo (pontos)
@@ -81,6 +84,7 @@ double   gFirstStart = 0;    // capital do 1o dia (para a meta % quando ja comec
 int      gDay = 0;           // dia do servidor (AAAAMMDD) da sessao atual
 bool     gDayDone = false;   // meta/limite do dia batido: espera a meia-noite
 double   gDayTarget = 0;
+int      gBudget = -1;       // ordens que ainda pode abrir hoje depois do ultimo ganho (-1 = sem limite ainda)
 
 int Today() { MqlDateTime t; TimeToStruct(TimeCurrent(), t); return(t.year * 10000 + t.mon * 100 + t.day); }
 
@@ -105,6 +109,7 @@ void NewDay()
    gStopWhy = "";
    gDayDone = false;
    gTrades = 0; gWins = 0; gLosses = 0; gConsecLoss = 0; gPauseUntil = 0;
+   gBudget = -1;
    gEntered = false;
    Print("Full Margin: dia ", gDay, " - capital ", DoubleToString(gStart, 2), " meta do dia ", DoubleToString(gDayTarget, 2));
   }
@@ -220,6 +225,7 @@ bool OpenOrder(int dir, double slDist, const string name)
    if(ok && trade.ResultRetcode() == TRADE_RETCODE_DONE)
      {
       gTrades++;
+      if(gBudget > 0) gBudget--;
       gRisk = slDist;
       gLastPattern = (dir == 1 ? "COMPRA - " : "VENDA - ") + name + " " + TimeToString(TimeCurrent(), TIME_MINUTES);
       return(true);
@@ -342,6 +348,11 @@ void Cycle()
    if(InpUseTarget && eq >= gDayTarget) { StopSession("META DO DIA BATIDA"); gDayDone = true; return; }
    if(InpMaxLossPct > 0 && eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA DO DIA"); gDayDone = true; return; }
    if(HasPosition()) { ManagePosition(); return; }
+   //--- regras do dia: 2 perdas = para ate amanha; depois de um ganho, no maximo mais InpAfterWin ordens
+   if(InpLossesDay > 0 && gLosses >= InpLossesDay)
+     { StopSession(IntegerToString(gLosses) + " PERDAS NO DIA"); gDayDone = true; return; }
+   if(gBudget == 0)
+     { StopSession("FEZ AS " + IntegerToString(InpAfterWin) + " ORDENS DEPOIS DO GANHO"); gDayDone = true; return; }
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
 
    bool spreadOk = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) <= InpMaxSpread;
@@ -436,7 +447,9 @@ void Dashboard()
 
    int tot = gWins + gLosses;
    Line(10, "Operacoes : " + IntegerToString(gTrades) + "   Ganhos: " + IntegerToString(gWins) + "   Perdas: " + IntegerToString(gLosses), CLR_TXT);
-   Line(11, "Acerto    : " + (tot > 0 ? DoubleToString(100.0 * gWins / tot, 0) + "%" : "-"), CLR_TXT);
+   Line(11, "Acerto    : " + (tot > 0 ? DoubleToString(100.0 * gWins / tot, 0) + "%" : "-") +
+            "   Perdas hoje: " + IntegerToString(gLosses) + "/" + IntegerToString(InpLossesDay) +
+            (gBudget >= 0 ? "   Ordens restantes: " + IntegerToString(gBudget) : ""), CLR_TXT);
    Line(12, "Ultima: " + gLastPattern + "  lote " + DoubleToString(gLastLot, 2), CLR_DIM, 8);
    Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + "  -  margem usada agora " + DoubleToString(MarginPct(), 0) + "%", CLR_DIM, 8);
    ChartRedraw(0);
@@ -492,7 +505,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
    double p = HistoryDealGetDouble(trans.deal, DEAL_PROFIT) + HistoryDealGetDouble(trans.deal, DEAL_SWAP) +
               HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
-   if(p >= 0) { gWins++; gConsecLoss = 0; }
+   if(p >= 0) { gWins++; gConsecLoss = 0; if(InpAfterWin > 0) gBudget = InpAfterWin; }
    else
      {
       gLosses++;
