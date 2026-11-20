@@ -30,7 +30,7 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.24"
+#property version   "4.25"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para na META DO DIA (saldo 300) ou no limite de perda e volta depois da meia-noite. Alto risco."
 
 #include <Trade\Trade.mqh>
@@ -61,6 +61,8 @@ input double InpFirstPct     = 30.0;   // 1a ORDEM: % da margem livre
 input double InpWinAddPct    = 50.0;   // VAI GANHAR (lucro + leitura a favor): mais uma ordem com % da margem livre
 input double InpLossAddPct   = 100.0;  // VAI VOLTAR: FULL MARGIN dividida entre as ordens de recuperacao (100 = full)
 input int    InpLossAdds     = 4;      // VAI VOLTAR: ate X ordens a mais para matar as negativas
+input double InpLossStepPips = 10.0;   // VAI VOLTAR: distancia da ordem anterior (cresce: 10, 15, 20, 25 pips)
+input double InpLossStepGrow = 50.0;   // VAI VOLTAR: cada nova distancia cresce X% (0 = sempre a mesma)
 input double InpWinAddPips   = 2.0;    // "Vai ganhar": a posicao precisa ter pelo menos X pips de lucro
 input double InpLossAddPips  = 5.0;    // "Vai voltar": X pips no prejuizo, e cada nova ordem X pips alem da anterior
 input double InpSafeFrom     = 500.0;  // Com saldo a partir disto o RISCO CAI (0 = desliga)
@@ -336,6 +338,22 @@ int Basket(int &type, double &avg)
    return(n);
   }
 
+//--- preco da ordem mais recente do conjunto
+double LastOpenPrice()
+  {
+   double p = 0;
+   datetime lt = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong t = PositionGetTicket(i);
+      if(t == 0 || !PositionSelectByTicket(t)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
+      if(pt >= lt) { lt = pt; p = PositionGetDouble(POSITION_PRICE_OPEN); }
+     }
+   return(p);
+  }
+
 //--- nota da leitura do grafico agora (a mesma estrategia de entrada)
 bool ReadNow(int &sc, string &why)
   {
@@ -380,9 +398,15 @@ void ManageBasket()
      }
    //--- VAI VOLTAR: no prejuizo e a leitura virou a favor -> ate InpLossAdds ordens a mais (full margin dividida
    //--- entre elas: 1/4, 1/3, 1/2 e o resto da margem livre), cada uma pelo menos InpLossAddPips alem da anterior
+   //--- mais distante uma da outra: 10, 15, 20, 25 pips da ordem anterior (a ultima aberta do conjunto)
    double px = (dir == 1) ? ask : bid;
-   bool farEnough = (gLastAddPrice == 0) || ((gLastAddPrice - px) * dir >= InpLossAddPips * pip);
-   if(gLossAdds < InpLossAdds && gBasketPips <= -InpLossAddPips && inFavor && farEnough)
+   double ref = (gLastAddPrice > 0) ? gLastAddPrice : LastOpenPrice();
+   double step = InpLossStepPips * (1.0 + InpLossStepGrow / 100.0 * gLossAdds) * pip;
+   bool farEnough = ref > 0 && (ref - px) * dir >= step;
+   //--- "vai voltar" confirmado: leitura a favor E o ultimo candle fechou a favor (o preco ja comecou a virar)
+   double o1 = iOpen(_Symbol, PERIOD_M1, 1), c1 = iClose(_Symbol, PERIOD_M1, 1);
+   bool turning = (c1 - o1) * dir > 0;
+   if(gLossAdds < InpLossAdds && gBasketPips <= -InpLossAddPips && inFavor && turning && farEnough)
      {
       gLotPct = InpLossAddPct / (InpLossAdds - gLossAdds);
       if(OpenOrder(dir, 0, "vai voltar " + IntegerToString(gLossAdds + 1) + "/" + IntegerToString(InpLossAdds) + ", " + why))
