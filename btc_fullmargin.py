@@ -12,6 +12,8 @@ Each one starts every day (00:00 UTC) with US$ 100 (minimum capital), day and ni
 - MARGIN: 100% of the balance split across the 5 orders while the balance is under US$ 150, then 40%;
 - the day stops at the TARGET (US$ 300, like the MT5 robot) or at the LOSS LIMIT (50% = US$ 50);
   a protection closes everything before the liquidation price (60% of the way).
+- ALWAYS IN (owner, Nov 20, BTCFM_ALWAYS_IN=true): as soon as the orders close it opens the next one (full lot) to the
+  side of the strong move or of the chart reading, so it trades all the time until the daily target/limit.
 Both start OFF. The REAL account needs SOL in the bot wallet (swapped to USDC collateral for each order).
 """
 import json
@@ -35,6 +37,7 @@ SCORE_STRONG, SCORE_WEAK = 3, 7
 WEAK_EVERY_S = 3600             # no strong move: at most 1 entry per hour
 WEAK_LOT = 0.5                  # ... with half the lot
 TOTAL_MARGIN, SAFE_FROM, SAFE_MARGIN = 1.0, 150.0, 0.4
+ALWAYS_IN = os.getenv("BTCFM_ALWAYS_IN", "true").strip().lower() != "false"   # owner, Nov 20: always with orders open
 LIQ_GUARD = 0.6                 # closes everything at 60% of the way to the liquidation price
 
 
@@ -464,13 +467,17 @@ def cycle(mode, send, chat, now=None, klines=None):
             return "parado até amanhã"
         bar = closed[-1]["t"]
         first = d["trades"] == 0
-        if bar == d["last_bar"] and not first:
+        if bar == d["last_bar"] and not first and not ALWAYS_IN:
             return "esperando candle"
         d["last_bar"] = bar
         score, a, reading = read_chart(closed)
         sdir, move = strong_move(closed)
         LAST.update(score=score, reading=reading, strong=sdir, move=round(move, 2))
-        if first:
+        if ALWAYS_IN:
+            # owner, Nov 20: ALWAYS with orders open (maximum trades): right after closing it opens the next one,
+            # to the side of the strong move, or else to the side of the chart reading; always the full lot
+            side_dir, factor = (sdir or (1 if score >= 0 else -1)), 1.0
+        elif first:
             side_dir, factor = (1 if score >= 0 else -1), 1.0
         else:
             if d["pause_until"] > now and not sdir:
@@ -665,8 +672,8 @@ def results_png():
 
 def status_text():
     L = ["₿ BTC FULL MARGIN — Jupiter Perps · COMPRA e VENDA · preço médio",
-         "Cada conta começa o dia com US$ " + format(CAPITAL_USD, ".0f") + ". Movimento forte: opera mais para esse lado; "
-         "sem movimento forte: bem menos. Se o preço vai " + format(GRID_STEP_PCT * 100, ".1f") + "% contra, abre mais uma ordem "
+         "Cada conta começa o dia com US$ " + format(CAPITAL_USD, ".0f") + ". Opera O TEMPO TODO: fechou, já abre a próxima ordem "
+         "(para o lado do movimento forte ou da leitura do gráfico). Se o preço vai " + format(GRID_STEP_PCT * 100, ".1f") + "% contra, abre mais uma ordem "
          "(até " + str(GRID_MAX) + ") e fecha tudo com +" + format(BASKET_TP_PCT * 100, ".1f") + "% sobre o preço médio. "
          "Para no dia em US$ " + format(TARGET_USD, ".0f") + " (ou se cair a US$ " + format(CAPITAL_USD * (1 - MAX_LOSS), ".0f") +
          "). Recomeça todo dia às 00:00 UTC.",

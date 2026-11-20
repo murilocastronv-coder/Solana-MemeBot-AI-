@@ -111,9 +111,18 @@ class Cycle(Base):
         self.assertEqual(d["pos"]["collateral_usd"], 20.0)
         self.assertIn("QUEDA FORTE", self.msgs[-1])
 
-    def test_no_strong_move_trades_much_less(self):
+    def test_always_in_opens_the_next_right_after_closing(self):
+        self.turn_on(trades=3, last_entry=NOW - 60, last_bar=candles()[-2]["t"])     # same candle, entered 1 min ago
+        with patch.object(bfm, "strong_move", return_value=(0, 0.2)), \
+                patch.object(bfm, "read_chart", return_value=(-1, 10.0, "leitura -1")):
+            self.assertEqual(self.cyc(candles()), "abriu")
+        pos = bfm._load("demo")["pos"]
+        self.assertEqual(pos["side"], "short")
+        self.assertEqual(pos["collateral_usd"], 20.0)                    # full lot
+
+    def test_no_strong_move_trades_much_less_when_always_in_is_off(self):
         self.turn_on(trades=1, last_entry=NOW - 600)
-        with patch.object(bfm, "strong_move", return_value=(0, 0.2)):
+        with patch.object(bfm, "ALWAYS_IN", False), patch.object(bfm, "strong_move", return_value=(0, 0.2)):
             self.assertEqual(self.cyc(candles()), "sem movimento forte: 1 entrada por hora")
             d = bfm._load("demo")
             d.update(last_entry=0, last_bar=0)
