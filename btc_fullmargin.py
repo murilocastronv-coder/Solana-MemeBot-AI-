@@ -4,7 +4,7 @@ Two separate accounts (owner, Nov 19): a DEMO account (fake money, real prices, 
 (the bot wallet on Jupiter Perps). Each one trades a capital of US$ 100 per day:
 - every day (UTC) the account starts again with CAPITAL_USD (100); "full margin" = the whole account balance is the
   collateral of each short, so a win makes the next short bigger;
-- DAILY TARGET: when the account reaches TARGET_USD (250) it closes and STOPS until the next day;
+- DAILY TARGET: when the account reaches TARGET_USD (150) it closes and STOPS until the next day;
   DAILY LOSS LIMIT: at 50% of the capital (US$ 50) it also closes and stops until the next day;
 - SHORT ONLY, leverage chosen by the owner (2x-15x, default 5x), one position per account, day and night;
 - reads the BTC 5-minute chart (score -9..+9: trend M15 + H1, last 10 candles, highs/lows, EMA20, candle patterns,
@@ -24,7 +24,7 @@ import requests
 
 MIN_SCORE = int(os.getenv("BTCFM_MIN_SCORE", "4"))
 CAPITAL_USD = float(os.getenv("BTCFM_CAPITAL_USD", "100"))
-TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "250"))
+TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "150"))   # owner, Nov 20: daily target US$ 150
 MAX_LOSS = 0.5
 LEVERAGES = (2, 3, 5, 10, 15)
 DEFAULT_LEVERAGE = 5
