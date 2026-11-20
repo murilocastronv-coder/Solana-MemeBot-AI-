@@ -20,6 +20,7 @@
 //|  leitura a favor) -> +1 ordem com 50%; VAI VOLTAR (prejuizo e    |
 //|  leitura virou a favor) -> +1 ordem FULL MARGIN; sem stop por    |
 //|  ordem; FECHA TUDO com +5 pips (sobre o preco medio).            |
+//|  Saldo >= 500: risco cai 50% (15% / 25% / 50% da margem).        |
 //| Lote: FULL MARGIN - usa InpMarginUse % (padrao 100%) da margem   |
 //| livre = lote maximo; a cada ganho o capital sobe e o proximo     |
 //| lote fica maior (juros compostos) ate bater a meta.              |
@@ -29,7 +30,7 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.22"
+#property version   "4.23"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para na META DO DIA (saldo 300) ou no limite de perda e volta depois da meia-noite. Alto risco."
 
 #include <Trade\Trade.mqh>
@@ -61,6 +62,8 @@ input double InpWinAddPct    = 50.0;   // VAI GANHAR (lucro + leitura a favor): 
 input double InpLossAddPct   = 100.0;  // VAI VOLTAR (perdendo + leitura virou a favor): mais uma com % da margem livre (100 = full)
 input double InpWinAddPips   = 2.0;    // "Vai ganhar": a posicao precisa ter pelo menos X pips de lucro
 input double InpLossAddPips  = 5.0;    // "Vai voltar": a posicao precisa estar pelo menos X pips no prejuizo
+input double InpSafeFrom     = 500.0;  // Com saldo a partir disto o RISCO CAI (0 = desliga)
+input double InpSafeCut      = 50.0;   // ... cai X% (50 = metade: 30% vira 15%, 50% vira 25%, full vira 50%)
 input double InpClosePips    = 5.0;    // FECHA TUDO com X pips de lucro (1 ordem: +5; varias: +5 sobre o preco medio)
 input ulong  InpMagic        = 20261120;
 
@@ -152,7 +155,9 @@ double CalcLot(ENUM_ORDER_TYPE type, double price)
   {
    double m1 = 0;
    if(!OrderCalcMargin(type, _Symbol, 1.0, price, m1) || m1 <= 0) return(0);
-   double free = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * MathMin(gLotPct, 97.0) / 100.0;   // 100 = full (sobra 3% p/ o spread)
+   double pct = MathMin(gLotPct, 97.0);                                       // 100 = full (sobra 3% p/ o spread)
+   if(InpSafeFrom > 0 && Equity() >= InpSafeFrom) pct *= (1.0 - InpSafeCut / 100.0);   // saldo >= 500: risco menor
+   double free = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * pct / 100.0;
    double lot = free / m1;
    double mn = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double mx = MathMin(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX), InpMaxLot);
@@ -521,7 +526,8 @@ void Dashboard()
             DoubleToString(InpClosePips, 0) + ")" + (gWinAdded ? " +50%" : "") + (gLossAdded ? " +FULL" : "") : "Sem ordens abertas",
         gBasketPips >= 0 ? CLR_GREEN : CLR_RED, 9);
    Line(12, "Ultima: " + gLastPattern + "  lote " + DoubleToString(gLastLot, 2), CLR_DIM, 8);
-   Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + "  -  margem 30% / +50% / +full", CLR_DIM, 8);
+   Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + (InpSafeFrom > 0 && Equity() >= InpSafeFrom ? "  -  RISCO -" + DoubleToString(InpSafeCut, 0) + "% (saldo >= " + DoubleToString(InpSafeFrom, 0) + ")"
+                                                         : "  -  margem 30% / +50% / +full"), CLR_DIM, 8);
    ChartRedraw(0);
   }
 
