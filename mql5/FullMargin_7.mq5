@@ -19,6 +19,8 @@
 //|  - QUEDA FORTE do par (>= 1,5 ATR do H1 em 6h, abaixo da EMA50   |
 //|    H1): opera MAIS (forca 3, lote cheio). Sem queda forte: opera |
 //|    BEM MENOS (forca 7, 1 entrada por hora, lote 50%).            |
+//|  - GRADE: depois da 1a ordem abre outra a cada 20 pips ate 5;    |
+//|    margem total 100% (20% cada) ate saldo 150, depois 40% (8%).  |
 //| Lote: FULL MARGIN - usa InpMarginUse % (padrao 100%) da margem   |
 //| livre = lote maximo; a cada ganho o capital sobe e o proximo     |
 //| lote fica maior (juros compostos) ate bater a meta.              |
@@ -28,7 +30,7 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.30"
+#property version   "4.40"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para na META DO DIA (saldo 300) ou no limite de perda e volta depois da meia-noite. Alto risco."
 
 #include <Trade\Trade.mqh>
@@ -40,7 +42,12 @@ input double InpTargetUSD    = 300.0;  // META DO DIA: saldo em dinheiro; ao che
 input bool   InpDaily        = true;   // Todo dia depois da meia-noite (servidor) recomeca e tenta a meta de novo
 input double InpTargetMult   = 3.0;    // META por multiplicador (so se a meta em dinheiro for 0): 3 = 50 -> 150
 input double InpMaxLossPct   = 50.0;   // LIMITE DE PERDA da sessao em % (para tudo)
-input double InpMarginUse    = 100.0;  // % da margem livre usada por ordem (100 = FULL MARGIN, lote maximo)
+input double InpMarginUse    = 100.0;  // MARGEM TOTAL das ordens (%) enquanto o saldo esta abaixo de InpSafeFrom
+input int    InpGridMax      = 5;      // GRADE: ate X ordens no mesmo lado (a margem total e dividida entre elas)
+input double InpGridPips     = 20.0;   // GRADE: abre a proxima ordem a cada X pips
+input bool   InpGridFavor    = true;   // GRADE: true = abre quando o preco anda A FAVOR; false = quando vai CONTRA
+input double InpSafeFrom     = 150.0;  // Com saldo a partir disto a margem total cai para InpSafeMargin
+input double InpSafeMargin   = 40.0;   // MARGEM TOTAL (%) depois de InpSafeFrom
 input double InpMaxLot       = 100.0;  // Lote maximo por ordem (limite de seguranca)
 input double InpRR           = 1.5;    // ALVO = risco x isto (1.5 = ganha 1,5x o que arrisca)
 input double InpBreakevenR   = 0.6;    // Com lucro de X riscos, stop vai para a entrada (sem perda)
@@ -149,12 +156,46 @@ void StopSession(const string why)
    Alert("Full Margin: ", why, " - capital ", DoubleToString(Equity(), 2));
   }
 
+//--- margem total das ordens agora: 100% abaixo de InpSafeFrom (150), 40% a partir dele
+double TotalMarginPct() { return(Equity() < InpSafeFrom ? InpMarginUse : InpSafeMargin); }
+
+double PipSize() { return((_Digits == 5 || _Digits == 3) ? _Point * 10.0 : _Point); }
+
+bool OpenOrder(int dir, double slDist, const string name);   // definida mais abaixo
+
+//--- GRADE: com ordem aberta, abre outra no mesmo lado a cada InpGridPips ate InpGridMax ordens
+void GridAdd()
+  {
+   int n = 0, type = -1;
+   double last = 0;
+   datetime lastT = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong t = PositionGetTicket(i);
+      if(t == 0 || !PositionSelectByTicket(t)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      n++;
+      type = (int)PositionGetInteger(POSITION_TYPE);
+      datetime pt = (datetime)PositionGetInteger(POSITION_TIME);
+      if(pt >= lastT) { lastT = pt; last = PositionGetDouble(POSITION_PRICE_OPEN); }
+     }
+   if(n == 0 || n >= InpGridMax || gRisk <= 0) return;
+   if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpread) return;
+   double step = InpGridPips * PipSize();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID), ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   bool go;
+   if(type == POSITION_TYPE_SELL) go = InpGridFavor ? (bid <= last - step) : (bid >= last + step);
+   else                           go = InpGridFavor ? (ask >= last + step) : (ask <= last - step);
+   if(go) OpenOrder(type == POSITION_TYPE_SELL ? -1 : 1, gRisk, "grade " + IntegerToString(n + 1) + "/" + IntegerToString(InpGridMax));
+  }
+
 //--- lote pela margem: InpMarginUse % da margem livre
 double CalcLot(ENUM_ORDER_TYPE type, double price)
   {
    double m1 = 0;
    if(!OrderCalcMargin(type, _Symbol, 1.0, price, m1) || m1 <= 0) return(0);
-   double free = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * InpMarginUse / 100.0;
+   //--- margem total (100% ate 150, 40% depois) dividida pelas InpGridMax ordens da grade
+   double free = Equity() * TotalMarginPct() / 100.0 / MathMax(1, InpGridMax);
    double lot = free / m1;
    double mn = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double mx = MathMin(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX), InpMaxLot);
@@ -365,7 +406,7 @@ void Cycle()
    if(eq > gPeak) gPeak = eq;
    if(eq >= gDayTarget) { StopSession("META DO DIA BATIDA"); gDayDone = true; return; }
    if(eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA DO DIA"); gDayDone = true; return; }
-   if(HasPosition()) { ManagePosition(); return; }
+   if(HasPosition()) { ManagePosition(); GridAdd(); return; }
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
 
    bool spreadOk = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) <= InpMaxSpread;
@@ -463,7 +504,7 @@ void Dashboard()
                     : "Sem queda forte (" + DoubleToString(gFall, 1) + " ATR em 6h): opera BEM MENOS",
         gStrong ? CLR_GREEN : CLR_DIM, 9);
    Line(12, "Ultima: " + gLastPattern + "  lote " + DoubleToString(gLastLot, 2), CLR_DIM, 8);
-   Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + "  -  margem usada " + DoubleToString(InpMarginUse, 0) + "%", CLR_DIM, 8);
+   Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + "  -  margem total " + DoubleToString(TotalMarginPct(), 0) + "% em ate " + IntegerToString(InpGridMax) + " ordens", CLR_DIM, 8);
    ChartRedraw(0);
   }
 
