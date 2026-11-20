@@ -83,7 +83,10 @@ LIVE = {}                       # chat -> {"mode", "until", "hi", "lo"}
 CHECK_EVERY_S = 20
 TF = 300
 MODES = ("demo", "real")
-NAME = {"demo": "🧪 CONTA DEMO", "real": "💰 CONTA REAL"}
+NAME = {"demo": "🧪 CONTA DEMO", "real": "💰 CONTA REAL", "bt": "🧪 BACKTEST"}
+CURVE_MAX = 500
+BT_DAYS = 30
+BT = {"running": False}
 
 _LOCK = threading.RLock()
 _http = requests.Session()
@@ -347,6 +350,7 @@ def _close(d, price, why, now=None):
     """Closes the short. Result after the fees goes into the account; lifetime totals and the curve are updated."""
     pos = d["pos"]
     sig = None
+    tnow = int(now or time.time())
     gross, fees, net = breakdown(pos, price, now)
     if d["mode"] == "real":
         import jupiter_perps as jp
@@ -376,9 +380,9 @@ def _close(d, price, why, now=None):
         d["consec"] += 1
         if d["consec"] >= PAUSE_LOSSES:
             d["consec"] = 0
-            d["pause_until"] = int(time.time()) + PAUSE_S
+            d["pause_until"] = tnow + PAUSE_S
     tot = d.setdefault("total", {"trades": 0, "wins": 0, "losses": 0, "gross": 0.0, "fees": 0.0, "net": 0.0,
-                                 "best": 0.0, "worst": 0.0, "since": int(time.time())})
+                                 "best": 0.0, "worst": 0.0, "since": tnow})
     tot["trades"] += 1
     tot["wins" if net >= 0 else "losses"] += 1
     tot["gross"] = round(tot["gross"] + gross, 4)
@@ -386,12 +390,13 @@ def _close(d, price, why, now=None):
     tot["net"] = round(tot["net"] + net, 4)
     tot["best"] = max(tot["best"], net)
     tot["worst"] = min(tot["worst"], net)
-    d["curve"] = (d.get("curve") or [])[-499:] + [[int(time.time()), round(tot["net"], 2)]]
+    d["curve"] = (d.get("curve") or [])[-(CURVE_MAX - 1):] + [[tnow, round(tot["net"], 2)]]
     d["last_close"] = {"gross": round(gross, 2), "fees": round(fees, 2), "net": round(net, 2)}
-    d["hist"] = (d.get("hist") or [])[-49:] + [{"side": pos.get("side", "short"), "n": pos.get("n", 1),
+    d["hist"] = (d.get("hist") or [])[-(199 if d["mode"] == "bt" else 49):] + [{"side": pos.get("side", "short"), "n": pos.get("n", 1),
                                                  "entry": pos["entry"], "exit": price, "pnl": round(net, 2),
                                                  "gross": round(gross, 2), "fees": round(fees, 2),
-                                                 "why": why, "t": int(time.time())}]
+                                                 "why": why, "t": tnow,
+                                                 "held_h": round((tnow - pos.get("opened", tnow)) / 3600, 1)}]
     d["pos"] = None
     return net, sig
 
@@ -553,6 +558,149 @@ def cycle_all(send, chat, now=None):
         return {}
     cs = klines_5m()
     return {m: cycle(m, send, chat, now=now, klines=lambda: cs) for m in active}
+
+
+# ------------------------------------------------------------------ backtest (owner, Nov 20)
+def klines_history(days=BT_DAYS):
+    """5-minute BTC candles of the last `days` days (+ 3 days of warm-up for the chart reading), oldest first."""
+    end = int(time.time()) // TF * TF
+    start = end - (days + 3) * 86400
+    rows = {}
+    for base in ("https://api.binance.com", "https://api.binance.us"):
+        try:
+            t = start
+            while t < end:
+                part = _get(base + "/api/v3/klines", {"symbol": "BTCUSDT", "interval": "5m", "startTime": t * 1000, "limit": 1000})
+                if not part:
+                    break
+                for r in part:
+                    rows[int(r[0]) // 1000] = {"t": int(r[0]) // 1000, "o": float(r[1]), "h": float(r[2]), "l": float(r[3]),
+                                               "c": float(r[4])}
+                t = int(part[-1][0]) // 1000 + TF
+            if len(rows) > (days + 2) * 288:
+                return [rows[k] for k in sorted(rows)]
+        except Exception:
+            rows = {}
+            continue
+    t = start
+    while t < end:                                   # Coinbase: 300 candles per call
+        e = min(end, t + 300 * TF)
+        for r in _get("https://api.exchange.coinbase.com/products/BTC-USD/candles",
+                      {"granularity": TF, "start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)),
+                       "end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))}):
+            rows[int(r[0])] = {"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "o": float(r[3]), "c": float(r[4])}
+        t = e
+    return [rows[k] for k in sorted(rows)]
+
+
+def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None):  # noqa: C901
+    """Runs the robot's own cycle() over the candles, as a demo account that started 3 days into the data.
+    Every 5-minute candle: it closes at the candle's close; the +0.25% close is also checked with the candle's
+    high/low (the order touched the price). Fees are the same as the demo (open/close + borrow per hour)."""
+    global CURVE_MAX
+    WARM = 800
+    if len(cs) < WARM + 300:
+        raise RuntimeError("poucos candles para o backtest")
+    p = _path("bt")
+    if p.exists():
+        p.unlink()
+    d = _load("bt")
+    d.update(on=True, leverage=leverage)
+    _save(d)
+    old_curve, CURVE_MAX = CURVE_MAX, 100000
+    msgs = []
+    try:
+        for i in range(WARM, len(cs)):
+            now = cs[i]["t"] + TF
+            d = _load("bt")
+            pos = d.get("pos")
+            if pos:                                   # the +0.25% close touched inside the candle
+                tp = tp_price(pos)
+                touched = cs[i]["l"] <= tp if pos.get("side") == "short" else cs[i]["h"] >= tp
+                if touched:
+                    win = cs[max(0, i - WARM + 1):i] + [dict(cs[i], c=tp)]
+                    cycle("bt", lambda c, t, k=None: msgs.append(t), "bt", now=now,
+                          klines=lambda w=win: w + [dict(w[-1], t=w[-1]["t"] + TF)])
+                    continue
+            win = cs[max(0, i - WARM + 1):i + 1]
+            cycle("bt", lambda c, t, k=None: msgs.append(t), "bt", now=now,
+                  klines=lambda w=win: w + [dict(w[-1], t=w[-1]["t"] + TF, o=w[-1]["c"], h=w[-1]["c"], l=w[-1]["c"])])
+            if progress and i % 2000 == 0:
+                progress(i - WARM, len(cs) - WARM)
+        d = _load("bt")
+        if d.get("pos"):                              # still open at the end: closed at the last price
+            _close(d, cs[-1]["c"], "fim do backtest", cs[-1]["t"] + TF)
+        new_day(d, cs[-1]["t"] + 86400 * 2)          # records the last day
+        _save(d)
+    finally:
+        CURVE_MAX = old_curve
+    return d
+
+
+def backtest_text(d, leverage, span_days=BT_DAYS):
+    days = d.get("days") or []
+    tt = d.get("total") or {}
+    n = tt.get("trades", 0)
+    total = sum(x["result"] for x in days)
+    hit = sum(1 for x in days if "META" in (x.get("why") or ""))
+    lim = sum(1 for x in days if "LIMITE" in (x.get("why") or ""))
+    pos_days = sum(1 for x in days if x["result"] > 0)
+    hist = d.get("hist") or []
+    held = max((h.get("held_h", 0) for h in hist), default=0)
+    L = ["🧪 BACKTEST " + str(span_days) + " DIAS — BTC Full Margin (estratégia atual, " + str(leverage) + "x)",
+         "Cada dia começa com US$ " + format(CAPITAL_USD, ".0f") + " (meta US$ " + format(TARGET_USD, ".0f") + ", limite US$ " +
+         format(CAPITAL_USD * (1 - MAX_LOSS), ".0f") + "). Candles reais de 5 min, taxas da Jupiter incluídas.",
+         "",
+         ("✅ LUCROU " if total > 0 else "❌ PERDEU ") + format(total, "+.2f") + " USD no mês (soma dos dias)",
+         "📅 Dias no lucro " + str(pos_days) + " de " + str(len(days)) + " · 🎯 meta batida " + str(hit) + " · 🛑 limite " + str(lim),
+         "📊 Fechamentos " + str(n) + (" · no lucro " + format(tt.get("wins", 0) / n * 100, ".0f") + "%" if n else "") +
+         " · taxas pagas " + format(tt.get("fees", 0), ".2f") + " USD",
+         "🏆 Melhor fechamento " + format(tt.get("best", 0), "+.2f") + " · pior " + format(tt.get("worst", 0), "+.2f"),
+         "⏱️ Maior tempo com ordens abertas: " + format(held, ".0f") + " h" +
+         (" (sem stop por ordem: ficou esperando o preço voltar e o dia não virou nesse tempo)" if held > 24 else "")]
+    if days:
+        best = max(days, key=lambda x: x["result"])
+        worst = min(days, key=lambda x: x["result"])
+        L.append("📈 Melhor dia " + best["day"][5:] + " " + format(best["result"], "+.2f") + " · 📉 pior dia " +
+                 worst["day"][5:] + " " + format(worst["result"], "+.2f"))
+        L.append("")
+        L.append("Contas fechadas (" + str(len(days)) + "): " + " · ".join(x["day"][5:] + " " + format(x["result"], "+.0f") for x in days))
+    L.append("")
+    L.append("⚠️ O passado não garante o futuro: é a mesma regra do robô, mas o mês que vem pode ser bem diferente.")
+    return "\n".join(L)
+
+
+def backtest_png(d):
+    import demo_report
+    curve = [[t, CAPITAL_USD + v] for t, v in (d.get("curve") or [])]
+    if not curve:
+        return None
+    curve.insert(0, [curve[0][0] - 60, CAPITAL_USD])
+    return demo_report.chart_png([("Backtest 30 dias (resultado acumulado)", CAPITAL_USD, curve, (255, 196, 0))])
+
+
+def run_backtest(send, chat, leverage):
+    if BT["running"]:
+        send(chat, "⏳ O backtest já está rodando, espera o resultado.")
+        return
+    BT["running"] = True
+    try:
+        send(chat, "🧪 Backtest de " + str(BT_DAYS) + " dias começou: baixando os candles de 5 min do BTC e rodando a estratégia "
+             "atual (" + str(leverage) + "x). Leva uns 2–5 minutos. Nenhuma ordem real.")
+        cs = klines_history(BT_DAYS)
+        d = backtest(cs, leverage)
+        try:
+            png = backtest_png(d)
+            if png and PHOTO:
+                PHOTO(chat, png, "📈 Backtest 30 dias: resultado acumulado (acima da linha fraca = lucro)")
+        except Exception as exc:
+            logging.warning("btc backtest chart: %s", type(exc).__name__)
+        span = max(1, round((cs[-1]["t"] - cs[800]["t"]) / 86400))
+        send(chat, backtest_text(d, leverage, span), keyboard())
+    except Exception as exc:
+        send(chat, "⛔ Backtest: " + str(exc)[:200], keyboard())
+    finally:
+        BT["running"] = False
 
 
 # ------------------------------------------------------------------ Telegram
@@ -734,12 +882,13 @@ def keyboard():
     rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
-    rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}, {"text": "🔄 Atualizar", "callback_data": "bfm"}])
+    rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}, {"text": "🧪 Backtest 30 dias", "callback_data": "bfm_bt"}])
+    rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
-            "/aovivo"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
+            "/aovivo", "bfm_bt", "/backtest_btc"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
            {p + m for p in ("bfm_on_", "bfm_off_", "bfm_close_") for m in MODES})
 
 
@@ -772,6 +921,9 @@ def handle(action, send, chat, run_async):
     elif action == "bfm_live_stop":
         LIVE.pop(str(chat), None)
         send(chat, "⏹️ Ao vivo parado.", keyboard())
+    elif action in ("bfm_bt", "/backtest_btc"):
+        lev = _load("demo")["leverage"]
+        run_async(lambda: run_backtest(send, chat, lev))
     elif action in ("bfm_res", "/resultados_btc"):
         def go():
             try:

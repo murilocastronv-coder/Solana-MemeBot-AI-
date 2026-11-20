@@ -376,6 +376,30 @@ class Live(Base):
         self.assertNotIn("1", bfm.LIVE)
 
 
+class Backtest(Base):
+    def test_runs_the_robot_over_history(self):
+        import math
+        import random
+        random.seed(3)
+        cs, p = [], 60000.0
+        for i in range(800 + 3 * 288):
+            o = p
+            p *= 1 + random.gauss(0, 0.001) + 0.0004 * math.sin(i / 40)
+            cs.append({"t": T0 + i * 300, "o": o, "h": max(o, p) * 1.0004, "l": min(o, p) * 0.9996, "c": p})
+        d = bfm.backtest(cs, 5)
+        self.assertIsNone(d.get("pos"))
+        self.assertGreater(d["total"]["trades"], 0)
+        t = bfm.backtest_text(d, 5, 3)
+        self.assertIn("BACKTEST 3 DIAS", t)
+        self.assertIn("taxas pagas", t)
+        self.assertFalse(bfm._load("demo")["on"])                      # the demo account is untouched
+        self.assertTrue(bfm.backtest_png(d).startswith(b"\x89PNG"))
+
+    def test_button(self):
+        self.assertIn("bfm_bt", [b["callback_data"] for row in bfm.keyboard() for b in row])
+        self.assertIn("bfm_bt", bfm.ACTIONS)
+
+
 class Telegram(Base):
     def test_keyboard_callbacks_are_routed(self):
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
