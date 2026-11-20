@@ -354,11 +354,13 @@ class Telegram(Base):
         self.assertEqual(bfm._load("demo")["leverage"], 10)
         self.assertEqual(bfm._load("real")["leverage"], 10)
 
-    def test_max_leverage_15(self):
-        self.assertEqual(max(bfm.LEVERAGES), 15)
-        bfm.handle("bfm_lev15", self.send, "1", lambda fn: fn())
-        self.assertEqual(bfm._load("real")["leverage"], 15)
-        self.assertAlmostEqual(bfm.LIQ_GUARD / 15, 0.04)
+    def test_max_leverage_50(self):
+        self.assertEqual(max(bfm.LEVERAGES), 50)
+        bfm.handle("bfm_lev50", self.send, "1", lambda fn: fn())
+        self.assertEqual(bfm._load("real")["leverage"], 50)
+        self.assertAlmostEqual(bfm.LIQ_GUARD / 50, 0.012)              # protection closes at -1.2% at 50x
+        import telegram_bot
+        self.assertTrue(bfm.ACTIONS <= telegram_bot.TRADE_ACTIONS)
 
     def test_real_asks_confirmation(self):
         bfm.handle("bfm_on_real", self.send, "1", lambda fn: fn())
