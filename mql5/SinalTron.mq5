@@ -12,6 +12,8 @@
 //|   alvo, stop) no historico e usa o que MAIS RENDEU entre os que  |
 //|   ACERTAM pelo menos 70% (spread incluido na conta).             |
 //| - Mostra "COMPRAR AGORA" / "VENDER AGORA" com entrada/alvo/stop. |
+//| - NAO OPERA RANGE: so sinal em tendencia (ADX >= 25, EMA 50 longe|
+//|   e inclinada); alta = so compra, baixa = so venda.              |
 //| - PAINEL com o ACERTO REAL dos sinais no historico do grafico    |
 //|   (quantos bateram o alvo antes do stop) - nao e promessa, e o   |
 //|   que aconteceu no passado.                                      |
@@ -25,7 +27,7 @@
 //| passado nao garante resultado futuro.                            |
 //+------------------------------------------------------------------+
 #property copyright "SinalTron"
-#property version   "1.20"
+#property version   "1.30"
 #property description "SinalTron - sinais de compra e venda o dia inteiro, com alvo e stop, alerta no celular e acerto real no historico."
 #property indicator_chart_window
 #property indicator_buffers 2
@@ -51,9 +53,13 @@ input bool   InpAutoTune   = true;   // MAXIMO RETORNO: testa forca/alvo/stop no
 input double InpRiskPct    = 2.0;    // Risco por sinal (% do saldo) usado para calcular o retorno
 input double InpMinWin     = 70.0;   // ACERTO MINIMO (%) que o ajuste automatico precisa ter no historico
 input int    InpShowBars   = 3;      // Mostra "COMPRAR/VENDER AGORA" por X candles depois do sinal
+input bool   InpNoRange    = true;   // NAO OPERA RANGE: so da sinal em TENDENCIA de alta (so compra) ou de baixa (so venda)
+input double InpADXMin     = 25.0;   // Tendencia: ADX(14) pelo menos isto (abaixo = range)
+input double InpSepATR     = 0.5;    // Tendencia: distancia entre EMA 50 e EMA 200 de pelo menos X ATR
 
 double BufBuy[], BufSell[];
-int    hE20 = INVALID_HANDLE, hE50 = INVALID_HANDLE, hE200 = INVALID_HANDLE, hATR = INVALID_HANDLE;
+int    hE20 = INVALID_HANDLE, hE50 = INVALID_HANDLE, hE200 = INVALID_HANDLE, hATR = INVALID_HANDLE, hADX = INVALID_HANDLE;
+double gTr[];                         // 1 = tendencia de alta, -1 = de baixa, 0 = RANGE (por candle)
 datetime gLastSignalBar = 0;
 int      gMin = 5;                    // ajuste em uso (o melhor do historico quando InpAutoTune)
 double   gTP = 1.0, gSL = 1.5;
@@ -75,7 +81,8 @@ int OnInit()
    hE50 = iMA(_Symbol, _Period, 50, 0, MODE_EMA, PRICE_CLOSE);
    hE200 = iMA(_Symbol, _Period, 200, 0, MODE_EMA, PRICE_CLOSE);
    hATR = iATR(_Symbol, _Period, 14);
-   if(hE20 == INVALID_HANDLE || hE50 == INVALID_HANDLE || hE200 == INVALID_HANDLE || hATR == INVALID_HANDLE)
+   hADX = iADX(_Symbol, _Period, 14);
+   if(hE20 == INVALID_HANDLE || hE50 == INVALID_HANDLE || hE200 == INVALID_HANDLE || hATR == INVALID_HANDLE || hADX == INVALID_HANDLE)
       return(INIT_FAILED);
    IndicatorSetString(INDICATOR_SHORTNAME, "SinalTron");
    gMin = InpMinScore; gTP = InpTPATR; gSL = InpSLATR;
@@ -84,7 +91,7 @@ int OnInit()
 
 void OnDeinit(const int reason)
   {
-   IndicatorRelease(hE20); IndicatorRelease(hE50); IndicatorRelease(hE200); IndicatorRelease(hATR);
+   IndicatorRelease(hE20); IndicatorRelease(hE50); IndicatorRelease(hE200); IndicatorRelease(hATR); IndicatorRelease(hADX);
    ObjectsDeleteAll(0, "ST_");
   }
 
@@ -142,8 +149,9 @@ int SignalAt(int i, const double &o[], const double &h[], const double &l[], con
    score = Score(i, o, h, l, c, e20, e50, e200, atr, name);
    int prev = Score(i - 1, o, h, l, c, e20, e50, e200, atr, n2);
    bool upTrend = e50[i] > e200[i], dnTrend = e50[i] < e200[i];
-   if(score >= gMin && prev < gMin && (!InpTrendOnly || upTrend)) return(1);
-   if(score <= -gMin && prev > -gMin && (!InpTrendOnly || dnTrend)) return(-1);
+   if(InpNoRange && (i >= ArraySize(gTr) || gTr[i] == 0)) return(0);          // range: nao faz nada
+   if(score >= gMin && prev < gMin && (!InpTrendOnly || upTrend) && (!InpNoRange || gTr[i] == 1)) return(1);
+   if(score <= -gMin && prev > -gMin && (!InpTrendOnly || dnTrend) && (!InpNoRange || gTr[i] == -1)) return(-1);
    return(0);
   }
 
@@ -210,7 +218,7 @@ void Panel(int wins, int losses, double growth, const string last)
       ObjectSetInteger(0, "ST_BG", OBJPROP_XDISTANCE, 480);
       ObjectSetInteger(0, "ST_BG", OBJPROP_YDISTANCE, 20);
       ObjectSetInteger(0, "ST_BG", OBJPROP_XSIZE, 470);
-      ObjectSetInteger(0, "ST_BG", OBJPROP_YSIZE, 215);
+      ObjectSetInteger(0, "ST_BG", OBJPROP_YSIZE, 235);
       ObjectSetInteger(0, "ST_BG", OBJPROP_BGCOLOR, C'14,16,26');
       ObjectSetInteger(0, "ST_BG", OBJPROP_COLOR, C'255,196,0');
       ObjectSetInteger(0, "ST_BG", OBJPROP_BORDER_TYPE, BORDER_FLAT);
@@ -229,6 +237,9 @@ void Panel(int wins, int losses, double growth, const string last)
    Label("ST_3", 98, "Arriscando " + DoubleToString(InpRiskPct, 1) + "% por sinal: " + (growth >= 0 ? "+" : "") + DoubleToString(growth, 0) +
          "%  (~" + DoubleToString(gDayRet, 2) + "% por dia)", growth >= 0 ? clrLime : C'255,80,90');
    Label("ST_4", 118, "Ultimo: " + last, C'120,126,150', 8);
+   int tr = (ArraySize(gTr) > 1) ? (int)gTr[ArraySize(gTr) - 2] : 0;
+   Label("ST_7", 232, tr == 1 ? "MERCADO: TENDENCIA DE ALTA (so COMPRA)" : (tr == -1 ? "MERCADO: TENDENCIA DE BAIXA (so VENDA)" :
+         "MERCADO: RANGE - sem sinais, aguardando tendencia"), tr == 1 ? clrLime : (tr == -1 ? C'255,80,90' : C'255,196,0'), 9, "Arial Bold");
    Label("ST_5", 136, InpPush ? "Celular: LIGADO (app MT5)" : "Celular: desligado", InpPush ? clrLime : C'120,126,150', 8);
   }
 
@@ -243,8 +254,9 @@ double Simulate(int mn, double tpA, double slA, int from, int to, const double &
    for(int i = from; i < to; i++)
      {
       int dir = 0;
-      if(gSc[i] >= mn && gSc[i - 1] < mn && (!InpTrendOnly || e50[i] > e200[i])) dir = 1;
-      else if(gSc[i] <= -mn && gSc[i - 1] > -mn && (!InpTrendOnly || e50[i] < e200[i])) dir = -1;
+      if(InpNoRange && gTr[i] == 0) continue;                                      // range: nao conta
+      if(gSc[i] >= mn && gSc[i - 1] < mn && (!InpTrendOnly || e50[i] > e200[i]) && (!InpNoRange || gTr[i] == 1)) dir = 1;
+      else if(gSc[i] <= -mn && gSc[i - 1] > -mn && (!InpTrendOnly || e50[i] < e200[i]) && (!InpNoRange || gTr[i] == -1)) dir = -1;
       if(dir == 0) continue;
       double sp = spr[i] * _Point;                                  // o spread pesa contra: alvo mais longe, stop mais perto
       double tp = c[i] + dir * (tpA * atr[i] + sp), sl = c[i] - dir * MathMax(slA * atr[i] - sp, _Point);
@@ -301,6 +313,19 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
    if(CopyBuffer(hE50, 0, 0, rates_total, e50) != rates_total) return(0);
    if(CopyBuffer(hE200, 0, 0, rates_total, e200) != rates_total) return(0);
    if(CopyBuffer(hATR, 0, 0, rates_total, atr) != rates_total) return(0);
+
+   //--- TENDENCIA ou RANGE em cada candle: ADX forte + EMA 50 longe da EMA 200 + EMA 50 inclinada para o mesmo lado
+   double adx[];
+   if(CopyBuffer(hADX, 0, 0, rates_total, adx) != rates_total) return(0);
+   ArrayResize(gTr, rates_total);
+   for(int i = (prev_calculated > 0 ? MathMax(10, prev_calculated - 2) : 10); i < rates_total; i++)
+     {
+      gTr[i] = 0;
+      if(adx[i] < InpADXMin || atr[i] <= 0 || MathAbs(e50[i] - e200[i]) < InpSepATR * atr[i]) continue;
+      if(e50[i] > e200[i] && e50[i] > e50[i - 10] && close[i] > e50[i]) gTr[i] = 1;
+      else if(e50[i] < e200[i] && e50[i] < e50[i - 10] && close[i] < e50[i]) gTr[i] = -1;
+     }
+   for(int i = 0; i < MathMin(10, rates_total); i++) gTr[i] = 0;
 
    //--- nota de todos os candles (uma vez por candle novo) e o melhor ajuste
    ArrayResize(gSc, rates_total);
