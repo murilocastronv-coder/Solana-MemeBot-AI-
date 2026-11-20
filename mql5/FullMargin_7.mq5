@@ -16,7 +16,9 @@
 //|  - stop atras dos ultimos 5 candles; ALVO = 1,5x o risco;        |
 //|  - stop na entrada com +0,6 risco e stop movel com +1 risco;     |
 //|  - 2 perdas seguidas = pausa de 15 min (menos na queda forte);   |
-//|  - QUEDA FORTE do par (>= 1,5 ATR do H1 em 6h, abaixo da EMA50   |
+//|  - COMPRA E VENDA. QUEDA/ALTA FORTE (>= 1,5 ATR do H1 em 6h e do  |
+//|    lado certo da EMA50 H1): opera MAIS para esse lado.           |
+//|  - (antes: QUEDA FORTE do par, abaixo da EMA50                    |
 //|    H1): opera MAIS (forca 3, lote cheio). Sem queda forte: opera |
 //|    BEM MENOS (forca 7, 1 entrada por hora, lote 50%).            |
 //|  - PRECO MEDIO: preco foi 20 pips contra -> abre outra (ate 5),  |
@@ -31,13 +33,13 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.50"
+#property version   "4.60"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para na META DO DIA (saldo 300) ou no limite de perda e volta depois da meia-noite. Alto risco."
 
 #include <Trade\Trade.mqh>
 
 enum ENUM_SIDE { SIDE_BOTH = 0, SIDE_BUY = 1, SIDE_SELL = 2 };
-input ENUM_SIDE InpSide      = SIDE_SELL; // Lado: 0 = compra e venda, 1 = SO COMPRA, 2 = SO VENDA
+input ENUM_SIDE InpSide      = SIDE_BOTH; // Lado: 0 = compra e venda, 1 = SO COMPRA, 2 = SO VENDA
 input bool   InpEnterNow     = true;   // Abrir a 1a ordem assim que ligar
 input double InpTargetUSD    = 300.0;  // META DO DIA: saldo em dinheiro; ao chegar para ate a meia-noite (0 = usar o multiplicador)
 input bool   InpDaily        = true;   // Todo dia depois da meia-noite (servidor) recomeca e tenta a meta de novo
@@ -74,8 +76,9 @@ input ulong  InpMagic        = 20261120;
 CTrade   trade;
 int      hATR = INVALID_HANDLE, hEMA = INVALID_HANDLE, hEMA15 = INVALID_HANDLE, hEMA1 = INVALID_HANDLE;
 int      hATRH1 = INVALID_HANDLE, hEMAH1 = INVALID_HANDLE;
-double   gFall = 0;          // quanto o AUDUSD caiu nas ultimas 6 h, em ATR do H1 (positivo = caindo)
-bool     gStrong = false;    // queda forte agora?
+double   gFall = 0;          // quanto o AUDUSD caiu nas ultimas 6 h, em ATR do H1 (positivo = caindo, negativo = subindo)
+bool     gStrong = false;    // movimento forte agora (queda forte OU alta forte)?
+int      gStrongDir = 0;     // -1 = queda forte (vende mais), 1 = alta forte (compra mais), 0 = fraco
 double   gLotFactor = 1.0;
 datetime gLastEntry = 0;
 double   gRisk = 0;          // distancia do stop na entrada (1 risco)
@@ -291,7 +294,7 @@ bool OpenOrder(int dir, double slDist, const string name)
       gTrades++;
       gRisk = slDist;
       gLastEntry = TimeCurrent();
-      gLastPattern = (dir == 1 ? "COMPRA - " : "VENDA - ") + name + (gStrong ? " [QUEDA FORTE]" : "") + " " + TimeToString(TimeCurrent(), TIME_MINUTES);
+      gLastPattern = (dir == 1 ? "COMPRA - " : "VENDA - ") + name + (gStrongDir == -1 ? " [QUEDA FORTE]" : (gStrongDir == 1 ? " [ALTA FORTE]" : "")) + " " + TimeToString(TimeCurrent(), TIME_MINUTES);
       return(true);
      }
    Print("Full Margin: ordem recusada - ", trade.ResultRetcodeDescription());
@@ -340,7 +343,10 @@ void UpdateFall()
    double now = SymbolInfoDouble(_Symbol, SYMBOL_BID), before = iClose(_Symbol, PERIOD_H1, 6);
    if(now <= 0 || before <= 0) return;
    gFall = (before - now) / atrh[0];
-   gStrong = (gFall >= InpStrongDrop && now < emah[0]);
+   gStrongDir = 0;
+   if(gFall >= InpStrongDrop && now < emah[0]) gStrongDir = -1;          // queda forte
+   else if(-gFall >= InpStrongDrop && now > emah[0]) gStrongDir = 1;     // alta forte
+   gStrong = gStrongDir != 0;
   }
 
 //--- now = true: entrada imediata ao ligar. Retorna false se os dados ainda nao carregaram.
@@ -366,12 +372,14 @@ bool TryEntry(bool now)
       //--- queda forte: opera MAIS (forca menor, lote cheio); sem queda forte: BEM MENOS (forca maior,
       //--- no maximo 1 entrada a cada InpWeakEveryMin minutos, lote menor)
       UpdateFall();
-      int need = gStrong ? InpScoreStrong : InpScoreWeak;
+      //--- forte so vale para o lado do movimento: queda forte -> vende mais; alta forte -> compra mais
+      int needBuy  = (gStrongDir == 1)  ? InpScoreStrong : InpScoreWeak;
+      int needSell = (gStrongDir == -1) ? InpScoreStrong : InpScoreWeak;
       if(!gStrong && TimeCurrent() - gLastEntry < InpWeakEveryMin * 60) return(true);
-      if(sc >= need) dir = 1;
-      else if(sc <= -need) dir = -1;
+      if(sc >= needBuy) dir = 1;
+      else if(sc <= -needSell) dir = -1;
      }
-   gLotFactor = (now || gStrong) ? 1.0 : InpWeakLotPct / 100.0;
+   gLotFactor = (now || (gStrong && dir == gStrongDir)) ? 1.0 : InpWeakLotPct / 100.0;
    //--- lado escolhido: so venda / so compra
    if(InpSide == SIDE_SELL) dir = now ? -1 : (dir == -1 ? -1 : 0);
    if(InpSide == SIDE_BUY)  dir = now ?  1 : (dir ==  1 ?  1 : 0);
@@ -523,7 +531,7 @@ void Dashboard()
    else if(TimeCurrent() < gPauseUntil)
       Line(1, "● PAUSA ate " + TimeToString(gPauseUntil, TIME_MINUTES) + " (perdas seguidas)", CLR_GOLD, 10, "Arial Bold");
    else
-      Line(1, "● OPERANDO  " + _Symbol + (InpSide == SIDE_SELL ? "  SO VENDA" : (InpSide == SIDE_BUY ? "  SO COMPRA" : "  candles M1")), CLR_GREEN, 10, "Arial Bold");
+      Line(1, "● OPERANDO  " + _Symbol + (InpSide == SIDE_SELL ? "  SO VENDA" : (InpSide == SIDE_BUY ? "  SO COMPRA" : "  COMPRA E VENDA")), CLR_GREEN, 10, "Arial Bold");
 
    Line(3, "Comecou hoje: " + DoubleToString(gStart, 2) + " " + cur, CLR_TXT);
    Line(4, "Capital     : " + DoubleToString(eq, 2) + " " + cur, CLR_TXT, 11);
@@ -541,8 +549,9 @@ void Dashboard()
    int tot = gWins + gLosses;
    Line(10, "Operacoes : " + IntegerToString(gTrades) + "   Ganhos: " + IntegerToString(gWins) + "   Perdas: " + IntegerToString(gLosses), CLR_TXT);
    Line(11, "Acerto    : " + (tot > 0 ? DoubleToString(100.0 * gWins / tot, 0) + "%" : "-"), CLR_TXT);
-   Line(14, gStrong ? "QUEDA FORTE (" + DoubleToString(gFall, 1) + " ATR em 6h): opera MAIS"
-                    : "Sem queda forte (" + DoubleToString(gFall, 1) + " ATR em 6h): opera BEM MENOS",
+   Line(14, gStrongDir == -1 ? "QUEDA FORTE (" + DoubleToString(gFall, 1) + " ATR em 6h): VENDE mais"
+          : (gStrongDir == 1 ? "ALTA FORTE (" + DoubleToString(-gFall, 1) + " ATR em 6h): COMPRA mais"
+                             : "Sem movimento forte (" + DoubleToString(-gFall, 1) + " ATR em 6h): opera BEM MENOS"),
         gStrong ? CLR_GREEN : CLR_DIM, 9);
    if(!InpGridFavor && HasPosition())
       Line(15, "Preco medio: " + DoubleToString(gBasketPips, 1) + " pips (fecha tudo com +" + DoubleToString(InpBasketPips, 0) + ")",
