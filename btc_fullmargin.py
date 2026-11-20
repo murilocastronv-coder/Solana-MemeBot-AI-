@@ -294,7 +294,7 @@ def basket_pct(pos, price):
 
 
 def tp_price(pos):
-    return pos["entry"] * (1 + BASKET_TP_PCT * _sgn(pos))
+    return pos["entry"] * (1 + pos.get("tp", BASKET_TP_PCT) * _sgn(pos))
 
 
 def next_grid_price(pos):
@@ -345,7 +345,8 @@ def _open(d, price, side, why, col=None, now=None, lev=None):
                    n=pos.get("n", 1) + 1, last=price, lev=max(pos.get("lev", lev), lev))
     else:
         pos = {"side": side, "entry": onchain_avg or price, "size_usd": add, "collateral_usd": col, "n": 1,
-               "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0, "lev": lev}
+               "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0, "lev": lev,
+               "tp": (CFG.get(d["mode"]) or {}).get("tp", BASKET_TP_PCT)}
         d["pos"] = pos
     if sig:
         pos["signature"] = sig
@@ -434,6 +435,8 @@ def cycle(mode, send, chat, now=None, klines=None):
     now = now or time.time()
     with _LOCK:
         d = _load(mode)
+        if mode in MODES:
+            CFG[mode] = d.get("cfg") or None             # strategy variant chosen with the optimizer (None = default)
         if not d["on"] and not d.get("pos"):
             return "desligado"
         cs = (klines or klines_5m)()
@@ -466,10 +469,15 @@ def cycle(mode, send, chat, now=None, klines=None):
         if pos:
             bp = basket_pct(pos, price)
             why = ""
-            if bp >= BASKET_TP_PCT:
+            cf = CFG.get(mode) or {}
+            if bp >= pos.get("tp", BASKET_TP_PCT):
                 why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO"
             elif bp <= -LIQ_GUARD / effective_lev(pos):
                 why = "🛑 PROTEÇÃO (perto da liquidação)"
+            elif cf.get("stop") and bp <= -cf["stop"]:
+                why = "🛑 STOP DO CONJUNTO (-" + format(cf["stop"] * 100, ".1f") + "%)"
+            elif cf.get("hold_h") and now - pos.get("opened", now) >= cf["hold_h"] * 3600:
+                why = "⏱️ TEMPO MÁXIMO (" + str(cf["hold_h"]) + " h)"
             if why:
                 pnl, sig = _close(d, price, why, now)
                 _save(d)
@@ -488,7 +496,8 @@ def cycle(mode, send, chat, now=None, klines=None):
                     add_lev = plan["win"] if plan else None
                     add, label = free_capital(d) * WIN_ADD_PCT * risk_cut(d["capital"]), "VAI GANHAR (+50%)"
                     pos["win_added"] = True
-                elif pos.get("loss_adds", 0) < LOSS_ADDS and bp <= -LOSS_TRIGGER and in_favor and turning and \
+                elif (CFG.get(mode) or {}).get("adds", True) and \
+                        pos.get("loss_adds", 0) < LOSS_ADDS and bp <= -LOSS_TRIGGER and in_favor and turning and \
                         (price - next_grid_price(pos)) * sg <= 0:
                     left = LOSS_ADDS - pos.get("loss_adds", 0)
                     add_lev = plan["loss"][min(pos.get("loss_adds", 0), len(plan["loss"]) - 1)] if plan else None
@@ -526,7 +535,13 @@ def cycle(mode, send, chat, now=None, klines=None):
         score, a, reading = read_chart(closed)
         sdir, move = strong_move(closed)
         LAST.update(score=score, reading=reading, strong=sdir, move=round(move, 2))
-        if ALWAYS_IN:
+        cf = CFG.get(mode) or {}
+        if cf.get("entry") == "trend":                 # optimizer variant: only with a strong move, to its side
+            if not sdir:
+                _save(d)
+                return "sem tendência forte"
+            side_dir, factor = sdir, 1.0
+        elif ALWAYS_IN:
             # owner, Nov 20: ALWAYS with orders open (maximum trades): right after closing it opens the next one,
             # to the side of the strong move, or else to the side of the chart reading; always the full lot
             side_dir, factor = (sdir or (1 if score >= 0 else -1)), 1.0
@@ -578,7 +593,9 @@ def cycle_all(send, chat, now=None):
 
 # ------------------------------------------------------------------ backtest (owner, Nov 20)
 ONLY_SIDE = {}                  # mode -> "short" (backtest that only sells)
+BT_CACHE = {}                   # chart readings of the candles (shared by the optimizer's runs over the same data)
 LEV_PLAN = {}                   # mode -> dynamic leverage plan (backtest)
+CFG = {}                        # mode -> strategy variant (optimizer): tp, stop, hold_h, entry ("always"/"trend"), adds
 DYN_PLAN = {"first": 15, "loss": [20, 25, 30, 35], "win": 30}   # owner, Nov 20: 15x, more when losing, more when winning
 BT_ASSETS = {"BTC": ("BTCUSDT", "BTC-USD"), "SOL": ("SOLUSDT", "SOL-USD"), "ETH": ("ETHUSDT", "ETH-USD")}
 
@@ -616,7 +633,7 @@ def klines_history(days=BT_DAYS, asset="BTC"):
     return [rows[k] for k in sorted(rows)]
 
 
-def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None, plan=None):  # noqa: C901
+def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None, plan=None, cfg=None):  # noqa: C901
     """Runs the robot's own cycle() over the candles, as a demo account that started 3 days into the data.
     Every 5-minute candle: it closes at the candle's close; the +0.25% close is also checked with the candle's
     high/low (the order touched the price). Fees are the same as the demo (open/close + borrow per hour)."""
@@ -631,9 +648,26 @@ def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None, plan=None)
     d.update(on=True, leverage=leverage)
     ONLY_SIDE["bt"] = only
     LEV_PLAN["bt"] = plan
+    CFG["bt"] = cfg
     _save(d)
     old_curve, CURVE_MAX = CURVE_MAX, 100000
     msgs = []
+    global read_chart, strong_move
+    real_rc, real_sm = read_chart, strong_move
+    rc_cache, sm_cache = BT_CACHE.setdefault("rc", {}), BT_CACHE.setdefault("sm", {})
+
+    def cached_rc(closed):
+        k = (closed[-1]["t"], closed[-1]["c"])
+        if k not in rc_cache:
+            rc_cache[k] = real_rc(closed)
+        return rc_cache[k]
+
+    def cached_sm(closed):
+        k = (closed[-1]["t"], closed[-1]["c"])
+        if k not in sm_cache:
+            sm_cache[k] = real_sm(closed)
+        return sm_cache[k]
+    read_chart, strong_move = cached_rc, cached_sm
     try:
         for i in range(WARM, len(cs)):
             now = cs[i]["t"] + TF
@@ -659,6 +693,7 @@ def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None, plan=None)
         _save(d)
     finally:
         CURVE_MAX = old_curve
+        read_chart, strong_move = real_rc, real_sm
     return d
 
 
@@ -744,13 +779,110 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, pla
         BT["running"] = False
 
 
+# ------------------------------------------------------------------ optimizer (owner, Nov 20)
+VARIANTS = [   # (name, leverage, config)
+    ("Atual (sem stop)", 15, {}),
+    ("Atual 5x", 5, {}),
+    ("Stop 2% · 24h · alvo 0,5%", 10, {"stop": 0.02, "hold_h": 24, "tp": 0.005}),
+    ("Stop 2% · 24h · alvo 0,5% · 5x", 5, {"stop": 0.02, "hold_h": 24, "tp": 0.005}),
+    ("Tendência · stop 2% · 24h · alvo 1%", 10, {"entry": "trend", "stop": 0.02, "hold_h": 24, "tp": 0.01}),
+    ("Tendência · stop 2% · 24h · alvo 1% · 5x", 5, {"entry": "trend", "stop": 0.02, "hold_h": 24, "tp": 0.01}),
+    ("Tendência · stop 1,5% · 12h · alvo 0,75%", 10, {"entry": "trend", "stop": 0.015, "hold_h": 12, "tp": 0.0075}),
+    ("Tendência · stop 3% · 48h · alvo 1,5%", 5, {"entry": "trend", "stop": 0.03, "hold_h": 48, "tp": 0.015}),
+    ("Tendência · sem recuperação · stop 1% · alvo 2%", 10, {"entry": "trend", "stop": 0.01, "hold_h": 24, "tp": 0.02, "adds": False}),
+    ("Tendência · sem recuperação · stop 1,5% · alvo 3%", 5, {"entry": "trend", "stop": 0.015, "hold_h": 48, "tp": 0.03, "adds": False}),
+    ("Sempre · sem recuperação · stop 1% · alvo 1%", 10, {"stop": 0.01, "hold_h": 12, "tp": 0.01, "adds": False}),
+    ("Sempre · stop 3% · 12h · alvo 0,5%", 5, {"stop": 0.03, "hold_h": 12, "tp": 0.005}),
+]
+
+
+def summary(d):
+    days = d.get("days") or []
+    tt = d.get("total") or {}
+    months = {}
+    for x in days:
+        months[x["day"][:7]] = months.get(x["day"][:7], 0.0) + x["result"]
+    return {"total": round(sum(x["result"] for x in days), 2), "months": months, "trades": tt.get("trades", 0),
+            "win": (tt.get("wins", 0) / tt["trades"] * 100) if tt.get("trades") else 0, "fees": tt.get("fees", 0),
+            "limit": sum(1 for x in days if "LIMITE" in (x.get("why") or "")),
+            "held": max((h.get("held_h", 0) for h in d.get("hist") or []), default=0)}
+
+
+def optimize(cs, only=None):
+    """Runs every variant over the same candles. Best = most months in profit, then the biggest total."""
+    BT_CACHE.clear()
+    out = []
+    for name, lev, cfg in VARIANTS:
+        d = backtest(cs, lev, only=only, cfg=cfg)
+        out.append((name, lev, cfg, summary(d)))
+    BT_CACHE.clear()
+    out.sort(key=lambda r: (sum(1 for v in r[3]["months"].values() if v > 0), r[3]["total"]), reverse=True)
+    return out
+
+
+def optimize_text(out, asset, days):
+    L = ["🔬 OTIMIZADOR — " + asset + " · " + str(days) + " dias de candles reais de 5 min · taxas incluídas",
+         "Cada versão começa todo dia com US$ " + format(CAPITAL_USD, ".0f") + ". Melhor = mais meses no lucro, depois o maior total.", ""]
+    for k, (name, lev, cfg, sm) in enumerate(out):
+        pos_m = sum(1 for v in sm["months"].values() if v > 0)
+        L.append(("🥇 " if k == 0 else ("🥈 " if k == 1 else ("🥉 " if k == 2 else str(k + 1) + ". "))) + name + " · " + str(lev) + "x")
+        L.append("   " + ("✅ " if sm["total"] > 0 else "❌ ") + format(sm["total"], "+.2f") + " USD · meses no lucro " + str(pos_m) + "/" +
+                 str(len(sm["months"])) + " · " + str(sm["trades"]) + " fechamentos (" + format(sm["win"], ".0f") + "% lucro) · taxas " +
+                 format(sm["fees"], ".0f") + " · limite " + str(sm["limit"]) + "x · máx " + format(sm["held"], ".0f") + " h aberta")
+        L.append("   por mês: " + " · ".join(m[5:] + " " + format(v, "+.0f") for m, v in sorted(sm["months"].items())))
+    best = out[0]
+    L += ["", ("✅ A melhor deu lucro: " if best[3]["total"] > 0 else "❌ Nenhuma versão deu lucro no período. A melhor foi: ") +
+          best[0] + " (" + str(best[1]) + "x).",
+          "Toque em ✅ Usar a melhor na DEMO para o robô passar a operar assim na conta demo.",
+          "⚠️ A melhor no passado pode não ser a melhor no futuro: confira na DEMO antes da conta real."]
+    return "\n".join(L)
+
+
+def run_optimize(send, chat, asset="SOL", days=90, only=None):
+    if BT["running"]:
+        send(chat, "⏳ Já tem um backtest rodando, espera o resultado.")
+        return
+    BT["running"] = True
+    try:
+        send(chat, "🔬 Otimizador " + asset + " começou: " + str(len(VARIANTS)) + " versões da estratégia em " + str(days) +
+             " dias de candles reais (stop no conjunto, tempo máximo, alvo maior, alavancagem menor, só tendência…). "
+             "Leva uns 10–30 minutos. Nenhuma ordem real.")
+        cs = klines_history(days, asset)
+        keep = dict(LAST)
+        try:
+            out = optimize(cs, only)
+        finally:
+            LAST.clear()
+            LAST.update(keep)
+        BT["best"] = {"asset": asset, "name": out[0][0], "lev": out[0][1], "cfg": out[0][2]}
+        txt = optimize_text(out, asset, days)
+        for k in range(0, len(txt), 3800):
+            send(chat, txt[k:k + 3800], keyboard() if k + 3800 >= len(txt) else None)
+    except Exception as exc:
+        send(chat, "⛔ Otimizador: " + str(exc)[:200], keyboard())
+    finally:
+        BT["running"] = False
+
+
+def apply_best(mode):
+    """Puts the optimizer's best variant (strategy + leverage) on an account."""
+    best = BT.get("best")
+    if not best:
+        return None
+    with _LOCK:
+        d = _load(mode)
+        d["cfg"], d["leverage"], d["cfg_name"] = best["cfg"], best["lev"], best["name"]
+        _save(d)
+    return best
+
+
 # ------------------------------------------------------------------ Telegram
 def account_text(mode):
     d = _load(mode)
     price = LAST.get("price")
     eq = equity(d, price)
     state = ("🟢 ligada" if d["on"] else "🔴 desligada") + (" · ⛔ " + d["done_why"] + " (volta amanhã)" if d["on"] and d["done_why"] else "")
-    L = [NAME[mode] + " — " + state + " · " + str(d["leverage"]) + "x",
+    L = [NAME[mode] + " — " + state + " · " + str(d["leverage"]) + "x" + (" · versão: " + d["cfg_name"] if d.get("cfg_name") else ""),
          "💼 Saldo da conta: US$ " + format(eq, ".2f") + " (hoje " + format(eq - CAPITAL_USD, "+.2f") + " · começou com US$ " +
          format(CAPITAL_USD, ".0f") + " · 🎯 meta US$ " + format(TARGET_USD, ".0f") + ")"]
     prog = max(0.0, min(1.0, (eq - CAPITAL_USD) / (TARGET_USD - CAPITAL_USD)))
@@ -928,6 +1060,11 @@ def keyboard():
                  {"text": "🧪 ETH 30d", "callback_data": "bfm_bt_eth"}, {"text": "🧪 ETH 3m", "callback_data": "bfm_bt90_eth"}])
     rows.append([{"text": "📉 SOL venda 30d", "callback_data": "bfm_bts_sol"}, {"text": "📉 SOL venda 3m", "callback_data": "bfm_bts90_sol"},
                  {"text": "📉 ETH venda 30d", "callback_data": "bfm_bts_eth"}, {"text": "📉 ETH venda 3m", "callback_data": "bfm_bts90_eth"}])
+    rows.append([{"text": "🔬 Otimizar SOL 3m", "callback_data": "bfm_opt_sol"}, {"text": "🔬 Otimizar BTC 3m", "callback_data": "bfm_opt_btc"},
+                 {"text": "🔬 Otimizar ETH 3m", "callback_data": "bfm_opt_eth"}])
+    if BT.get("best"):
+        rows.append([{"text": "✅ Usar a melhor na DEMO", "callback_data": "bfm_use_demo"},
+                     {"text": "✅ Usar a melhor na REAL", "callback_data": "bfm_use_real"}])
     rows.append([{"text": "⚡ SOL alavancagem dinâmica 30d", "callback_data": "bfm_btd_sol"},
                  {"text": "⚡ SOL dinâmica 3m", "callback_data": "bfm_btd90_sol"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
@@ -938,7 +1075,8 @@ def keyboard():
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
             "/aovivo", "bfm_bt", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
             "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
-            "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
+            "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol", "bfm_opt_sol", "bfm_opt_btc", "bfm_opt_eth",
+            "bfm_use_demo", "bfm_use_real"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
            {p + m for p in ("bfm_on_", "bfm_off_", "bfm_close_") for m in MODES})
 
 
@@ -971,6 +1109,14 @@ def handle(action, send, chat, run_async):
     elif action == "bfm_live_stop":
         LIVE.pop(str(chat), None)
         send(chat, "⏹️ Ao vivo parado.", keyboard())
+    elif action.startswith("bfm_opt_"):
+        asset = action[8:].upper()
+        run_async(lambda: run_optimize(send, chat, asset, 90))
+    elif action in ("bfm_use_demo", "bfm_use_real"):
+        best = apply_best(action[8:])
+        send(chat, ("✅ " + NAME[action[8:]] + " agora opera com: " + best["name"] + " · " + str(best["lev"]) + "x (a partir da próxima "
+                    "ordem). Obs.: o robô opera BTC; a versão veio do otimizador de " + best["asset"] + ".")
+             if best else "Rode primeiro um 🔬 Otimizar.", keyboard())
     elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
         days = 90 if ("90" in action or action.endswith("_3m")) else BT_DAYS
