@@ -336,10 +336,10 @@ def _open(d, price, side, why, col=None, now=None):
         size = pos["size_usd"] + add
         entry = size / (pos["size_usd"] / pos["entry"] + add / price)        # average price of the USD notional
         pos.update(size_usd=size, entry=onchain_avg or entry, collateral_usd=pos["collateral_usd"] + col,
-                   n=pos.get("n", 1) + 1, last=price)
+                   n=pos.get("n", 1) + 1, last=price, lev=max(pos.get("lev", lev), lev))
     else:
         pos = {"side": side, "entry": onchain_avg or price, "size_usd": add, "collateral_usd": col, "n": 1,
-               "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0}
+               "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0, "lev": lev}
         d["pos"] = pos
     if sig:
         pos["signature"] = sig
@@ -462,7 +462,7 @@ def cycle(mode, send, chat, now=None, klines=None):
             why = ""
             if bp >= BASKET_TP_PCT:
                 why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO"
-            elif bp <= -LIQ_GUARD / d["leverage"]:
+            elif bp <= -LIQ_GUARD / max(pos.get("lev", d["leverage"]), d["leverage"]):
                 why = "🛑 PROTEÇÃO (perto da liquidação)"
             if why:
                 pnl, sig = _close(d, price, why, now)
@@ -941,10 +941,11 @@ def handle(action, send, chat, run_async):
         with _LOCK:
             for m in MODES:
                 d = _load(m)
-                if lev in LEVERAGES and not d.get("pos"):
+                if lev in LEVERAGES:                      # also with orders open: it is used from the next order on
                     d["leverage"] = lev
                     _save(d)
-        send(chat, "⚙️ Alavancagem: " + str(lev) + "x nas duas contas (vale para a próxima ordem).", keyboard())
+        send(chat, "✅ Alavancagem trocada para " + str(lev) + "x nas duas contas (DEMO e REAL). Vale a partir da próxima ordem; "
+             "as ordens já abertas continuam com a alavancagem delas.", keyboard())
     elif action == "bfm_on_demo":
         _start("demo", send, chat, run_async)
     elif action == "bfm_on_real":

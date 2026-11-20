@@ -411,6 +411,15 @@ class Telegram(Base):
         for cb in cbs:
             self.assertIn(cb, bfm.ACTIONS | {"wallet_deposit", "wallet_withdraw", "wallet_balance"})
 
+    def test_leverage_changes_with_orders_open(self):
+        self.turn_on()
+        self.cyc(candles())
+        self.assertIsNotNone(bfm._load("demo")["pos"])
+        bfm.handle("bfm_lev10", self.send, "1", lambda fn: fn())
+        self.assertEqual(bfm._load("demo")["leverage"], 10)
+        self.assertEqual(bfm._load("demo")["pos"]["lev"], 40)              # the open order keeps its 40x guard
+        self.assertIn("Alavancagem trocada para 10x", self.msgs[-1])
+
     def test_accounts_switch_to_40x_once(self):
         import json
         bfm._path("real").write_text(json.dumps({"leverage": 5}), encoding="utf-8")
