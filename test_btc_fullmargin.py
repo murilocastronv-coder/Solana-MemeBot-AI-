@@ -163,6 +163,27 @@ class Cycle(Base):
         self.turn_on(capital=49.0, trades=2)
         self.assertEqual(self.cyc(candles()), "LIMITE DE PERDA DO DIA")
 
+    def test_two_losses_in_the_day_stop_until_tomorrow(self):
+        self.turn_on(trades=2, losses=2)
+        self.assertEqual(self.cyc(candles()), "2 PERDAS NO DIA")
+        self.assertIn("volta sozinho amanhã", self.msgs[-1])
+        self.assertEqual(self.cyc(candles()), "parado até amanhã")
+        self.assertEqual(self.cyc(candles(), now=NOW + 86400), "abriu")     # next day it trades again
+
+    def test_after_a_win_at_most_4_more(self):
+        self.turn_on(trades=1)
+        d = bfm._load("demo")
+        d["pos"] = {"entry": 100.0, "size_usd": 500.0, "collateral_usd": 100.0, "risk": 1.0, "stop": 101.0}
+        bfm._close(d, 98.0, "🎯 ALVO")
+        self.assertEqual(d["budget"], 4)
+        for left in (3, 2, 1, 0):
+            d["pos"] = None
+            bfm._open(d, 100.0, 1.0, "x")
+            self.assertEqual(d["budget"], left)
+        d["pos"] = None
+        bfm._save(d)
+        self.assertEqual(self.cyc(candles()), "FEZ AS 4 ORDENS DEPOIS DO GANHO")
+
     def test_two_losses_pause(self):
         self.turn_on(trades=1)
         d = bfm._load("demo")

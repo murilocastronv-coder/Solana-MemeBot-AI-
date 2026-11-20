@@ -3,9 +3,9 @@
 //|                                                                  |
 //| Voce liga quando quiser operar. Ele guarda o capital da hora em  |
 //| que foi ligado e opera scalp no par do grafico ate:              |
-//|  - SEM META por padrao: opera sempre; com 150 o risco cai p/ 50% |
-//|  - ou bater o LIMITE DE PERDA     -> fecha tudo e para.          |
-//| Para operar de novo (ex.: no dia seguinte) e so ligar de novo.   |
+//|  - META DO DIA saldo 150: para e volta depois da meia-noite;     |
+//|  - quanto maior o saldo no dia, menor o risco (margem menor);   |
+//|  - ou LIMITE DE PERDA do dia (50%) -> para e volta amanha.       |
 //|                                                                  |
 //| Estrategia v4 (M1, 1 ordem por vez, DIA INTEIRO):               |
 //|  - LE O GRAFICO M1 e da uma nota de -9 a +9: tendencia M5+M15,   |
@@ -13,9 +13,10 @@
 //|    (engolfo, martelo, estrela cadente) e candle de forca;        |
 //|  - ao LIGAR ja abre para o lado da leitura;                      |
 //|  - depois: nota >= +4 compra, <= -4 vende (InpMinScore);         |
-//|  - stop atras dos ultimos 5 candles; ALVO = 1,5x o risco;        |
-//|  - stop na entrada com +0,6 risco e stop movel com +1 risco;     |
-//|  - 2 perdas seguidas = pausa de 15 min.                          |
+//|  - stop atras dos ultimos 5 candles; ALVO = 2x o risco;          |
+//|  - stop na entrada com +0,8 risco e stop movel com +1,2 risco;   |
+//|  - 2 perdas no dia = para e volta amanha; depois de cada ganho   |
+//|    abre no maximo mais 4 ordens no dia;                          |
 //| Lote: FULL MARGIN - usa InpMarginUse % (padrao 100%) da margem   |
 //| livre = lote maximo; a cada ganho o capital sobe e o proximo     |
 //| lote fica maior (juros compostos) ate bater a meta.              |
@@ -25,30 +26,32 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.40"
-#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; opera dia e noite sem meta; a partir de 150 usa 50% da margem (risco menor). Alto risco."
+#property version   "5.10"
+#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; meta do dia 150 (para ate a meia-noite e volta); quanto maior o saldo, menor o risco. Alto risco."
 
 #include <Trade\Trade.mqh>
 
 enum ENUM_SIDE { SIDE_BOTH = 0, SIDE_BUY = 1, SIDE_SELL = 2 };
 input ENUM_SIDE InpSide      = SIDE_SELL; // Lado: 0 = compra e venda, 1 = SO COMPRA, 2 = SO VENDA
 input bool   InpEnterNow     = true;   // Abrir a 1a ordem assim que ligar
-input bool   InpUseTarget    = false;  // Usar META DO DIA (false = sem meta: opera o dia inteiro e a noite toda)
-input double InpTargetUSD    = 300.0;  // META DO DIA (se ligada): saldo em dinheiro; ao chegar para ate a meia-noite
+input bool   InpUseTarget    = true;   // Usar META DO DIA (false = sem meta: opera o dia inteiro e a noite toda)
+input double InpTargetUSD    = 150.0;  // META DO DIA (se ligada): saldo em dinheiro; ao chegar para ate a meia-noite
 input bool   InpDaily        = true;   // Todo dia depois da meia-noite (servidor) recomeca e tenta a meta de novo
 input double InpTargetMult   = 3.0;    // META por multiplicador (so se a meta em dinheiro for 0): 3 = 50 -> 150
-input double InpMaxLossPct   = 0.0;    // LIMITE DE PERDA do dia em % (0 = sem limite)
+input double InpMaxLossPct   = 50.0;   // LIMITE DE PERDA do dia em % (0 = sem limite)
 input double InpMarginUse    = 100.0;  // % da margem livre usada por ordem (100 = FULL MARGIN, lote maximo)
 input double InpMaxLot       = 100.0;  // Lote maximo por ordem (limite de seguranca)
-input double InpSafeFrom     = 150.0;  // Quando o saldo chega aqui, DIMINUI o risco (0 = desliga)
-input double InpSafeMargin   = 50.0;   // Margem usada (%) a partir desse saldo (50 = metade do full margin)
-input double InpRR           = 1.5;    // ALVO = risco x isto (1.5 = ganha 1,5x o que arrisca)
-input double InpBreakevenR   = 0.6;    // Com lucro de X riscos, stop vai para a entrada (sem perda)
-input double InpTrailStartR  = 1.0;    // Com lucro de X riscos, comeca o stop movel
+input bool   InpRiskDown     = true;   // Quanto MAIOR o saldo (acima do comeco do dia), MENOR o risco
+input double InpMinRisk      = 30.0;   // Margem minima usada (%) por mais que o saldo cresca
+input double InpRR           = 2.0;    // ALVO = risco x isto (2 = ganha 2x o que arrisca)
+input double InpBreakevenR   = 0.8;    // Com lucro de X riscos, stop vai para a entrada (sem perda)
+input double InpTrailStartR  = 1.2;    // Com lucro de X riscos, comeca o stop movel
 input double InpTrailDistR   = 0.5;    // Distancia do stop movel (em riscos)
 input int    InpEMAFast      = 20;     // EMA do recuo no M1
 input int    InpEMATrend     = 50;     // EMA de tendencia no M5 e no M15
 input int    InpMinScore     = 4;      // Forca minima da leitura dos candles para entrar (1 a 8)
+input int    InpLossesDay    = 2;      // Perdeu esta quantidade de vezes no dia: PARA e volta no dia seguinte (0 = desliga)
+input int    InpAfterWin     = 4;      // Depois de cada ganho abre no maximo mais X ordens no dia (0 = sem limite)
 input int    InpPauseLosses  = 2;      // Perdas seguidas para pausar
 input int    InpPauseMin     = 15;     // Minutos de pausa depois dessas perdas
 input int    InpMaxSpread    = 50;     // Spread maximo (pontos)
@@ -81,6 +84,7 @@ double   gFirstStart = 0;    // capital do 1o dia (para a meta % quando ja comec
 int      gDay = 0;           // dia do servidor (AAAAMMDD) da sessao atual
 bool     gDayDone = false;   // meta/limite do dia batido: espera a meia-noite
 double   gDayTarget = 0;
+int      gBudget = -1;       // ordens que ainda pode abrir hoje depois do ultimo ganho (-1 = sem limite ainda)
 
 int Today() { MqlDateTime t; TimeToStruct(TimeCurrent(), t); return(t.year * 10000 + t.mon * 100 + t.day); }
 
@@ -105,6 +109,7 @@ void NewDay()
    gStopWhy = "";
    gDayDone = false;
    gTrades = 0; gWins = 0; gLosses = 0; gConsecLoss = 0; gPauseUntil = 0;
+   gBudget = -1;
    gEntered = false;
    Print("Full Margin: dia ", gDay, " - capital ", DoubleToString(gStart, 2), " meta do dia ", DoubleToString(gDayTarget, 2));
   }
@@ -139,11 +144,13 @@ void StopSession(const string why)
    Alert("Full Margin: ", why, " - capital ", DoubleToString(Equity(), 2));
   }
 
-//--- % da margem usada agora: full margin abaixo de InpSafeFrom; a partir dele, InpSafeMargin (ex.: 150 -> 50%)
+//--- % da margem usada agora: full margin ate o capital do comeco do dia; acima disso
+//--- 100% x (comeco / saldo)^2  (ex.: comecou com 100 -> 120: 69%, 140: 51%), minimo InpMinRisk
 double MarginPct()
   {
-   if(InpSafeFrom <= 0 || Equity() < InpSafeFrom) return(InpMarginUse);
-   return(MathMin(InpMarginUse, InpSafeMargin));
+   double eq = Equity();
+   if(!InpRiskDown || gStart <= 0 || eq <= gStart) return(InpMarginUse);
+   return(MathMax(InpMinRisk, InpMarginUse * MathPow(gStart / eq, 2)));
   }
 
 //--- lote pela margem: MarginPct() % da margem livre
@@ -218,6 +225,7 @@ bool OpenOrder(int dir, double slDist, const string name)
    if(ok && trade.ResultRetcode() == TRADE_RETCODE_DONE)
      {
       gTrades++;
+      if(gBudget > 0) gBudget--;
       gRisk = slDist;
       gLastPattern = (dir == 1 ? "COMPRA - " : "VENDA - ") + name + " " + TimeToString(TimeCurrent(), TIME_MINUTES);
       return(true);
@@ -340,6 +348,11 @@ void Cycle()
    if(InpUseTarget && eq >= gDayTarget) { StopSession("META DO DIA BATIDA"); gDayDone = true; return; }
    if(InpMaxLossPct > 0 && eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA DO DIA"); gDayDone = true; return; }
    if(HasPosition()) { ManagePosition(); return; }
+   //--- regras do dia: 2 perdas = para ate amanha; depois de um ganho, no maximo mais InpAfterWin ordens
+   if(InpLossesDay > 0 && gLosses >= InpLossesDay)
+     { StopSession(IntegerToString(gLosses) + " PERDAS NO DIA"); gDayDone = true; return; }
+   if(gBudget == 0)
+     { StopSession("FEZ AS " + IntegerToString(InpAfterWin) + " ORDENS DEPOIS DO GANHO"); gDayDone = true; return; }
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
 
    bool spreadOk = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) <= InpMaxSpread;
@@ -400,7 +413,6 @@ void Dashboard()
   {
    double eq = Equity(), target = gDayTarget, lossFloor = gStart * (1.0 - InpMaxLossPct / 100.0);
    double pnl = eq - gStart;
-   if(!InpUseTarget) target = InpSafeFrom;     // sem meta: a barra mostra o caminho ate o saldo em que o risco comeca a cair
    double prog = (target > gStart) ? MathMax(0, MathMin(1, (eq - gStart) / (target - gStart))) : 0;
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
    Box("FM_BG", 12, 22, 380, 352, CLR_BG, CLR_GOLD);
@@ -429,14 +441,15 @@ void Dashboard()
    Box("FM_BAR0", bx, by, bw, 16, C'40,44,60', C'60,64,84');
    Box("FM_BAR1", bx, by, MathMax(2, (int)(bw * prog)), 16, CLR_GOLD, CLR_GOLD);
    Line(8, "", CLR_TXT);
-   Line(9, (InpUseTarget ? "Progresso da meta: " + DoubleToString(prog * 100.0, 0) + "%"
+   Line(9, (InpUseTarget ? "Meta: " + DoubleToString(prog * 100.0, 0) + "%  -  risco: margem " + DoubleToString(MarginPct(), 0) + "%"
                          : "Risco: margem " + DoubleToString(MarginPct(), 0) + "%" +
-                           (Equity() >= InpSafeFrom && InpSafeFrom > 0 ? " (risco menor: saldo acima de " : " (full ate ") +
-                           DoubleToString(InpSafeFrom, 0) + ")"), CLR_GOLD);
+                           (Equity() > gStart ? " (diminui com o lucro)" : " (full margin)")), CLR_GOLD);
 
    int tot = gWins + gLosses;
    Line(10, "Operacoes : " + IntegerToString(gTrades) + "   Ganhos: " + IntegerToString(gWins) + "   Perdas: " + IntegerToString(gLosses), CLR_TXT);
-   Line(11, "Acerto    : " + (tot > 0 ? DoubleToString(100.0 * gWins / tot, 0) + "%" : "-"), CLR_TXT);
+   Line(11, "Acerto    : " + (tot > 0 ? DoubleToString(100.0 * gWins / tot, 0) + "%" : "-") +
+            "   Perdas hoje: " + IntegerToString(gLosses) + "/" + IntegerToString(InpLossesDay) +
+            (gBudget >= 0 ? "   Ordens restantes: " + IntegerToString(gBudget) : ""), CLR_TXT);
    Line(12, "Ultima: " + gLastPattern + "  lote " + DoubleToString(gLastLot, 2), CLR_DIM, 8);
    Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + "  -  margem usada agora " + DoubleToString(MarginPct(), 0) + "%", CLR_DIM, 8);
    ChartRedraw(0);
@@ -445,7 +458,7 @@ void Dashboard()
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   if((InpUseTarget && InpTargetUSD <= 0 && InpTargetMult <= 1.0) || InpMaxLossPct < 0 || InpMaxLossPct >= 100 || InpMarginUse <= 0 || InpMarginUse > 100 || InpSafeMargin <= 0 || InpSafeMargin > 100)
+   if((InpUseTarget && InpTargetUSD <= 0 && InpTargetMult <= 1.0) || InpMaxLossPct < 0 || InpMaxLossPct >= 100 || InpMarginUse <= 0 || InpMarginUse > 100 || InpMinRisk <= 0 || InpMinRisk > 100)
      {
       Alert("Full Margin: confira meta (>1), limite de perda (1-99%) e margem usada (1-100%)");
       return(INIT_PARAMETERS_INCORRECT);
@@ -492,7 +505,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
    double p = HistoryDealGetDouble(trans.deal, DEAL_PROFIT) + HistoryDealGetDouble(trans.deal, DEAL_SWAP) +
               HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
-   if(p >= 0) { gWins++; gConsecLoss = 0; }
+   if(p >= 0) { gWins++; gConsecLoss = 0; if(InpAfterWin > 0) gBudget = InpAfterWin; }
    else
      {
       gLosses++;

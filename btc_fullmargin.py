@@ -42,6 +42,8 @@ BE_R, TRAIL_START_R, TRAIL_DIST_R = 0.8, 1.2, 0.5
 MIN_STOP_PCT = 0.003            # risk at least 0.3% of the price -> target >= 0.6%, 5x the 0.12% fees
 BE_LOCK_PCT = 0.0012            # the "stop in profit" locks the fees (0.12%) + 0.12% net
 PAUSE_LOSSES, PAUSE_S = 2, 15 * 60
+LOSSES_DAY = 2                  # owner, Nov 20: 2 losses in the day -> stops until the next day
+AFTER_WIN = 4                   # owner, Nov 20: after each win, at most 4 more shorts that day
 FEE_RATE = 0.0006               # per side, on the position size
 BORROW_RATE_H = 0.0001          # Jupiter borrow fee estimate: ~0.01% of the size per hour held
 PHOTO = None                    # telegram_bot sets this to its send_photo (charts in the results)
@@ -99,7 +101,7 @@ def new_day(d, now=None):
                                                      "result": round(d["capital"] - CAPITAL_USD, 2),
                                                      "why": d.get("done_why") or ""}]
     d.update(day=today(now), capital=CAPITAL_USD, done_why="", wins=0, losses=0, trades=0, consec=0,
-             pause_until=0, last_bar=0)
+             pause_until=0, last_bar=0, budget=-1)
 
 
 # ------------------------------------------------------------------ market data
@@ -278,6 +280,8 @@ def _open(d, price, dist, why):
         pos["signature"] = out.get("signature")
     d["pos"] = pos
     d["trades"] += 1
+    if d.get("budget", -1) > 0:
+        d["budget"] -= 1
     return pos
 
 
@@ -309,6 +313,7 @@ def _close(d, price, why):
     if net >= 0:
         d["wins"] += 1
         d["consec"] = 0
+        d["budget"] = AFTER_WIN
     else:
         d["losses"] += 1
         d["consec"] += 1
@@ -399,6 +404,14 @@ def cycle(mode, send, chat, now=None, klines=None):
         if not d["on"]:
             _save(d)
             return "desligado"
+        if not d["done_why"] and (d["losses"] >= LOSSES_DAY or d.get("budget", -1) == 0):
+            d["done_why"] = (str(d["losses"]) + " PERDAS NO DIA" if d["losses"] >= LOSSES_DAY else
+                             "FEZ AS " + str(AFTER_WIN) + " ORDENS DEPOIS DO GANHO")
+            _save(d)
+            send(chat, "⏹️ BTC FULL MARGIN " + tag + ": " + d["done_why"] + ". Parou de operar hoje com US$ " +
+                 format(d["capital"], ".2f") + " (" + format(d["capital"] - CAPITAL_USD, "+.2f") +
+                 "); volta sozinho amanhã (00:00 UTC) com US$ " + format(CAPITAL_USD, ".0f") + ".")
+            return d["done_why"]
         if d["done_why"]:
             _save(d)
             return "parado até amanhã"
@@ -454,7 +467,8 @@ def account_text(mode):
     tot = d["wins"] + d["losses"]
     L.append("🛡️ Risco agora: " + format(risk_pct(d["capital"]) * 100, ".0f") + "% do saldo como garantia (US$ " +
              format(d["capital"] * risk_pct(d["capital"]), ".2f") + ") — diminui quando o saldo cresce")
-    L.append("📊 Operações " + str(d["trades"]) + " · ganhos " + str(d["wins"]) + " · perdas " + str(d["losses"]) +
+    L.append("📊 Operações " + str(d["trades"]) + " · ganhos " + str(d["wins"]) + " · perdas " + str(d["losses"]) + "/" +
+             str(LOSSES_DAY) + (" · ordens restantes " + str(d["budget"]) if d.get("budget", -1) >= 0 else "") +
              (" · acerto " + format(d["wins"] / tot * 100, ".0f") + "%" if tot else ""))
     tt = d.get("total") or {}
     if tt.get("trades"):
