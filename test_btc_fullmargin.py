@@ -101,20 +101,21 @@ class Cycle(Base):
         self.turn_on()
         self.assertEqual(self.cyc(candles(trend=1)), "abriu")       # first one of the day: right away
         d = bfm._load("demo")
-        self.assertEqual(d["pos"]["collateral_usd"], 100.0)
-        self.assertEqual(d["pos"]["size_usd"], 100.0 * bfm.DEFAULT_LEVERAGE)
+        self.assertEqual(d["pos"]["collateral_usd"], 50.0)
+        self.assertEqual(d["pos"]["size_usd"], 50.0 * bfm.DEFAULT_LEVERAGE)
         self.assertIn("CONTA DEMO", self.msgs[-1])
 
-    def test_risk_shrinks_as_the_balance_grows(self):
-        self.assertEqual(bfm.risk_pct(100.0), 1.0)
-        self.assertEqual(bfm.risk_pct(80.0), 1.0)
-        self.assertAlmostEqual(bfm.risk_pct(125.0), 0.64)
-        self.assertAlmostEqual(bfm.risk_pct(140.0), (100 / 140) ** 2)
-        self.assertEqual(bfm.risk_pct(1000.0), bfm.MIN_RISK)
-        self.turn_on(capital=125.0)
+    def test_risk_is_50pct_until_200_then_goes_down(self):
+        self.assertEqual(bfm.risk_pct(50.0), 0.5)
+        self.assertEqual(bfm.risk_pct(100.0), 0.5)
+        self.assertEqual(bfm.risk_pct(200.0), 0.5)
+        self.assertAlmostEqual(bfm.risk_pct(250.0), 0.5 * 0.64)
+        self.assertAlmostEqual(bfm.risk_pct(400.0), 0.125)
+        self.assertEqual(bfm.risk_pct(5000.0), bfm.MIN_RISK)
+        self.turn_on(capital=120.0)
         self.assertEqual(self.cyc(candles()), "abriu")
-        self.assertAlmostEqual(bfm._load("demo")["pos"]["collateral_usd"], 80.0)
-        self.assertIn("Risco agora: 64%", bfm.account_text("demo"))
+        self.assertAlmostEqual(bfm._load("demo")["pos"]["collateral_usd"], 60.0)
+        self.assertIn("Risco agora: 50%", bfm.account_text("demo"))
 
     def test_only_shorts_after_the_first(self):
         self.turn_on(trades=1)
@@ -146,7 +147,7 @@ class Cycle(Base):
         # next day: back to 100 and opens again
         self.assertEqual(self.cyc(candles(), now=NOW + 86400), "abriu")
         d = bfm._load("demo")
-        self.assertEqual(d["pos"]["collateral_usd"], 100.0)
+        self.assertEqual(d["pos"]["collateral_usd"], 50.0)                 # 50% of the US$ 100
         self.assertEqual(d["days"][-1]["result"], bfm.TARGET_USD + 2 - 100)
 
     def test_target_closes_the_open_short(self):
@@ -216,7 +217,7 @@ class Cycle(Base):
 
         with patch.dict("sys.modules", {"jupiter_perps": JP}), patch.object(bfm, "sol_usd", return_value=150.0):
             self.assertEqual(self.cyc(candles(), mode="real"), "abriu")
-        self.assertEqual(calls, [("usdc", 100.0), ("short", 100.0, bfm.DEFAULT_LEVERAGE)])
+        self.assertEqual(calls, [("usdc", 50.0), ("short", 50.0, bfm.DEFAULT_LEVERAGE)])
         self.assertIn("solscan.io/tx/SIG", self.msgs[-1])
 
 

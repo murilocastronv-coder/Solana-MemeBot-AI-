@@ -4,7 +4,7 @@
 //| Voce liga quando quiser operar. Ele guarda o capital da hora em  |
 //| que foi ligado e opera scalp no par do grafico ate:              |
 //|  - META DO DIA saldo 150: para e volta depois da meia-noite;     |
-//|  - quanto maior o saldo no dia, menor o risco (margem menor);   |
+//|  - arrisca 50% da margem; so acima de 200 vai diminuindo o risco;|
 //|  - ou LIMITE DE PERDA do dia (50%) -> para e volta amanha.       |
 //|                                                                  |
 //| Estrategia v4 (M1, 1 ordem por vez, DIA INTEIRO):               |
@@ -26,8 +26,8 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "5.10"
-#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; meta do dia 150 (para ate a meia-noite e volta); quanto maior o saldo, menor o risco. Alto risco."
+#property version   "5.20"
+#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; meta do dia 150 (para ate a meia-noite e volta); arrisca 50% da margem e acima de 200 vai diminuindo. Alto risco."
 
 #include <Trade\Trade.mqh>
 
@@ -39,10 +39,10 @@ input double InpTargetUSD    = 150.0;  // META DO DIA (se ligada): saldo em dinh
 input bool   InpDaily        = true;   // Todo dia depois da meia-noite (servidor) recomeca e tenta a meta de novo
 input double InpTargetMult   = 3.0;    // META por multiplicador (so se a meta em dinheiro for 0): 3 = 50 -> 150
 input double InpMaxLossPct   = 50.0;   // LIMITE DE PERDA do dia em % (0 = sem limite)
-input double InpMarginUse    = 100.0;  // % da margem livre usada por ordem (100 = FULL MARGIN, lote maximo)
+input double InpMarginUse    = 50.0;   // % da margem livre usada por ordem (50 = metade; 100 = FULL MARGIN)
 input double InpMaxLot       = 100.0;  // Lote maximo por ordem (limite de seguranca)
-input bool   InpRiskDown     = true;   // Quanto MAIOR o saldo (acima do comeco do dia), MENOR o risco
-input double InpMinRisk      = 30.0;   // Margem minima usada (%) por mais que o saldo cresca
+input double InpRiskDownFrom = 200.0;  // So depois deste saldo o risco vai DIMINUINDO (0 = nunca diminui)
+input double InpMinRisk      = 10.0;   // Margem minima usada (%) por mais que o saldo cresca
 input double InpRR           = 2.0;    // ALVO = risco x isto (2 = ganha 2x o que arrisca)
 input double InpBreakevenR   = 0.8;    // Com lucro de X riscos, stop vai para a entrada (sem perda)
 input double InpTrailStartR  = 1.2;    // Com lucro de X riscos, comeca o stop movel
@@ -144,13 +144,13 @@ void StopSession(const string why)
    Alert("Full Margin: ", why, " - capital ", DoubleToString(Equity(), 2));
   }
 
-//--- % da margem usada agora: full margin ate o capital do comeco do dia; acima disso
-//--- 100% x (comeco / saldo)^2  (ex.: comecou com 100 -> 120: 69%, 140: 51%), minimo InpMinRisk
+//--- % da margem usada agora: InpMarginUse (50%) com qualquer capital ate InpRiskDownFrom (200);
+//--- acima disso 50% x (200 / saldo)^2  (ex.: 250 -> 32%, 300 -> 22%, 400 -> 12,5%), minimo InpMinRisk
 double MarginPct()
   {
    double eq = Equity();
-   if(!InpRiskDown || gStart <= 0 || eq <= gStart) return(InpMarginUse);
-   return(MathMax(InpMinRisk, InpMarginUse * MathPow(gStart / eq, 2)));
+   if(InpRiskDownFrom <= 0 || eq <= InpRiskDownFrom) return(InpMarginUse);
+   return(MathMax(InpMinRisk, InpMarginUse * MathPow(InpRiskDownFrom / eq, 2)));
   }
 
 //--- lote pela margem: MarginPct() % da margem livre
@@ -443,7 +443,8 @@ void Dashboard()
    Line(8, "", CLR_TXT);
    Line(9, (InpUseTarget ? "Meta: " + DoubleToString(prog * 100.0, 0) + "%  -  risco: margem " + DoubleToString(MarginPct(), 0) + "%"
                          : "Risco: margem " + DoubleToString(MarginPct(), 0) + "%" +
-                           (Equity() > gStart ? " (diminui com o lucro)" : " (full margin)")), CLR_GOLD);
+                           (Equity() > InpRiskDownFrom && InpRiskDownFrom > 0 ? " (diminuindo: saldo acima de " : " (fixo ate ") +
+                           DoubleToString(InpRiskDownFrom, 0) + ")"), CLR_GOLD);
 
    int tot = gWins + gLosses;
    Line(10, "Operacoes : " + IntegerToString(gTrades) + "   Ganhos: " + IntegerToString(gWins) + "   Perdas: " + IntegerToString(gLosses), CLR_TXT);

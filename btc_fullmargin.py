@@ -26,15 +26,17 @@ MIN_SCORE = int(os.getenv("BTCFM_MIN_SCORE", "4"))
 CAPITAL_USD = float(os.getenv("BTCFM_CAPITAL_USD", "100"))
 TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "150"))   # owner, Nov 20: daily target US$ 150
 MAX_LOSS = 0.5
-MIN_RISK = 0.3                  # never less than 30% of the balance as collateral
+BASE_RISK = 0.5                 # owner, Nov 20: always 50% of the balance as collateral
+RISK_DOWN_FROM = 200.0          # ... and only above US$ 200 the risk goes down
+MIN_RISK = 0.1
 
 
 def risk_pct(capital):
-    """Share of the balance used as collateral (owner, Nov 20: the bigger the balance, the smaller the risk).
-    100% up to the day's starting US$ 100, then (100 / balance)^2: 120 -> 69%, 140 -> 51%, 150 -> 44%."""
-    if capital <= CAPITAL_USD:
-        return 1.0
-    return max(MIN_RISK, (CAPITAL_USD / capital) ** 2)
+    """Share of the balance used as collateral: 50% with any balance up to US$ 200; above that
+    50% x (200 / balance)^2 (250 -> 32%, 300 -> 22%, 400 -> 12.5%), never under 10%."""
+    if capital <= RISK_DOWN_FROM:
+        return BASE_RISK
+    return max(MIN_RISK, BASE_RISK * (RISK_DOWN_FROM / capital) ** 2)
 LEVERAGES = (2, 3, 5, 10, 15)
 DEFAULT_LEVERAGE = 5
 RR = 2.0                        # owner, Nov 19: bigger target (the fees ate the small wins)
@@ -266,7 +268,7 @@ def equity(d, price=None):
 
 def _open(d, price, dist, why):
     lev = d["leverage"]
-    col = round(d["capital"] * risk_pct(d["capital"]), 2)   # full margin at 100, less as the balance grows
+    col = round(d["capital"] * risk_pct(d["capital"]), 2)   # 50% of the balance, less above US$ 200
     if col < 5:
         raise RuntimeError("saldo da conta abaixo de US$ 5")
     pos = {"entry": price, "size_usd": col * lev, "collateral_usd": col, "risk": dist, "stop": price + dist,
@@ -466,7 +468,7 @@ def account_text(mode):
     L.append("▕" + "█" * int(prog * 10) + "░" * (10 - int(prog * 10)) + "▏ " + format(prog * 100, ".0f") + "% da meta")
     tot = d["wins"] + d["losses"]
     L.append("🛡️ Risco agora: " + format(risk_pct(d["capital"]) * 100, ".0f") + "% do saldo como garantia (US$ " +
-             format(d["capital"] * risk_pct(d["capital"]), ".2f") + ") — diminui quando o saldo cresce")
+             format(d["capital"] * risk_pct(d["capital"]), ".2f") + ") — fixo até US$ " + format(RISK_DOWN_FROM, ".0f") + ", depois diminui")
     L.append("📊 Operações " + str(d["trades"]) + " · ganhos " + str(d["wins"]) + " · perdas " + str(d["losses"]) + "/" +
              str(LOSSES_DAY) + (" · ordens restantes " + str(d["budget"]) if d.get("budget", -1) >= 0 else "") +
              (" · acerto " + format(d["wins"] / tot * 100, ".0f") + "%" if tot else ""))
