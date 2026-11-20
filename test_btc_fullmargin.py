@@ -432,6 +432,46 @@ class Backtest(Base):
             bfm.handle("bfm_btd90_sol", self.send, "1", lambda fn: fn())
         self.assertEqual(runs, [(90, "SOL", bfm.DYN_PLAN)])
 
+    def test_variant_stop_and_time(self):
+        self.turn_on(trades=1)
+        bfm._save(dict(bfm._load("demo"), leverage=5, cfg={"stop": 0.02, "hold_h": 24, "tp": 0.005}))
+        cs = candles()
+        self.cyc(cs)
+        pos = bfm._load("demo")["pos"]
+        self.assertEqual(pos["tp"], 0.005)
+        up = cs[:-1] + [dict(cs[-1], c=pos["entry"] * 1.025)]
+        self.assertEqual(self.cyc(up), "fechou")
+        self.assertIn("STOP DO CONJUNTO", self.msgs[-1])
+        self.cyc(cs)
+        pos = bfm._load("demo")["pos"]
+        self.assertEqual(self.cyc(cs, now=NOW + 25 * 3600), "fechou")
+        self.assertIn("TEMPO MÁXIMO", self.msgs[-1])
+
+    def test_variant_trend_only_waits(self):
+        self.turn_on(trades=1)
+        bfm._save(dict(bfm._load("demo"), cfg={"entry": "trend"}))
+        with patch.object(bfm, "strong_move", return_value=(0, 0.1)):
+            self.assertEqual(self.cyc(candles()), "sem tendência forte")
+
+    def test_optimizer_ranks_and_applies(self):
+        import math
+        cs, p = [], 60000.0
+        for i in range(800 + 2 * 288):
+            o = p
+            p *= 1 + 0.0008 * math.sin(i / 25)
+            cs.append({"t": T0 + i * 300, "o": o, "h": max(o, p) * 1.0004, "l": min(o, p) * 0.9996, "c": p})
+        with patch.object(bfm, "VARIANTS", bfm.VARIANTS[:3]):
+            out = bfm.optimize(cs)
+        self.assertEqual(len(out), 3)
+        t = bfm.optimize_text(out, "SOL", 2)
+        self.assertIn("🥇", t)
+        bfm.BT["best"] = {"asset": "SOL", "name": out[0][0], "lev": out[0][1], "cfg": out[0][2]}
+        self.addCleanup(bfm.BT.pop, "best", None)
+        bfm.handle("bfm_use_demo", self.send, "1", lambda fn: fn())
+        d = bfm._load("demo")
+        self.assertEqual((d["cfg_name"], d["leverage"]), (out[0][0], out[0][1]))
+        self.assertIn("agora opera com", self.msgs[-1])
+
     def test_button(self):
         self.assertIn("bfm_bt", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertIn("bfm_bt90", [b["callback_data"] for row in bfm.keyboard() for b in row])
