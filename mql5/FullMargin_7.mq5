@@ -19,7 +19,8 @@
 //|  - QUEDA FORTE do par (>= 1,5 ATR do H1 em 6h, abaixo da EMA50   |
 //|    H1): opera MAIS (forca 3, lote cheio). Sem queda forte: opera |
 //|    BEM MENOS (forca 7, 1 entrada por hora, lote 50%).            |
-//|  - GRADE: depois da 1a ordem abre outra a cada 20 pips ate 5;    |
+//|  - PRECO MEDIO: preco foi 20 pips contra -> abre outra (ate 5),  |
+//|    sem stop por ordem; com +10 pips sobre o medio FECHA TUDO;    |
 //|    margem total 100% (20% cada) ate saldo 150, depois 40% (8%).  |
 //| Lote: FULL MARGIN - usa InpMarginUse % (padrao 100%) da margem   |
 //| livre = lote maximo; a cada ganho o capital sobe e o proximo     |
@@ -30,7 +31,7 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.40"
+#property version   "4.50"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para na META DO DIA (saldo 300) ou no limite de perda e volta depois da meia-noite. Alto risco."
 
 #include <Trade\Trade.mqh>
@@ -45,7 +46,8 @@ input double InpMaxLossPct   = 50.0;   // LIMITE DE PERDA da sessao em % (para t
 input double InpMarginUse    = 100.0;  // MARGEM TOTAL das ordens (%) enquanto o saldo esta abaixo de InpSafeFrom
 input int    InpGridMax      = 5;      // GRADE: ate X ordens no mesmo lado (a margem total e dividida entre elas)
 input double InpGridPips     = 20.0;   // GRADE: abre a proxima ordem a cada X pips
-input bool   InpGridFavor    = true;   // GRADE: true = abre quando o preco anda A FAVOR; false = quando vai CONTRA
+input bool   InpGridFavor    = false;  // GRADE: false = abre quando o preco vai CONTRA (preco medio); true = A FAVOR
+input double InpBasketPips   = 10.0;   // Preco medio: FECHA TUDO quando as ordens juntas tem X pips de lucro
 input double InpSafeFrom     = 150.0;  // Com saldo a partir disto a margem total cai para InpSafeMargin
 input double InpSafeMargin   = 40.0;   // MARGEM TOTAL (%) depois de InpSafeFrom
 input double InpMaxLot       = 100.0;  // Lote maximo por ordem (limite de seguranca)
@@ -162,6 +164,28 @@ double TotalMarginPct() { return(Equity() < InpSafeFrom ? InpMarginUse : InpSafe
 double PipSize() { return((_Digits == 5 || _Digits == 3) ? _Point * 10.0 : _Point); }
 
 bool OpenOrder(int dir, double slDist, const string name);   // definida mais abaixo
+double gBasketPips = 0;
+
+//--- lucro das ordens juntas em pips sobre o preco medio (ponderado pelo lote)
+double BasketPips()
+  {
+   double vol = 0, avg = 0;
+   int type = -1;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong t = PositionGetTicket(i);
+      if(t == 0 || !PositionSelectByTicket(t)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      double v = PositionGetDouble(POSITION_VOLUME);
+      avg += PositionGetDouble(POSITION_PRICE_OPEN) * v;
+      vol += v;
+      type = (int)PositionGetInteger(POSITION_TYPE);
+     }
+   if(vol <= 0) return(0);
+   avg /= vol;
+   if(type == POSITION_TYPE_SELL) return((avg - SymbolInfoDouble(_Symbol, SYMBOL_ASK)) / PipSize());
+   return((SymbolInfoDouble(_Symbol, SYMBOL_BID) - avg) / PipSize());
+  }
 
 //--- GRADE: com ordem aberta, abre outra no mesmo lado a cada InpGridPips ate InpGridMax ordens
 void GridAdd()
@@ -252,9 +276,11 @@ bool OpenOrder(int dir, double slDist, const string name)
       ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       if(dir == 1)
-         ok = trade.Buy(lot, _Symbol, ask, NormalizeDouble(ask - slDist, _Digits), NormalizeDouble(ask + tpDist, _Digits), "Full Margin compra");
+         ok = InpGridFavor ? trade.Buy(lot, _Symbol, ask, NormalizeDouble(ask - slDist, _Digits), NormalizeDouble(ask + tpDist, _Digits), "Full Margin compra")
+                           : trade.Buy(lot, _Symbol, ask, 0, 0, "Full Margin compra");     // preco medio: sem stop por ordem
       else
-         ok = trade.Sell(lot, _Symbol, bid, NormalizeDouble(bid + slDist, _Digits), NormalizeDouble(bid - tpDist, _Digits), "Full Margin venda");
+         ok = InpGridFavor ? trade.Sell(lot, _Symbol, bid, NormalizeDouble(bid + slDist, _Digits), NormalizeDouble(bid - tpDist, _Digits), "Full Margin venda")
+                           : trade.Sell(lot, _Symbol, bid, 0, 0, "Full Margin venda");
       if(ok && trade.ResultRetcode() == TRADE_RETCODE_DONE) break;
       if(trade.ResultRetcode() != TRADE_RETCODE_NO_MONEY) break;
       lot = NormalizeDouble(MathFloor(lot * 0.95 / st) * st, 2);
@@ -406,7 +432,22 @@ void Cycle()
    if(eq > gPeak) gPeak = eq;
    if(eq >= gDayTarget) { StopSession("META DO DIA BATIDA"); gDayDone = true; return; }
    if(eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA DO DIA"); gDayDone = true; return; }
-   if(HasPosition()) { ManagePosition(); GridAdd(); return; }
+   if(HasPosition())
+     {
+      if(InpGridFavor) { ManagePosition(); GridAdd(); return; }
+      //--- PRECO MEDIO: a cada 20 pips contra abre mais uma (ate 5); com X pips de lucro sobre a media FECHA TUDO
+      double bp = BasketPips();
+      gBasketPips = bp;
+      if(bp >= InpBasketPips)
+        {
+         CloseAll();
+         Print("Full Margin: fechei todas com ", DoubleToString(bp, 1), " pips de lucro sobre o preco medio");
+         return;
+        }
+      GridAdd();
+      return;
+     }
+   gBasketPips = 0;
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
 
    bool spreadOk = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) <= InpMaxSpread;
@@ -470,7 +511,7 @@ void Dashboard()
    double pnl = eq - gStart;
    double prog = (target > gStart) ? MathMax(0, MathMin(1, (eq - gStart) / (target - gStart))) : 0;
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
-   Box("FM_BG", 12, 22, 380, 376, CLR_BG, CLR_GOLD);
+   Box("FM_BG", 12, 22, 380, 398, CLR_BG, CLR_GOLD);
    Box("FM_HEAD", 13, 23, 378, 54, C'34,30,12', C'34,30,12');
 
    Line(0, "FULL MARGIN", CLR_GOLD, 15, "Arial Black");
@@ -503,6 +544,11 @@ void Dashboard()
    Line(14, gStrong ? "QUEDA FORTE (" + DoubleToString(gFall, 1) + " ATR em 6h): opera MAIS"
                     : "Sem queda forte (" + DoubleToString(gFall, 1) + " ATR em 6h): opera BEM MENOS",
         gStrong ? CLR_GREEN : CLR_DIM, 9);
+   if(!InpGridFavor && HasPosition())
+      Line(15, "Preco medio: " + DoubleToString(gBasketPips, 1) + " pips (fecha tudo com +" + DoubleToString(InpBasketPips, 0) + ")",
+           gBasketPips >= 0 ? CLR_GREEN : CLR_RED, 9);
+   else
+      Line(15, " ", CLR_TXT);
    Line(12, "Ultima: " + gLastPattern + "  lote " + DoubleToString(gLastLot, 2), CLR_DIM, 8);
    Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + "  -  margem total " + DoubleToString(TotalMarginPct(), 0) + "% em ate " + IntegerToString(InpGridMax) + " ordens", CLR_DIM, 8);
    ChartRedraw(0);
