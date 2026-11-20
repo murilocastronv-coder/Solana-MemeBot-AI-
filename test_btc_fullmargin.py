@@ -397,6 +397,8 @@ class Backtest(Base):
 
     def test_button(self):
         self.assertIn("bfm_bt", [b["callback_data"] for row in bfm.keyboard() for b in row])
+        self.assertIn("bfm_bt90", [b["callback_data"] for row in bfm.keyboard() for b in row])
+        self.assertIn("bfm_bt90", bfm.ACTIONS)
         self.assertIn("bfm_bt", bfm.ACTIONS)
 
 
