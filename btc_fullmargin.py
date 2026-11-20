@@ -265,6 +265,12 @@ def strong_move(closed):
     return 0, move
 
 
+def effective_lev(pos):
+    """Real leverage of the open orders together (Jupiter merges them into one position): size / collateral."""
+    col = pos.get("collateral_usd") or 0
+    return max(1.0, pos["size_usd"] / col) if col > 0 else float(pos.get("lev") or DEFAULT_LEVERAGE)
+
+
 def _sgn(pos):
     return 1 if pos.get("side", "short") == "long" else -1
 
@@ -315,9 +321,9 @@ def equity(d, price=None, now=None):
     return v
 
 
-def _open(d, price, side, why, col=None, now=None):
+def _open(d, price, side, why, col=None, now=None, lev=None):
     """Opens the first order or ADDS one (same side) with `col` US$ of collateral. Returns the position."""
-    lev = d["leverage"]
+    lev = lev or d["leverage"]
     col = round(first_collateral(d["capital"]) if col is None else col, 2)
     if col < 2:
         raise RuntimeError("saldo da conta baixo demais para mais uma ordem")
@@ -462,7 +468,7 @@ def cycle(mode, send, chat, now=None, klines=None):
             why = ""
             if bp >= BASKET_TP_PCT:
                 why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO"
-            elif bp <= -LIQ_GUARD / max(pos.get("lev", d["leverage"]), d["leverage"]):
+            elif bp <= -LIQ_GUARD / effective_lev(pos):
                 why = "🛑 PROTEÇÃO (perto da liquidação)"
             if why:
                 pnl, sig = _close(d, price, why, now)
@@ -476,19 +482,24 @@ def cycle(mode, send, chat, now=None, klines=None):
                 sg = _sgn(pos)
                 in_favor = score * sg >= ADD_SCORE
                 turning = (closed[-1]["c"] - closed[-1]["o"]) * sg > 0
-                add, label = 0.0, ""
+                add, label, plan = 0.0, "", LEV_PLAN.get(mode)
+                add_lev = None
                 if not pos.get("win_added") and bp >= WIN_TRIGGER and in_favor:
+                    add_lev = plan["win"] if plan else None
                     add, label = free_capital(d) * WIN_ADD_PCT * risk_cut(d["capital"]), "VAI GANHAR (+50%)"
                     pos["win_added"] = True
                 elif pos.get("loss_adds", 0) < LOSS_ADDS and bp <= -LOSS_TRIGGER and in_favor and turning and \
                         (price - next_grid_price(pos)) * sg <= 0:
                     left = LOSS_ADDS - pos.get("loss_adds", 0)
+                    add_lev = plan["loss"][min(pos.get("loss_adds", 0), len(plan["loss"]) - 1)] if plan else None
                     add = free_capital(d) / left * risk_cut(d["capital"])
                     pos["loss_adds"] = pos.get("loss_adds", 0) + 1
                     label = "VAI VOLTAR " + str(pos["loss_adds"]) + "/" + str(LOSS_ADDS)
                 if label:
                     try:
-                        _open(d, price, pos["side"], label + ", " + reading, add, now)
+                        if add_lev:
+                            label += " " + str(add_lev) + "x"
+                        _open(d, price, pos["side"], label + ", " + reading, add, now, add_lev)
                     except Exception as exc:
                         _save(d)
                         send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem " + label + " (" + str(exc)[:160] + ").")
@@ -541,7 +552,8 @@ def cycle(mode, send, chat, now=None, klines=None):
         label = {1: " [ALTA FORTE]", -1: " [QUEDA FORTE]"}.get(sdir, "")
         why = ("início do dia, " if first else "") + reading + label
         try:
-            pos = _open(d, price, side, why, first_collateral(d["capital"]) * factor, now)
+            pos = _open(d, price, side, why, first_collateral(d["capital"]) * factor, now,
+                        (LEV_PLAN.get(mode) or {}).get("first"))
         except Exception as exc:
             _save(d)
             send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem (" + str(exc)[:160] + ").")
@@ -566,6 +578,8 @@ def cycle_all(send, chat, now=None):
 
 # ------------------------------------------------------------------ backtest (owner, Nov 20)
 ONLY_SIDE = {}                  # mode -> "short" (backtest that only sells)
+LEV_PLAN = {}                   # mode -> dynamic leverage plan (backtest)
+DYN_PLAN = {"first": 15, "loss": [20, 25, 30, 35], "win": 30}   # owner, Nov 20: 15x, more when losing, more when winning
 BT_ASSETS = {"BTC": ("BTCUSDT", "BTC-USD"), "SOL": ("SOLUSDT", "SOL-USD"), "ETH": ("ETHUSDT", "ETH-USD")}
 
 
@@ -602,7 +616,7 @@ def klines_history(days=BT_DAYS, asset="BTC"):
     return [rows[k] for k in sorted(rows)]
 
 
-def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None):  # noqa: C901
+def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None, plan=None):  # noqa: C901
     """Runs the robot's own cycle() over the candles, as a demo account that started 3 days into the data.
     Every 5-minute candle: it closes at the candle's close; the +0.25% close is also checked with the candle's
     high/low (the order touched the price). Fees are the same as the demo (open/close + borrow per hour)."""
@@ -616,6 +630,7 @@ def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None):  # noqa: 
     d = _load("bt")
     d.update(on=True, leverage=leverage)
     ONLY_SIDE["bt"] = only
+    LEV_PLAN["bt"] = plan
     _save(d)
     old_curve, CURVE_MAX = CURVE_MAX, 100000
     msgs = []
@@ -696,7 +711,7 @@ def backtest_png(d, days=BT_DAYS, asset="BTC"):
     return demo_report.chart_png([("Backtest " + asset + " " + str(days) + " dias (resultado acumulado)", CAPITAL_USD, curve, color)])
 
 
-def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None):
+def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, plan=None):
     if BT["running"]:
         send(chat, "⏳ O backtest já está rodando, espera o resultado.")
         return
@@ -707,7 +722,7 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None):
         cs = klines_history(days, asset)
         keep = dict(LAST)                             # the BTC screen keeps showing the BTC price
         try:
-            d = backtest(cs, leverage, only=only)
+            d = backtest(cs, leverage, only=only, plan=plan)
         finally:
             LAST.clear()
             LAST.update(keep)
@@ -718,7 +733,11 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None):
         except Exception as exc:
             logging.warning("btc backtest chart: %s", type(exc).__name__)
         span = max(1, round((cs[-1]["t"] - cs[800]["t"]) / 86400))
-        send(chat, backtest_text(d, leverage, span, asset + (" SÓ VENDA" if only == "short" else "")), keyboard())
+        tag = asset + (" SÓ VENDA" if only == "short" else "")
+        if plan:
+            tag += " · ALAVANCAGEM DINÂMICA " + str(plan["first"]) + "x → " + "/".join(str(x) for x in plan["loss"]) + \
+                   "x perdendo, " + str(plan["win"]) + "x ganhando"
+        send(chat, backtest_text(d, plan["first"] if plan else leverage, span, tag), keyboard())
     except Exception as exc:
         send(chat, "⛔ Backtest: " + str(exc)[:200], keyboard())
     finally:
@@ -909,6 +928,8 @@ def keyboard():
                  {"text": "🧪 ETH 30d", "callback_data": "bfm_bt_eth"}, {"text": "🧪 ETH 3m", "callback_data": "bfm_bt90_eth"}])
     rows.append([{"text": "📉 SOL venda 30d", "callback_data": "bfm_bts_sol"}, {"text": "📉 SOL venda 3m", "callback_data": "bfm_bts90_sol"},
                  {"text": "📉 ETH venda 30d", "callback_data": "bfm_bts_eth"}, {"text": "📉 ETH venda 3m", "callback_data": "bfm_bts90_eth"}])
+    rows.append([{"text": "⚡ SOL alavancagem dinâmica 30d", "callback_data": "bfm_btd_sol"},
+                 {"text": "⚡ SOL dinâmica 3m", "callback_data": "bfm_btd90_sol"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
@@ -917,7 +938,7 @@ def keyboard():
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
             "/aovivo", "bfm_bt", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
             "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
-            "bfm_bts_eth", "bfm_bts90_eth"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
+            "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
            {p + m for p in ("bfm_on_", "bfm_off_", "bfm_close_") for m in MODES})
 
 
@@ -952,10 +973,11 @@ def handle(action, send, chat, run_async):
         send(chat, "⏹️ Ao vivo parado.", keyboard())
     elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
-        days = 90 if ("bt90" in action or "bts90" in action or action.endswith("_3m")) else BT_DAYS
+        days = 90 if ("90" in action or action.endswith("_3m")) else BT_DAYS
         asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else "BTC")
         only = "short" if action.startswith("bfm_bts") else None
-        run_async(lambda: run_backtest(send, chat, lev, days, asset, only))
+        plan = DYN_PLAN if action.startswith("bfm_btd") else None
+        run_async(lambda: run_backtest(send, chat, lev, days, asset, only, plan))
     elif action in ("bfm_res", "/resultados_btc"):
         def go():
             try:
