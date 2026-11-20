@@ -103,7 +103,12 @@ def today(now=None):
     return time.strftime("%Y-%m-%d", time.gmtime(now or time.time()))
 
 
+BT_MEM = {}                     # backtest account kept in memory (no disk write per candle)
+
+
 def _load(mode):
+    if mode == "bt" and BT_MEM.get("d") is not None:
+        return BT_MEM["d"]
     d = {"mode": mode, "on": False, "leverage": DEFAULT_LEVERAGE, "pos": None, "capital": CAPITAL_USD, "day": "",
          "done_why": "", "wins": 0, "losses": 0, "trades": 0, "consec": 0, "pause_until": 0, "last_bar": 0,
          "hist": [], "days": []}
@@ -120,6 +125,9 @@ def _load(mode):
 
 
 def _save(d):
+    if d.get("mode") == "bt" and BT_MEM.get("on"):
+        BT_MEM["d"] = d
+        return
     p = _path(d["mode"])
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".btcfm.")
@@ -641,9 +649,8 @@ def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None, plan=None,
     WARM = 800
     if len(cs) < WARM + 300:
         raise RuntimeError("poucos candles para o backtest")
-    p = _path("bt")
-    if p.exists():
-        p.unlink()
+    BT_MEM.clear()
+    BT_MEM["on"] = True                               # the backtest account lives in memory
     d = _load("bt")
     d.update(on=True, leverage=leverage)
     ONLY_SIDE["bt"] = only
@@ -694,6 +701,7 @@ def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None, plan=None,
     finally:
         CURVE_MAX = old_curve
         read_chart, strong_move = real_rc, real_sm
+        BT_MEM.clear()
     return d
 
 
@@ -846,7 +854,7 @@ def run_optimize(send, chat, asset="SOL", days=90, only=None):
     try:
         send(chat, "🔬 Otimizador " + asset + " começou: " + str(len(VARIANTS)) + " versões da estratégia em " + str(days) +
              " dias de candles reais (stop no conjunto, tempo máximo, alvo maior, alavancagem menor, só tendência…). "
-             "Leva uns 10–30 minutos. Nenhuma ordem real.")
+             "Leva uns 5–15 minutos. Nenhuma ordem real.")
         cs = klines_history(days, asset)
         keep = dict(LAST)
         try:
