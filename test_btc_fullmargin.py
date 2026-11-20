@@ -105,6 +105,17 @@ class Cycle(Base):
         self.assertEqual(d["pos"]["size_usd"], 100.0 * bfm.DEFAULT_LEVERAGE)
         self.assertIn("CONTA DEMO", self.msgs[-1])
 
+    def test_risk_shrinks_as_the_balance_grows(self):
+        self.assertEqual(bfm.risk_pct(100.0), 1.0)
+        self.assertEqual(bfm.risk_pct(80.0), 1.0)
+        self.assertAlmostEqual(bfm.risk_pct(125.0), 0.64)
+        self.assertAlmostEqual(bfm.risk_pct(140.0), (100 / 140) ** 2)
+        self.assertEqual(bfm.risk_pct(1000.0), bfm.MIN_RISK)
+        self.turn_on(capital=125.0)
+        self.assertEqual(self.cyc(candles()), "abriu")
+        self.assertAlmostEqual(bfm._load("demo")["pos"]["collateral_usd"], 80.0)
+        self.assertIn("Risco agora: 64%", bfm.account_text("demo"))
+
     def test_only_shorts_after_the_first(self):
         self.turn_on(trades=1)
         self.assertTrue(self.cyc(candles(trend=1)).startswith("sem sinal"))
