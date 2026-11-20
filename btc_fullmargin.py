@@ -70,8 +70,8 @@ def loss_step(n_adds):
     return LOSS_STEP * (1 + LOSS_STEP_GROW * n_adds)
 
 
-LEVERAGES = (2, 3, 5, 10, 15, 20, 30, 50)   # owner, Nov 20: max 50x
-DEFAULT_LEVERAGE = 5
+LEVERAGES = (2, 3, 5, 10, 15, 20, 30, 40, 50)   # owner, Nov 20: max 50x
+DEFAULT_LEVERAGE = 40            # owner, Nov 20: demo and real use 40x
 PAUSE_LOSSES, PAUSE_S = 2, 15 * 60
 FEE_RATE = 0.0006               # per side, on the position size
 BORROW_RATE_H = 0.0001          # Jupiter borrow fee estimate: ~0.01% of the size per hour held
@@ -114,6 +114,8 @@ def _load(mode):
         except (OSError, ValueError):
             pass
     d["mode"] = mode
+    if d.get("lev_v") != 40:                 # owner, Nov 20: both accounts switch to 40x once (the buttons still work)
+        d["leverage"], d["lev_v"] = DEFAULT_LEVERAGE, 40
     return d
 
 
