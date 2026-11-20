@@ -8,8 +8,8 @@
 //|  - arrisca 50% da margem; so acima de 200 vai diminuindo o risco;|
 //|  - ou LIMITE DE PERDA do dia (50%) -> para e volta amanha.       |
 //|                                                                  |
-//| Estrategia v4 (M1, 1 ordem por vez, DIA INTEIRO):               |
-//|  - LE O GRAFICO M1 e da uma nota de -9 a +9: tendencia M5+M15,   |
+//| Estrategia v7 (M15 + tendencia H1/H4, 1 ordem por vez, dia todo):|
+//|  - LE O GRAFICO (InpTF) e da nota de -9 a +9: tendencia H1+H4,  |
 //|    ultimos 10 candles, topos/fundos, EMA 20, padroes de candle   |
 //|    (engolfo, martelo, estrela cadente) e candle de forca;        |
 //|  - ao LIGAR ja abre para o lado da leitura;                      |
@@ -18,7 +18,8 @@
 //|  - stop na entrada com +0,8 risco e stop movel com +1,2 risco;   |
 //|  - 2 perdas no dia = para e volta amanha; depois de cada ganho   |
 //|    abre no maximo mais 4 ordens no dia;                          |
-//| Lote: FULL MARGIN - usa InpMarginUse % (padrao 100%) da margem   |
+//| Lote: arrisca InpRiskPct (2%) do saldo por ordem pelo stop,     |
+//| limitado pela % da margem (50%).                                 |
 //| livre = lote maximo; a cada ganho o capital sobe e o proximo     |
 //| lote fica maior (juros compostos) ate bater a meta.              |
 //|                                                                  |
@@ -27,12 +28,16 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "6.00"
-#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; so AUDUSD, compra e venda, opera o dia inteiro sem parar; arrisca 50% da margem e acima de 200 vai diminuindo. Alto risco."
+#property version   "7.00"
+#property description "Full Margin v7 - so AUDUSD, compra e venda, dia inteiro; le os candles do M15 com tendencia H1/H4; arrisca 2% do saldo por ordem (teto 50% da margem). Alto risco."
 
 #include <Trade\Trade.mqh>
 
 enum ENUM_SIDE { SIDE_BOTH = 0, SIDE_BUY = 1, SIDE_SELL = 2 };
+input ENUM_TIMEFRAMES InpTF  = PERIOD_M15; // Tempo grafico da ENTRADA (M1 = spread come o lucro; M15 e mais estavel)
+input ENUM_TIMEFRAMES InpTrendTF1 = PERIOD_H1;  // Tendencia 1 (precisa ser maior que o da entrada)
+input ENUM_TIMEFRAMES InpTrendTF2 = PERIOD_H4;  // Tendencia 2
+input double InpRiskPct      = 2.0;    // RISCO por ordem em % do saldo, pelo stop (0 = usar a % da margem)
 input string InpSymbol       = "AUDUSD"; // PAR operado (so este par, qualquer grafico; acha AUDUSD.a, AUDUSDm...)
 input ENUM_SIDE InpSide      = SIDE_BOTH; // Lado: 0 = compra e venda, 1 = SO COMPRA, 2 = SO VENDA
 input bool   InpEnterNow     = true;   // Abrir a 1a ordem assim que ligar
@@ -49,8 +54,8 @@ input double InpRR           = 2.0;    // ALVO = risco x isto (2 = ganha 2x o qu
 input double InpBreakevenR   = 0.8;    // Com lucro de X riscos, stop vai para a entrada (sem perda)
 input double InpTrailStartR  = 1.2;    // Com lucro de X riscos, comeca o stop movel
 input double InpTrailDistR   = 0.5;    // Distancia do stop movel (em riscos)
-input int    InpEMAFast      = 20;     // EMA do recuo no M1
-input int    InpEMATrend     = 50;     // EMA de tendencia no M5 e no M15
+input int    InpEMAFast      = 20;     // EMA rapida no tempo da entrada
+input int    InpEMATrend     = 50;     // EMA de tendencia nos tempos 1 e 2
 input int    InpMinScore     = 4;      // Forca minima da leitura dos candles para entrar (1 a 8)
 input int    InpLossesDay    = 0;      // Perdeu esta quantidade de vezes no dia: PARA e volta no dia seguinte (0 = desliga)
 input int    InpAfterWin     = 0;      // Depois de cada ganho abre no maximo mais X ordens no dia (0 = sem limite)
@@ -199,9 +204,9 @@ bool InHours()
 //--- (so engolfo e martelo/estrela com corpo/pavio de tamanho real; "3 candles" saiu: entrava tarde)
 int CandleSignal(string &name, double a)
   {
-   double o1 = iOpen(gSym, PERIOD_M1, 1), c1 = iClose(gSym, PERIOD_M1, 1);
-   double h1 = iHigh(gSym, PERIOD_M1, 1), l1 = iLow(gSym, PERIOD_M1, 1);
-   double o2 = iOpen(gSym, PERIOD_M1, 2), c2 = iClose(gSym, PERIOD_M1, 2);
+   double o1 = iOpen(gSym, InpTF, 1), c1 = iClose(gSym, InpTF, 1);
+   double h1 = iHigh(gSym, InpTF, 1), l1 = iLow(gSym, InpTF, 1);
+   double o2 = iOpen(gSym, InpTF, 2), c2 = iClose(gSym, InpTF, 2);
    double range = h1 - l1;
    if(range <= 0 || range < 0.5 * a) return(0);                  // candle pequeno demais = ruido
    double body = MathAbs(c1 - o1);
@@ -219,7 +224,22 @@ bool OpenOrder(int dir, double slDist, const string name)
   {
    double ask = SymbolInfoDouble(gSym, SYMBOL_ASK), bid = SymbolInfoDouble(gSym, SYMBOL_BID);
    ENUM_ORDER_TYPE type = (dir == 1) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   double lot = CalcLot(type, dir == 1 ? ask : bid);
+   double lot = CalcLot(type, dir == 1 ? ask : bid);          // teto: a margem permitida
+   if(InpRiskPct > 0)
+     {
+      double tv = SymbolInfoDouble(gSym, SYMBOL_TRADE_TICK_VALUE), ts = SymbolInfoDouble(gSym, SYMBOL_TRADE_TICK_SIZE);
+      if(tv > 0 && ts > 0 && slDist > 0)
+        {
+         double stp = SymbolInfoDouble(gSym, SYMBOL_VOLUME_STEP);
+         if(stp <= 0) stp = 0.01;
+         //--- lote que perde InpRiskPct % do saldo se bater o stop (diminui acima de 200 como a margem)
+         double riskMoney = AccountInfoDouble(ACCOUNT_BALANCE) * InpRiskPct / 100.0 * MarginPct() / InpMarginUse;
+         double rl = MathFloor(riskMoney / (slDist / ts * tv) / stp) * stp;
+         double mnl = SymbolInfoDouble(gSym, SYMBOL_VOLUME_MIN);
+         if(rl < mnl) rl = mnl;
+         lot = NormalizeDouble(MathMin(lot, rl), 2);
+        }
+     }
    if(lot <= 0) { StopSession("capital insuficiente para o lote minimo"); return(false); }
    double mn = SymbolInfoDouble(gSym, SYMBOL_VOLUME_MIN);
    double st = SymbolInfoDouble(gSym, SYMBOL_VOLUME_STEP);
@@ -263,18 +283,18 @@ int ReadChart(double a, double e5, double e15, double e1, string &why)
    int bulls = 0, bears = 0;
    for(int k = 1; k <= 10; k++)
      {
-      double o = iOpen(gSym, PERIOD_M1, k), c = iClose(gSym, PERIOD_M1, k);
+      double o = iOpen(gSym, InpTF, k), c = iClose(gSym, InpTF, k);
       if(c > o) bulls++; else if(c < o) bears++;
      }
    if(bulls - bears >= 3) sc++; else if(bears - bulls >= 3) sc--;
    int hh = 0, ll = 0;
    for(int k = 1; k <= 4; k++)
      {
-      if(iHigh(gSym, PERIOD_M1, k) > iHigh(gSym, PERIOD_M1, k + 1) && iLow(gSym, PERIOD_M1, k) > iLow(gSym, PERIOD_M1, k + 1)) hh++;
-      if(iHigh(gSym, PERIOD_M1, k) < iHigh(gSym, PERIOD_M1, k + 1) && iLow(gSym, PERIOD_M1, k) < iLow(gSym, PERIOD_M1, k + 1)) ll++;
+      if(iHigh(gSym, InpTF, k) > iHigh(gSym, InpTF, k + 1) && iLow(gSym, InpTF, k) > iLow(gSym, InpTF, k + 1)) hh++;
+      if(iHigh(gSym, InpTF, k) < iHigh(gSym, InpTF, k + 1) && iLow(gSym, InpTF, k) < iLow(gSym, InpTF, k + 1)) ll++;
      }
    if(hh >= 2 && hh > ll) sc++; else if(ll >= 2 && ll > hh) sc--;
-   double c1 = iClose(gSym, PERIOD_M1, 1), o1 = iOpen(gSym, PERIOD_M1, 1);
+   double c1 = iClose(gSym, InpTF, 1), o1 = iOpen(gSym, InpTF, 1);
    sc += (c1 > e1) ? 1 : -1;
    string name = "";
    int pat = CandleSignal(name, a);
@@ -310,8 +330,8 @@ bool TryEntry(bool now)
    if(dir == 0) return(true);
 
    //--- stop atras dos ultimos 5 candles (min 0.8 ATR, max 2.5 ATR)
-   double ref = (dir == 1) ? bid - (iLow(gSym, PERIOD_M1, iLowest(gSym, PERIOD_M1, MODE_LOW, 5, 1)) - 0.2 * a)
-                           : (iHigh(gSym, PERIOD_M1, iHighest(gSym, PERIOD_M1, MODE_HIGH, 5, 1)) + 0.2 * a) - bid;
+   double ref = (dir == 1) ? bid - (iLow(gSym, InpTF, iLowest(gSym, InpTF, MODE_LOW, 5, 1)) - 0.2 * a)
+                           : (iHigh(gSym, InpTF, iHighest(gSym, InpTF, MODE_HIGH, 5, 1)) + 0.2 * a) - bid;
    double sl = MathMin(MathMax(ref, 0.8 * a), 2.5 * a);
    sl = MathMax(sl, minDist + gPoint);
    if(!now && spread > 0.3 * sl) return(true);                   // spread caro demais para esse stop
@@ -373,7 +393,7 @@ void Cycle()
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
 
    bool spreadOk = SymbolInfoInteger(gSym, SYMBOL_SPREAD) <= InpMaxSpread;
-   datetime bar = iTime(gSym, PERIOD_M1, 0);
+   datetime bar = iTime(gSym, InpTF, 0);
    //--- entrada imediata ao ligar (so espera o spread ficar abaixo do maximo)
    if(InpEnterNow && !gEntered)
      {
@@ -489,10 +509,10 @@ int OnInit()
       Alert("Full Margin: confira meta (>1), limite de perda (1-99%) e margem usada (1-100%)");
       return(INIT_PARAMETERS_INCORRECT);
      }
-   hATR = iATR(gSym, PERIOD_M1, 14);
-   hEMA = iMA(gSym, PERIOD_M5, InpEMATrend, 0, MODE_EMA, PRICE_CLOSE);
-   hEMA15 = iMA(gSym, PERIOD_M15, InpEMATrend, 0, MODE_EMA, PRICE_CLOSE);
-   hEMA1 = iMA(gSym, PERIOD_M1, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
+   hATR = iATR(gSym, InpTF, 14);
+   hEMA = iMA(gSym, InpTrendTF1, InpEMATrend, 0, MODE_EMA, PRICE_CLOSE);
+   hEMA15 = iMA(gSym, InpTrendTF2, InpEMATrend, 0, MODE_EMA, PRICE_CLOSE);
+   hEMA1 = iMA(gSym, InpTF, InpEMAFast, 0, MODE_EMA, PRICE_CLOSE);
    if(hATR == INVALID_HANDLE || hEMA == INVALID_HANDLE || hEMA15 == INVALID_HANDLE || hEMA1 == INVALID_HANDLE)
      {
       Print("Full Margin: nao consegui criar os indicadores");
