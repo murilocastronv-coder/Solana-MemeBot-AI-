@@ -27,10 +27,10 @@
 //| passado nao garante resultado futuro.                            |
 //+------------------------------------------------------------------+
 #property copyright "SinalTron"
-#property version   "1.30"
+#property version   "1.31"
 #property description "SinalTron - sinais de compra e venda o dia inteiro, com alvo e stop, alerta no celular e acerto real no historico."
 #property indicator_chart_window
-#property indicator_buffers 2
+#property indicator_buffers 4
 #property indicator_plots   2
 #property indicator_label1  "COMPRA"
 #property indicator_type1   DRAW_ARROW
@@ -58,6 +58,7 @@ input double InpADXMin     = 25.0;   // Tendencia: ADX(14) pelo menos isto (abai
 input double InpSepATR     = 0.5;    // Tendencia: distancia entre EMA 50 e EMA 200 de pelo menos X ATR
 
 double BufBuy[], BufSell[];
+double BufTP[], BufSL[];              // para o robo: alvo e stop (em ATR) do ajuste em uso
 int    hE20 = INVALID_HANDLE, hE50 = INVALID_HANDLE, hE200 = INVALID_HANDLE, hATR = INVALID_HANDLE, hADX = INVALID_HANDLE;
 double gTr[];                         // 1 = tendencia de alta, -1 = de baixa, 0 = RANGE (por candle)
 datetime gLastSignalBar = 0;
@@ -73,6 +74,8 @@ int OnInit()
   {
    SetIndexBuffer(0, BufBuy, INDICATOR_DATA);
    SetIndexBuffer(1, BufSell, INDICATOR_DATA);
+   SetIndexBuffer(2, BufTP, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(3, BufSL, INDICATOR_CALCULATIONS);
    PlotIndexSetInteger(0, PLOT_ARROW, 233);
    PlotIndexSetInteger(1, PLOT_ARROW, 234);
    PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, EMPTY_VALUE);
@@ -357,6 +360,7 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
       if(s == -1) BufSell[i] = high[i] + 0.3 * atr[i];
      }
    BufBuy[rates_total - 1] = EMPTY_VALUE; BufSell[rates_total - 1] = EMPTY_VALUE;
+   for(int i = MathMax(0, rates_total - 3); i < rates_total; i++) { BufTP[i] = gTP; BufSL[i] = gSL; }
 
    //--- ACERTO REAL no historico: cada sinal bateu o alvo antes do stop?
    int wins = 0, losses = 0;
