@@ -9,7 +9,9 @@
 //| - Cada sinal vem com ENTRADA, ALVO e STOP (pelo ATR).            |
 //| - Manda o sinal para o CELULAR (app MetaTrader 5) e da alerta.   |
 //| - MAXIMO RETORNO: a cada candle novo testa 100 ajustes (forca,   |
-//|   alvo, stop) no historico e usa o que MAIS RENDEU POR DIA.      |
+//|   alvo, stop) no historico e usa o que MAIS RENDEU entre os que  |
+//|   ACERTAM pelo menos 70% (spread incluido na conta).             |
+//| - Mostra "COMPRAR AGORA" / "VENDER AGORA" com entrada/alvo/stop. |
 //| - PAINEL com o ACERTO REAL dos sinais no historico do grafico    |
 //|   (quantos bateram o alvo antes do stop) - nao e promessa, e o   |
 //|   que aconteceu no passado.                                      |
@@ -23,7 +25,7 @@
 //| passado nao garante resultado futuro.                            |
 //+------------------------------------------------------------------+
 #property copyright "SinalTron"
-#property version   "1.10"
+#property version   "1.20"
 #property description "SinalTron - sinais de compra e venda o dia inteiro, com alvo e stop, alerta no celular e acerto real no historico."
 #property indicator_chart_window
 #property indicator_buffers 2
@@ -47,6 +49,8 @@ input bool   InpAlert      = true;   // Alerta com som no PC
 input bool   InpTrendOnly  = true;   // So sinais a favor da tendencia (EMA 50 x EMA 200) - mais acerto
 input bool   InpAutoTune   = true;   // MAXIMO RETORNO: testa forca/alvo/stop no historico e usa o que mais rendeu por dia
 input double InpRiskPct    = 2.0;    // Risco por sinal (% do saldo) usado para calcular o retorno
+input double InpMinWin     = 70.0;   // ACERTO MINIMO (%) que o ajuste automatico precisa ter no historico
+input int    InpShowBars   = 3;      // Mostra "COMPRAR/VENDER AGORA" por X candles depois do sinal
 
 double BufBuy[], BufSell[];
 int    hE20 = INVALID_HANDLE, hE50 = INVALID_HANDLE, hE200 = INVALID_HANDLE, hATR = INVALID_HANDLE;
@@ -164,6 +168,37 @@ void Label(const string n, int y, const string text, color c, int size = 9, cons
    ObjectSetString(0, n, OBJPROP_TEXT, text);
   }
 
+void HLine(const string n, double price, color c, const string text)
+  {
+   if(ObjectFind(0, n) < 0)
+     {
+      ObjectCreate(0, n, OBJ_HLINE, 0, 0, price);
+      ObjectSetInteger(0, n, OBJPROP_STYLE, STYLE_DASH);
+      ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
+     }
+   ObjectSetDouble(0, n, OBJPROP_PRICE, price);
+   ObjectSetInteger(0, n, OBJPROP_COLOR, c);
+   ObjectSetString(0, n, OBJPROP_TEXT, text);
+  }
+
+//--- "COMPRAR AGORA" / "VENDER AGORA" bem grande, com entrada, alvo e stop (e as linhas no grafico)
+void Action(int dir, double entry, double tp, double sl)
+  {
+   if(dir == 0)
+     {
+      Label("ST_ACT", 160, "AGUARDE O PROXIMO SINAL...", C'120,126,150', 14, "Arial Black");
+      Label("ST_ACT2", 188, " ", C'120,126,150', 9);
+      ObjectDelete(0, "ST_EN"); ObjectDelete(0, "ST_TP"); ObjectDelete(0, "ST_SL");
+      return;
+     }
+   Label("ST_ACT", 160, dir == 1 ? "COMPRAR AGORA" : "VENDER AGORA", dir == 1 ? clrLime : C'255,80,90', 20, "Arial Black");
+   Label("ST_ACT2", 192, "entrada " + DoubleToString(entry, _Digits) + "  alvo " + DoubleToString(tp, _Digits) +
+         "  stop " + DoubleToString(sl, _Digits), C'210,214,230', 10);
+   HLine("ST_EN", entry, C'210,214,230', "ENTRADA");
+   HLine("ST_TP", tp, clrLime, "ALVO");
+   HLine("ST_SL", sl, C'255,80,90', "STOP");
+  }
+
 void Panel(int wins, int losses, double growth, const string last)
   {
    int tot = wins + losses;
@@ -172,10 +207,10 @@ void Panel(int wins, int losses, double growth, const string last)
      {
       ObjectCreate(0, "ST_BG", OBJ_RECTANGLE_LABEL, 0, 0, 0);
       ObjectSetInteger(0, "ST_BG", OBJPROP_CORNER, CORNER_RIGHT_UPPER);
-      ObjectSetInteger(0, "ST_BG", OBJPROP_XDISTANCE, 390);
+      ObjectSetInteger(0, "ST_BG", OBJPROP_XDISTANCE, 480);
       ObjectSetInteger(0, "ST_BG", OBJPROP_YDISTANCE, 20);
-      ObjectSetInteger(0, "ST_BG", OBJPROP_XSIZE, 380);
-      ObjectSetInteger(0, "ST_BG", OBJPROP_YSIZE, 140);
+      ObjectSetInteger(0, "ST_BG", OBJPROP_XSIZE, 470);
+      ObjectSetInteger(0, "ST_BG", OBJPROP_YSIZE, 215);
       ObjectSetInteger(0, "ST_BG", OBJPROP_BGCOLOR, C'14,16,26');
       ObjectSetInteger(0, "ST_BG", OBJPROP_COLOR, C'255,196,0');
       ObjectSetInteger(0, "ST_BG", OBJPROP_BORDER_TYPE, BORDER_FLAT);
@@ -184,6 +219,11 @@ void Panel(int wins, int losses, double growth, const string last)
    Label("ST_T", 28, "SINALTRON  " + _Symbol + " " + EnumToString((ENUM_TIMEFRAMES)_Period), C'255,196,0', 12, "Arial Black");
    Label("ST_1", 56, "Acerto no historico: " + (tot > 0 ? DoubleToString(rate, 0) + "%" : "-") + " (" + IntegerToString(wins) + " G / " +
          IntegerToString(losses) + " P)", rate >= 60 ? clrLime : (rate >= 50 ? C'255,196,0' : C'255,80,90'), 10);
+   if(InpAutoTune && !gWinOk)
+      Label("ST_6", 214, "Nenhum ajuste chegou a " + DoubleToString(InpMinWin, 0) + "% neste par/tempo: usando o de MAIOR acerto",
+            C'255,196,0', 8);
+   else
+      Label("ST_6", 214, " ", C'120,126,150', 8);
    Label("ST_2", 78, (InpAutoTune ? "MELHOR AJUSTE: " : "") + "alvo " + DoubleToString(gTP, 1) + " ATR / stop " + DoubleToString(gSL, 1) +
          " ATR / forca " + IntegerToString(gMin), C'210,214,230');
    Label("ST_3", 98, "Arriscando " + DoubleToString(InpRiskPct, 1) + "% por sinal: " + (growth >= 0 ? "+" : "") + DoubleToString(growth, 0) +
@@ -196,7 +236,7 @@ void Panel(int wins, int losses, double growth, const string last)
 //| Resultado de um ajuste no historico: crescimento composto        |
 //+------------------------------------------------------------------+
 double Simulate(int mn, double tpA, double slA, int from, int to, const double &h[], const double &l[], const double &c[],
-                const double &e50[], const double &e200[], const double &atr[], int &w, int &ls)
+                const double &e50[], const double &e200[], const double &atr[], const int &spr[], int &w, int &ls)
   {
    double g = 1.0;
    w = 0; ls = 0;
@@ -206,7 +246,8 @@ double Simulate(int mn, double tpA, double slA, int from, int to, const double &
       if(gSc[i] >= mn && gSc[i - 1] < mn && (!InpTrendOnly || e50[i] > e200[i])) dir = 1;
       else if(gSc[i] <= -mn && gSc[i - 1] > -mn && (!InpTrendOnly || e50[i] < e200[i])) dir = -1;
       if(dir == 0) continue;
-      double tp = c[i] + dir * tpA * atr[i], sl = c[i] - dir * slA * atr[i];
+      double sp = spr[i] * _Point;                                  // o spread pesa contra: alvo mais longe, stop mais perto
+      double tp = c[i] + dir * (tpA * atr[i] + sp), sl = c[i] - dir * MathMax(slA * atr[i] - sp, _Point);
       for(int k = i + 1; k < MathMin(to + 1, i + 1 + InpMaxBars); k++)
         {
          if((dir == 1) ? (l[k] <= sl) : (h[k] >= sl)) { ls++; g *= 1.0 - InpRiskPct / 100.0; break; }
@@ -216,25 +257,37 @@ double Simulate(int mn, double tpA, double slA, int from, int to, const double &
    return(g);
   }
 
-//--- testa varias combinacoes e fica com a de MAIOR RETORNO POR DIA (precisa de pelo menos 20 sinais)
+//--- testa varias combinacoes: fica com a de MAIOR RETORNO entre as que acertam pelo menos InpMinWin %
+//--- (se nenhuma chega la, fica com a de MAIOR ACERTO)
+bool   gWinOk = false;
 void Tune(int from, int to, const datetime &t[], const double &h[], const double &l[], const double &c[],
-          const double &e50[], const double &e200[], const double &atr[])
+          const double &e50[], const double &e200[], const double &atr[], const int &spr[])
   {
    double days = MathMax(1.0, (double)(t[to] - t[from]) / 86400.0);
-   double bestG = -1;
-   int mins[] = {3, 4, 5, 6, 7};
-   double tps[] = {0.5, 1.0, 1.5, 2.0, 3.0};
-   double sls[] = {0.5, 1.0, 1.5, 2.0};
+   double bestG = -1, bestRate = -1, bestG2 = -1;
+   int mins[] = {3, 4, 5, 6, 7, 8};
+   double tps[] = {0.3, 0.5, 0.75, 1.0, 1.5, 2.0};
+   double sls[] = {0.5, 1.0, 1.5, 2.0, 3.0, 4.0};
+   gWinOk = false;
    for(int a = 0; a < ArraySize(mins); a++)
       for(int b = 0; b < ArraySize(tps); b++)
          for(int d = 0; d < ArraySize(sls); d++)
            {
             int w, ls;
-            double g = Simulate(mins[a], tps[b], sls[d], from, to, h, l, c, e50, e200, atr, w, ls);
+            double g = Simulate(mins[a], tps[b], sls[d], from, to, h, l, c, e50, e200, atr, spr, w, ls);
             if(w + ls < 20) continue;
-            if(g > bestG) { bestG = g; gMin = mins[a]; gTP = tps[b]; gSL = sls[d]; gTuneN = w + ls; gTuneRate = 100.0 * w / (w + ls); }
+            double rate = 100.0 * w / (w + ls);
+            if(rate >= InpMinWin)
+              {
+               if(!gWinOk || g > bestG) { gWinOk = true; bestG = g; gMin = mins[a]; gTP = tps[b]; gSL = sls[d]; gTuneN = w + ls; gTuneRate = rate; }
+              }
+            else if(!gWinOk && (rate > bestRate || (rate == bestRate && g > bestG2)))
+              {
+               bestRate = rate; bestG2 = g; gMin = mins[a]; gTP = tps[b]; gSL = sls[d]; gTuneN = w + ls; gTuneRate = rate;
+              }
            }
-   gDayRet = bestG > 0 ? (MathPow(bestG, 1.0 / days) - 1.0) * 100.0 : 0;
+   double gg = gWinOk ? bestG : bestG2;
+   gDayRet = gg > 0 ? (MathPow(gg, 1.0 / days) - 1.0) * 100.0 : 0;
   }
 
 //+------------------------------------------------------------------+
@@ -260,7 +313,7 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
      {
       gTunedBar = time[rates_total - 1];
       int oM = gMin; double oT = gTP, oS = gSL;
-      Tune(from0, rates_total - 2, time, high, low, close, e50, e200, atr);
+      Tune(from0, rates_total - 2, time, high, low, close, e50, e200, atr, spread);
       retune = (oM != gMin || oT != gTP || oS != gSL);
      }
    int start = (prev_calculated > 0 && !retune) ? prev_calculated - 1 : 220;
@@ -289,7 +342,8 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
      {
       int dir = (BufBuy[i] != EMPTY_VALUE) ? 1 : ((BufSell[i] != EMPTY_VALUE) ? -1 : 0);
       if(dir == 0) continue;
-      double entry = close[i], tp = entry + dir * gTP * atr[i], sl = entry - dir * gSL * atr[i];
+      double sp = spread[i] * _Point;
+      double entry = close[i], tp = entry + dir * (gTP * atr[i] + sp), sl = entry - dir * MathMax(gSL * atr[i] - sp, _Point);
       last = (dir == 1 ? "COMPRA " : "VENDA ") + TimeToString(time[i], TIME_DATE | TIME_MINUTES);
       for(int k = i + 1; k < MathMin(rates_total, i + 1 + InpMaxBars); k++)
         {
@@ -300,6 +354,16 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
         }
      }
    Panel(wins, losses, (growth - 1.0) * 100.0, last);
+   int adir = 0, ai = -1;
+   for(int k = rates_total - 2; k >= MathMax(0, rates_total - 1 - InpShowBars); k--)
+      if(BufBuy[k] != EMPTY_VALUE || BufSell[k] != EMPTY_VALUE) { ai = k; adir = (BufBuy[k] != EMPTY_VALUE) ? 1 : -1; break; }
+   if(adir != 0)
+     {
+      double sp = spread[ai] * _Point;
+      Action(adir, close[ai], close[ai] + adir * (gTP * atr[ai] + sp), close[ai] - adir * MathMax(gSL * atr[ai] - sp, _Point));
+     }
+   else
+      Action(0, 0, 0, 0);
 
    //--- sinal NOVO no candle que acabou de fechar: alerta + celular (uma vez por candle)
    int i = rates_total - 2;
@@ -309,8 +373,9 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
       if(s != 0)
         {
          gLastSignalBar = time[i];
-         double entry = close[i], tp = entry + s * gTP * atr[i], sl = entry - s * gSL * atr[i];
-         string msg = "SINALTRON " + (s == 1 ? "COMPRA " : "VENDA ") + _Symbol + " " + EnumToString((ENUM_TIMEFRAMES)_Period) +
+         double sp = spread[i] * _Point;
+         double entry = close[i], tp = entry + s * (gTP * atr[i] + sp), sl = entry - s * MathMax(gSL * atr[i] - sp, _Point);
+         string msg = "SINALTRON " + (s == 1 ? "COMPRAR AGORA " : "VENDER AGORA ") + _Symbol + " " + EnumToString((ENUM_TIMEFRAMES)_Period) +
                       " | entrada " + DoubleToString(entry, _Digits) + " | alvo " + DoubleToString(tp, _Digits) +
                       " | stop " + DoubleToString(sl, _Digits) + " | nota " + IntegerToString(score) + (name != "" ? " " + name : "");
          if(InpAlert) Alert(msg);
