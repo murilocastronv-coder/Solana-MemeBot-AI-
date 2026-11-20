@@ -1,4 +1,4 @@
-"""BTC FULL MARGIN (owner, Nov 20): the same strategy as the owner's MT5 robot FullMargin_7, on BTC (Jupiter Perps).
+"""FULL MARGIN (owner, Nov 20): the owner's MT5 FullMargin strategy on Jupiter Perps - trading only SOL (BTCFM_ASSET).
 
 Two separate accounts: DEMO (fake money, real prices, fees included) and REAL (the bot wallet on Jupiter Perps).
 Each one starts every day (00:00 UTC) with US$ 100 (minimum capital), day and night:
@@ -47,6 +47,9 @@ SCORE_STRONG, SCORE_WEAK = 3, 7
 WEAK_EVERY_S = 3600             # (selective mode) no strong move: at most 1 entry per hour
 WEAK_LOT = 0.5
 ADD_SCORE = 4                   # the reading must point to the side of the orders with at least this strength
+BT_ASSETS = {"BTC": ("BTCUSDT", "BTC-USD"), "SOL": ("SOLUSDT", "SOL-USD"), "ETH": ("ETHUSDT", "ETH-USD")}
+ASSET = os.getenv("BTCFM_ASSET", "SOL").strip().upper()      # owner, Nov 20: demo and real trade only SOL
+LABEL = {"BTC": "₿ BTC", "SOL": "◎ SOL", "ETH": "Ξ ETH"}.get(ASSET, ASSET)
 ALWAYS_IN = os.getenv("BTCFM_ALWAYS_IN", "true").strip().lower() != "false"   # owner, Nov 20: always with orders open
 LIQ_GUARD = 0.6                 # closes everything at 60% of the way to the liquidation price
 
@@ -119,6 +122,15 @@ def _load(mode):
         except (OSError, ValueError):
             pass
     d["mode"] = mode
+    if mode in MODES and d.get("asset_v") != ASSET:
+        # owner, Nov 20: the robot now trades only ASSET (SOL) - both accounts start again from US$ 100, clean results.
+        # An order still open on the old asset is kept aside: the real one is closed on-chain by the next cycle.
+        legacy = d.get("pos") if d.get("pos") and d["pos"].get("asset", "BTC") != ASSET else None
+        d.update(asset_v=ASSET, pos=None, capital=CAPITAL_USD, day="", done_why="", wins=0, losses=0, trades=0,
+                 consec=0, pause_until=0, last_bar=0, hist=[], days=[], curve=[])
+        d.pop("total", None); d.pop("last_close", None)
+        if legacy and mode == "real":
+            d["legacy_pos"] = legacy
     if d.get("lev_v") != 40:                 # owner, Nov 20: both accounts switch to 40x once (the buttons still work)
         d["leverage"], d["lev_v"] = DEFAULT_LEVERAGE, 40
     return d
@@ -154,10 +166,11 @@ def _get(url, params=None):
 
 
 def klines_5m(limit=1000):
-    """5-minute BTC candles, oldest first (the last one is still forming)."""
+    """5-minute candles of the traded asset (ASSET), oldest first (the last one is still forming)."""
+    binance_sym, coinbase_sym = BT_ASSETS[ASSET]
     for base in ("https://api.binance.com", "https://api.binance.us"):
         try:
-            rows = _get(base + "/api/v3/klines", {"symbol": "BTCUSDT", "interval": "5m", "limit": limit})
+            rows = _get(base + "/api/v3/klines", {"symbol": binance_sym, "interval": "5m", "limit": limit})
             return [{"t": int(r[0]) // 1000, "o": float(r[1]), "h": float(r[2]), "l": float(r[3]), "c": float(r[4])}
                     for r in rows]
         except Exception:
@@ -166,21 +179,22 @@ def klines_5m(limit=1000):
     rows = {}
     for k in range(4):                      # Coinbase: 300 candles per call
         end, start = now - k * 300 * TF, now - (k + 1) * 300 * TF
-        for r in _get("https://api.exchange.coinbase.com/products/BTC-USD/candles",
+        for r in _get("https://api.exchange.coinbase.com/products/" + coinbase_sym + "/candles",
                       {"granularity": TF, "start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start)),
                        "end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end))}):
             rows[int(r[0])] = {"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "o": float(r[3]), "c": float(r[4])}
     return [rows[t] for t in sorted(rows)]
 
 
-def price_now():
-    """Current BTC price (light call for the live view)."""
+def price_now(asset=None):
+    """Current price of the traded asset (light call for the live view)."""
+    binance_sym, coinbase_sym = BT_ASSETS[asset or ASSET]
     for url in ("https://api.binance.com/api/v3/ticker/price", "https://api.binance.us/api/v3/ticker/price"):
         try:
-            return float(_get(url, {"symbol": "BTCUSDT"})["price"])
+            return float(_get(url, {"symbol": binance_sym})["price"])
         except Exception:
             continue
-    return float(_get("https://api.exchange.coinbase.com/products/BTC-USD/ticker")["price"])
+    return float(_get("https://api.exchange.coinbase.com/products/" + coinbase_sym + "/ticker")["price"])
 
 
 def ema(values, n):
@@ -341,7 +355,7 @@ def _open(d, price, side, why, col=None, now=None, lev=None):
     if d["mode"] == "real":
         import jupiter_perps as jp
         jp.ensure_usdc(col, sol_usd())
-        out = jp.open_position(side, col, lev, price, min_size=(pos or {}).get("size_usd", 0.0))
+        out = jp.open_position(side, col, lev, price, min_size=(pos or {}).get("size_usd", 0.0), asset=ASSET)
         onchain_avg = float(out.get("price") or 0) or None
         sig = out.get("signature")
     add = col * lev
@@ -353,7 +367,7 @@ def _open(d, price, side, why, col=None, now=None, lev=None):
                    n=pos.get("n", 1) + 1, last=price, lev=max(pos.get("lev", lev), lev))
     else:
         pos = {"side": side, "entry": onchain_avg or price, "size_usd": add, "collateral_usd": col, "n": 1,
-               "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0, "lev": lev,
+               "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0, "lev": lev, "asset": ASSET,
                "tp": (CFG.get(d["mode"]) or {}).get("tp", BASKET_TP_PCT)}
         d["pos"] = pos
     if sig:
@@ -375,7 +389,7 @@ def _close(d, price, why, now=None):
         from bot_wallet_service import get_address
         owner = Pubkey.from_string(get_address())
         before = jp.usdc_balance(owner)
-        out = jp.close_position(pos.get("side", "short"), price)
+        out = jp.close_position(pos.get("side", "short"), price, asset=pos.get("asset", "BTC"))
         sig = out.get("signature")
         try:                                  # the real result: USDC that came back minus the collateral put in
             received = jp.usdc_balance(owner) - before
@@ -423,7 +437,7 @@ def close_text(d, why, price, entry, pos=None):
     pos = pos or (d.get("hist") or [{}])[-1]
     lc, tot = d["last_close"], d["total"]
     head = ("✅ LUCRO " if lc["net"] >= 0 else "❌ PREJUÍZO ") + format(lc["net"], "+.2f") + " USD (depois das taxas)"
-    return ("₿ BTC FULL MARGIN " + NAME[d["mode"]] + " — " + why + "\n" + head +
+    return (LABEL + " FULL MARGIN " + NAME[d["mode"]] + " — " + why + "\n" + head +
             "\n" + side_name(pos.get("side", "short")) + " · " + str(pos.get("n", 1)) + " ordem(ns) · preço médio $" +
             format(entry, ",.0f") + " → saída $" + format(price, ",.0f") +
             "\n💵 Bruto " + format(lc["gross"], "+.2f") + " · taxas −" + format(lc["fees"], ".2f") +
@@ -445,6 +459,22 @@ def cycle(mode, send, chat, now=None, klines=None):
         d = _load(mode)
         if mode in MODES:
             CFG[mode] = d.get("cfg") or None             # strategy variant chosen with the optimizer (None = default)
+        if mode == "real" and d.get("legacy_pos"):        # an order still open on the old asset: close it on-chain
+            lp = d["legacy_pos"]
+            try:
+                import jupiter_perps as jp
+                old = lp.get("asset", "BTC")
+                jp.close_position(lp.get("side", "short"), price_now(old), asset=old)
+                try:
+                    jp.usdc_to_sol()
+                except Exception:
+                    pass
+                d.pop("legacy_pos", None)
+                _save(d)
+                send(chat, "🔁 Conta REAL: fechei a ordem antiga de " + old + " (o robô agora opera só " + ASSET + ").")
+            except Exception as exc:
+                logging.warning("full margin: legacy close failed: %s", type(exc).__name__)
+                return "fechando ordem antiga"
         if not d["on"] and not d.get("pos"):
             return "desligado"
         cs = (klines or klines_5m)()
@@ -458,7 +488,7 @@ def cycle(mode, send, chat, now=None, klines=None):
         if d["day"] != today(now) and not pos:
             new_day(d, now)
             if d["on"] and d["days"]:
-                send(chat, "🌅 BTC FULL MARGIN " + tag + ": novo dia, capital de volta a US$ " + format(CAPITAL_USD, ".0f") +
+                send(chat, "🌅 " + ASSET + " FULL MARGIN " + tag + ": novo dia, capital de volta a US$ " + format(CAPITAL_USD, ".0f") +
                      " · meta US$ " + format(TARGET_USD, ".0f") + ". Ontem: " + format(d["days"][-1]["result"], "+.2f") + " USD.")
         # daily target / loss limit
         eq = equity(d, price, now)
@@ -469,8 +499,8 @@ def cycle(mode, send, chat, now=None, klines=None):
                 send(chat, close_text(d, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA", price, pos["entry"], pos))
             d["done_why"] = "META DO DIA BATIDA" if hit else "LIMITE DE PERDA DO DIA"
             _save(d)
-            send(chat, ("🎯 BTC FULL MARGIN " + tag + ": META DO DIA BATIDA! " if hit else
-                        "🛑 BTC FULL MARGIN " + tag + ": LIMITE DE PERDA DO DIA. ") +
+            send(chat, ("🎯 " + ASSET + " FULL MARGIN " + tag + ": META DO DIA BATIDA! " if hit else
+                        "🛑 " + ASSET + " FULL MARGIN " + tag + ": LIMITE DE PERDA DO DIA. ") +
                  "US$ " + format(CAPITAL_USD, ".0f") + " → US$ " + format(d["capital"], ".2f") +
                  ". Parou de operar hoje; volta sozinho amanhã (00:00 UTC) com US$ " + format(CAPITAL_USD, ".0f") + ".")
             return d["done_why"]
@@ -519,10 +549,10 @@ def cycle(mode, send, chat, now=None, klines=None):
                         _open(d, price, pos["side"], label + ", " + reading, add, now, add_lev)
                     except Exception as exc:
                         _save(d)
-                        send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem " + label + " (" + str(exc)[:160] + ").")
+                        send(chat, "⛔ " + ASSET + " FULL MARGIN " + tag + ": não abri a ordem " + label + " (" + str(exc)[:160] + ").")
                         return "erro"
                     _save(d)
-                    send(chat, "➕ BTC FULL MARGIN " + tag + " — " + label + ": ordem " + str(pos["n"]) + " (" + side_name(pos) +
+                    send(chat, "➕ " + ASSET + " FULL MARGIN " + tag + " — " + label + ": ordem " + str(pos["n"]) + " (" + side_name(pos) +
                          ") em $" + format(price, ",.0f") + " · garantia US$ " + format(add, ".2f") +
                          "\nPreço médio agora $" + format(pos["entry"], ",.0f") + " · fecha tudo em $" + format(tp_price(pos), ",.0f") +
                          " (+" + format(BASKET_TP_PCT * 100, ".2f") + "%, lucro depois das taxas)" + _tx(pos.get("signature")))
@@ -579,10 +609,10 @@ def cycle(mode, send, chat, now=None, klines=None):
                         (LEV_PLAN.get(mode) or {}).get("first"))
         except Exception as exc:
             _save(d)
-            send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem (" + str(exc)[:160] + ").")
+            send(chat, "⛔ " + ASSET + " FULL MARGIN " + tag + ": não abri a ordem (" + str(exc)[:160] + ").")
             return "erro"
         _save(d)
-        send(chat, "₿ BTC FULL MARGIN " + tag + " — " + side_name(side) + " aberta (1ª ordem, 30% da conta)\n" + why +
+        send(chat, LABEL + " FULL MARGIN " + tag + " — " + side_name(side) + " aberta (1ª ordem, 30% da conta)\n" + why +
              "\nEntrada $" + format(pos["entry"], ",.0f") + " · garantia US$ " + format(pos["collateral_usd"], ".2f") + " · " +
              str(d["leverage"]) + "x (posição US$ " + format(pos["size_usd"], ",.0f") + ")" +
              "\n🎯 Fecha tudo em $" + format(tp_price(pos), ",.0f") + " (+" + format(BASKET_TP_PCT * 100, ".2f") +
@@ -605,7 +635,6 @@ BT_CACHE = {}                   # chart readings of the candles (shared by the o
 LEV_PLAN = {}                   # mode -> dynamic leverage plan (backtest)
 CFG = {}                        # mode -> strategy variant (optimizer): tp, stop, hold_h, entry ("always"/"trend"), adds
 DYN_PLAN = {"first": 15, "loss": [20, 25, 30, 35], "win": 30}   # owner, Nov 20: 15x, more when losing, more when winning
-BT_ASSETS = {"BTC": ("BTCUSDT", "BTC-USD"), "SOL": ("SOLUSDT", "SOL-USD"), "ETH": ("ETHUSDT", "ETH-USD")}
 
 
 def klines_history(days=BT_DAYS, asset="BTC"):
@@ -763,7 +792,7 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, pla
         send(chat, "🧪 Backtest de " + str(days) + " dias do " + asset + " começou: baixando os candles de 5 min e rodando a estratégia "
              "atual (" + str(leverage) + "x). Leva uns " + ("2–5" if days <= 30 else "5–15") + " minutos. Nenhuma ordem real.")
         cs = klines_history(days, asset)
-        keep = dict(LAST)                             # the BTC screen keeps showing the BTC price
+        keep = dict(LAST)                             # the robot screen keeps showing its own price
         try:
             d = backtest(cs, leverage, only=only, plan=plan)
         finally:
@@ -925,7 +954,7 @@ def live_text(mode, price, now=None, track=None):
     d = _load(mode)
     pos = d.get("pos")
     L = ["📺 AO VIVO — " + NAME[mode] + " (atualiza a cada " + str(LIVE_EVERY_S) + " s)",
-         "₿ BTC agora: $" + format(price, ",.2f")]
+         LABEL + " agora: $" + format(price, ",.2f")]
     if not pos:
         L.append("⏳ Nenhuma ordem aberta agora " + ("— esperando sinal nos candles de 5 min." if d["on"] else "— conta desligada."))
         L.append("💼 Saldo da conta: US$ " + format(d["capital"], ".2f") + " (hoje " + format(d["capital"] - CAPITAL_USD, "+.2f") + ")")
@@ -942,7 +971,7 @@ def live_text(mode, price, now=None, track=None):
               " (posição US$ " + format(pos["size_usd"], ",.0f") + ")",
               ("🟢 " if net >= 0 else "🔴 ") + "FLUTUAÇÃO: " + format(net, "+.2f") + " USD (" + format(net / col * 100, "+.1f") +
               "% da garantia) — já com as taxas",
-              "💵 Bruto " + format(gross, "+.2f") + " · taxas −" + format(fees, ".2f") + " · BTC " + format(move, "+.2f") +
+              "💵 Bruto " + format(gross, "+.2f") + " · taxas −" + format(fees, ".2f") + " · " + ASSET + " " + format(move, "+.2f") +
               "% desde o preço médio (" + ("a favor" if move * _sgn(pos) > 0 else "contra") + ")",
               "🎯 Fecha tudo em $" + format(tp, ",.0f") + " (falta " + format((tp / price - 1) * 100, "+.2f") + "%)" +
               (" · ➕ próxima recuperação em $" + format(nxt, ",.0f") if pos.get("loss_adds", 0) < LOSS_ADDS else " · recuperação completa")]
@@ -961,7 +990,7 @@ def live_text(mode, price, now=None, track=None):
 
 
 def live_keyboard():
-    return [[{"text": "⏹️ Parar ao vivo", "callback_data": "bfm_live_stop"}, {"text": "⬅️ Robô BTC", "callback_data": "bfm"}]]
+    return [[{"text": "⏹️ Parar ao vivo", "callback_data": "bfm_live_stop"}, {"text": "⬅️ Robô " + ASSET, "callback_data": "bfm"}]]
 
 
 def start_live(mode, send, chat):
@@ -991,14 +1020,14 @@ def start_live(mode, send, chat):
         LIVE.pop(str(chat), None)
         try:
             EDIT(chat, msg_id, live_text(mode, price_now()) + "\n⏹️ Ao vivo encerrado (15 min). Toque em 📺 para ver de novo.",
-                 [[{"text": "📺 Ao vivo de novo", "callback_data": "bfm_live_" + mode}, {"text": "⬅️ Robô BTC", "callback_data": "bfm"}]])
+                 [[{"text": "📺 Ao vivo de novo", "callback_data": "bfm_live_" + mode}, {"text": "⬅️ Robô " + ASSET, "callback_data": "bfm"}]])
         except Exception:
             pass
 
 
 def results_text():
     """Full report of both accounts: is the robot making money after the fees?"""
-    L = ["📊 RESULTADOS DO ROBÔ BTC FULL MARGIN (líquido = depois das taxas da Jupiter)"]
+    L = ["📊 RESULTADOS DO ROBÔ " + ASSET + " FULL MARGIN (líquido = depois das taxas da Jupiter)"]
     for m in MODES:
         d = _load(m)
         tt = d.get("total") or {}
@@ -1036,7 +1065,7 @@ def results_png():
 
 
 def status_text():
-    L = ["₿ BTC FULL MARGIN — Jupiter Perps · COMPRA e VENDA · preço médio",
+    L = [LABEL + " FULL MARGIN — Jupiter Perps · opera só " + ASSET + " · COMPRA e VENDA · preço médio",
          "Cada conta começa o dia com US$ " + format(CAPITAL_USD, ".0f") + ". Opera O TEMPO TODO: fechou, já abre a próxima ordem "
          "(para o lado do movimento forte ou da leitura do gráfico), com 30% da conta. Vai ganhar: +1 ordem com 50%. "
          "Vai voltar (perdendo e o gráfico virou): até " + str(LOSS_ADDS) + " ordens a mais, cada vez mais distantes. "
@@ -1045,8 +1074,8 @@ def status_text():
          "). Recomeça todo dia às 00:00 UTC.",
          "", account_text("demo"), "", account_text("real")]
     if LAST.get("price"):
-        L += ["", "₿ BTC agora: $" + format(LAST["price"], ",.0f") + (" · " + LAST["reading"] if LAST.get("reading") else "")]
-    L.append("⚠️ Com alavancagem, uma alta rápida do BTC pode levar a garantia toda. Não existe garantia de lucro.")
+        L += ["", LABEL + " agora: $" + format(LAST["price"], ",.2f") + (" · " + LAST["reading"] if LAST.get("reading") else "")]
+    L.append("⚠️ Com alavancagem, um movimento rápido do " + ASSET + " pode levar a garantia toda. Não existe garantia de lucro.")
     return "\n".join(L)
 
 
@@ -1063,7 +1092,7 @@ def keyboard():
     rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
-    rows.append([{"text": "🧪 Backtest 30 dias", "callback_data": "bfm_bt"}, {"text": "🧪 Backtest 3 meses", "callback_data": "bfm_bt90"}])
+    rows.append([{"text": "🧪 Backtest " + ASSET + " 30 dias", "callback_data": "bfm_bt"}, {"text": "🧪 Backtest " + ASSET + " 3 meses", "callback_data": "bfm_bt90"}])
     rows.append([{"text": "🧪 SOL 30d", "callback_data": "bfm_bt_sol"}, {"text": "🧪 SOL 3m", "callback_data": "bfm_bt90_sol"},
                  {"text": "🧪 ETH 30d", "callback_data": "bfm_bt_eth"}, {"text": "🧪 ETH 3m", "callback_data": "bfm_bt90_eth"}])
     rows.append([{"text": "📉 SOL venda 30d", "callback_data": "bfm_bts_sol"}, {"text": "📉 SOL venda 3m", "callback_data": "bfm_bts90_sol"},
@@ -1097,14 +1126,14 @@ def _start(mode, send, chat, run_async):
         if d["day"] != today() or not d.get("trades"):
             new_day(d)
         _save(d)
-    send(chat, "▶️ BTC FULL MARGIN " + NAME[mode] + " ligada: US$ " + format(d["capital"], ".2f") + " · meta do dia US$ " +
+    send(chat, "▶️ " + ASSET + " FULL MARGIN " + NAME[mode] + " ligada: US$ " + format(d["capital"], ".2f") + " · meta do dia US$ " +
          format(TARGET_USD, ".0f") + " · " + str(d["leverage"]) + "x · compra e venda. Abrindo a 1ª ordem…")
 
     def go():
         try:
-            send(chat, "₿ " + NAME[mode] + ": " + str(cycle(mode, send, chat)))
+            send(chat, LABEL + " " + NAME[mode] + ": " + str(cycle(mode, send, chat)))
         except Exception as exc:
-            send(chat, "⛔ BTC FULL MARGIN " + NAME[mode] + ": " + str(exc)[:200])
+            send(chat, "⛔ " + ASSET + " FULL MARGIN " + NAME[mode] + ": " + str(exc)[:200])
     run_async(go)
 
 
@@ -1123,12 +1152,12 @@ def handle(action, send, chat, run_async):
     elif action in ("bfm_use_demo", "bfm_use_real"):
         best = apply_best(action[8:])
         send(chat, ("✅ " + NAME[action[8:]] + " agora opera com: " + best["name"] + " · " + str(best["lev"]) + "x (a partir da próxima "
-                    "ordem). Obs.: o robô opera BTC; a versão veio do otimizador de " + best["asset"] + ".")
+                    "ordem). Obs.: o robô opera " + ASSET + "; a versão veio do otimizador de " + best["asset"] + ".")
              if best else "Rode primeiro um 🔬 Otimizar.", keyboard())
     elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
         days = 90 if ("90" in action or action.endswith("_3m")) else BT_DAYS
-        asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else "BTC")
+        asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else ASSET)
         only = "short" if action.startswith("bfm_bts") else None
         plan = DYN_PLAN if action.startswith("bfm_btd") else None
         run_async(lambda: run_backtest(send, chat, lev, days, asset, only, plan))
@@ -1156,8 +1185,8 @@ def handle(action, send, chat, run_async):
         _start("demo", send, chat, run_async)
     elif action == "bfm_on_real":
         send(chat, "⚠️ CONTA REAL: usa US$ " + format(CAPITAL_USD, ".0f") + " da carteira do bot (em SOL, trocado por USDC) como "
-             "garantia de ordens de COMPRA e VENDA de BTC (até " + str(GRID_MAX) + ", preço médio) com " + str(_load("real")["leverage"]) + "x no Jupiter Perps, até a meta de US$ " +
-             format(TARGET_USD, ".0f") + " por dia. Deixe pelo menos US$ 110 em SOL na carteira. Se o BTC andar rápido contra as "
+             "garantia de ordens de COMPRA e VENDA de " + ASSET + " (até " + str(GRID_MAX) + ", preço médio) com " + str(_load("real")["leverage"]) + "x no Jupiter Perps, até a meta de US$ " +
+             format(TARGET_USD, ".0f") + " por dia. Deixe pelo menos US$ 110 em SOL na carteira. Se o " + ASSET + " andar rápido contra as "
              "ordens, você pode perder a garantia toda. Não existe garantia de lucro.",
              [[{"text": "✅ Entendi, ligar a conta REAL", "callback_data": "bfm_real_ok"}],
               [{"text": "↩️ Cancelar", "callback_data": "bfm"}]])

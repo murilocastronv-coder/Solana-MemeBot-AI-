@@ -233,7 +233,7 @@ class Cycle(Base):
                 calls.append(("usdc", usd))
 
             @staticmethod
-            def open_position(side, usd, lev, price, min_size=0.0):
+            def open_position(side, usd, lev, price, min_size=0.0, asset="BTC"):
                 calls.append((side, usd, lev, min_size))
                 return {"price": price, "signature": "SIG"}
 
@@ -244,6 +244,47 @@ class Cycle(Base):
         self.assertEqual(calls[:2], [("usdc", 30.0), ("short", 30.0, bfm.DEFAULT_LEVERAGE, 0.0)])
         self.assertEqual(calls[3][3], 30.0 * bfm.DEFAULT_LEVERAGE)       # the add waits for the bigger position
         self.assertIn("solscan.io/tx/SIG", self.msgs[-1])
+
+
+class OnlySol(Base):
+    def test_trades_only_sol(self):
+        self.assertEqual(bfm.ASSET, "SOL")
+        self.turn_on("demo")
+        self.assertEqual(self.cyc(candles(), mode="demo"), "abriu")
+        self.assertEqual(bfm._load("demo")["pos"]["asset"], "SOL")
+
+    def test_old_btc_account_restarts_at_100(self):
+        d = bfm._load("demo")
+        d.update(capital=432.1, wins=9, hist=[1], total={"trades": 9}, asset_v=None,
+                 pos={"entry": 90000.0, "size_usd": 500.0, "collateral_usd": 50.0, "side": "short"})
+        bfm._save(d)
+        d = bfm._load("demo")
+        self.assertEqual((d["capital"], d["wins"], d["hist"], d["pos"]), (100, 0, [], None))
+        self.assertNotIn("total", d)
+        self.assertNotIn("legacy_pos", d)
+
+    def test_real_old_btc_order_is_closed(self):
+        d = bfm._load("real")
+        d.update(asset_v=None, pos={"entry": 90000.0, "size_usd": 500.0, "collateral_usd": 50.0, "side": "short"})
+        bfm._save(d)
+        self.assertIn("legacy_pos", bfm._load("real"))
+        bfm._save(bfm._load("real"))
+        closed = []
+
+        class JP:
+            @staticmethod
+            def close_position(side, price, asset="BTC"):
+                closed.append((side, asset))
+
+            @staticmethod
+            def usdc_to_sol():
+                pass
+
+        self.turn_on("real")
+        with patch.dict("sys.modules", {"jupiter_perps": JP}), patch.object(bfm, "price_now", return_value=90000.0):
+            self.cyc(candles(), mode="real")
+        self.assertEqual(closed, [("short", "BTC")])
+        self.assertNotIn("legacy_pos", bfm._load("real"))
 
 
 class Results(Base):
@@ -310,7 +351,7 @@ class Results(Base):
                 return bal[0]
 
             @staticmethod
-            def close_position(side, price):
+            def close_position(side, price, asset="BTC"):
                 bal[0] += 103.0                         # collateral 100 came back with +3 net
                 return {"signature": "S"}
 
@@ -484,7 +525,7 @@ class Backtest(Base):
             bfm.handle("bfm_bt90_sol", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt_eth", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt", self.send, "1", lambda fn: fn())
-        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, "BTC")])
+        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET)])
         self.assertIn("— SOL", bfm.backtest_text({"days": [], "total": {}}, 40, 30, "SOL"))
         self.assertIn("bfm_bt", bfm.ACTIONS)
 
