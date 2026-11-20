@@ -3,7 +3,7 @@
 //|                                                                  |
 //| Voce liga quando quiser operar. Ele guarda o capital da hora em  |
 //| que foi ligado e opera scalp no par do grafico ate:              |
-//|  - SEM META por padrao: opera sempre; acima de 500 diminui o lote|
+//|  - SEM META por padrao: opera sempre; com 150 o risco cai p/ 50% |
 //|  - ou bater o LIMITE DE PERDA     -> fecha tudo e para.          |
 //| Para operar de novo (ex.: no dia seguinte) e so ligar de novo.   |
 //|                                                                  |
@@ -25,8 +25,8 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.30"
-#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; opera dia e noite sem meta; acima de 500 vai diminuindo o risco (lote menor). Alto risco."
+#property version   "4.40"
+#property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; opera dia e noite sem meta; a partir de 150 usa 50% da margem (risco menor). Alto risco."
 
 #include <Trade\Trade.mqh>
 
@@ -40,8 +40,8 @@ input double InpTargetMult   = 3.0;    // META por multiplicador (so se a meta e
 input double InpMaxLossPct   = 0.0;    // LIMITE DE PERDA do dia em % (0 = sem limite)
 input double InpMarginUse    = 100.0;  // % da margem livre usada por ordem (100 = FULL MARGIN, lote maximo)
 input double InpMaxLot       = 100.0;  // Lote maximo por ordem (limite de seguranca)
-input double InpSafeFrom     = 500.0;  // Acima deste saldo vai DIMINUINDO o risco (0 = desliga)
-input double InpMinMargin    = 10.0;   // Margem minima usada (%) por mais que o saldo cresca
+input double InpSafeFrom     = 150.0;  // Quando o saldo chega aqui, DIMINUI o risco (0 = desliga)
+input double InpSafeMargin   = 50.0;   // Margem usada (%) a partir desse saldo (50 = metade do full margin)
 input double InpRR           = 1.5;    // ALVO = risco x isto (1.5 = ganha 1,5x o que arrisca)
 input double InpBreakevenR   = 0.6;    // Com lucro de X riscos, stop vai para a entrada (sem perda)
 input double InpTrailStartR  = 1.0;    // Com lucro de X riscos, comeca o stop movel
@@ -139,13 +139,11 @@ void StopSession(const string why)
    Alert("Full Margin: ", why, " - capital ", DoubleToString(Equity(), 2));
   }
 
-//--- % da margem usada agora: full margin ate InpSafeFrom; acima disso vai diminuindo
-//--- (ex.: 100% ate 500, 50% com 1000, 25% com 2000 ... nunca menos que InpMinMargin)
+//--- % da margem usada agora: full margin abaixo de InpSafeFrom; a partir dele, InpSafeMargin (ex.: 150 -> 50%)
 double MarginPct()
   {
-   double eq = Equity();
-   if(InpSafeFrom <= 0 || eq <= InpSafeFrom) return(InpMarginUse);
-   return(MathMax(InpMinMargin, InpMarginUse * InpSafeFrom / eq));
+   if(InpSafeFrom <= 0 || Equity() < InpSafeFrom) return(InpMarginUse);
+   return(MathMin(InpMarginUse, InpSafeMargin));
   }
 
 //--- lote pela margem: MarginPct() % da margem livre
@@ -433,7 +431,7 @@ void Dashboard()
    Line(8, "", CLR_TXT);
    Line(9, (InpUseTarget ? "Progresso da meta: " + DoubleToString(prog * 100.0, 0) + "%"
                          : "Risco: margem " + DoubleToString(MarginPct(), 0) + "%" +
-                           (Equity() > InpSafeFrom && InpSafeFrom > 0 ? " (reduzindo: saldo acima de " : " (full ate ") +
+                           (Equity() >= InpSafeFrom && InpSafeFrom > 0 ? " (risco menor: saldo acima de " : " (full ate ") +
                            DoubleToString(InpSafeFrom, 0) + ")"), CLR_GOLD);
 
    int tot = gWins + gLosses;
@@ -447,7 +445,7 @@ void Dashboard()
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   if((InpUseTarget && InpTargetUSD <= 0 && InpTargetMult <= 1.0) || InpMaxLossPct < 0 || InpMaxLossPct >= 100 || InpMarginUse <= 0 || InpMarginUse > 100)
+   if((InpUseTarget && InpTargetUSD <= 0 && InpTargetMult <= 1.0) || InpMaxLossPct < 0 || InpMaxLossPct >= 100 || InpMarginUse <= 0 || InpMarginUse > 100 || InpSafeMargin <= 0 || InpSafeMargin > 100)
      {
       Alert("Full Margin: confira meta (>1), limite de perda (1-99%) e margem usada (1-100%)");
       return(INIT_PARAMETERS_INCORRECT);
