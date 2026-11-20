@@ -411,6 +411,14 @@ class Telegram(Base):
         for cb in cbs:
             self.assertIn(cb, bfm.ACTIONS | {"wallet_deposit", "wallet_withdraw", "wallet_balance"})
 
+    def test_accounts_switch_to_40x_once(self):
+        import json
+        bfm._path("real").write_text(json.dumps({"leverage": 5}), encoding="utf-8")
+        self.assertEqual(bfm._load("real")["leverage"], 40)
+        self.assertEqual(bfm._load("demo")["leverage"], 40)
+        bfm.handle("bfm_lev10", self.send, "1", lambda fn: fn())           # the buttons still change it afterwards
+        self.assertEqual(bfm._load("real")["leverage"], 10)
+
     def test_leverage_applies_to_both(self):
         bfm.handle("bfm_lev10", self.send, "1", lambda fn: fn())
         self.assertEqual(bfm._load("demo")["leverage"], 10)
