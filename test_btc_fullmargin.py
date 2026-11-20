@@ -399,6 +399,16 @@ class Backtest(Base):
         self.assertIn("bfm_bt", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertIn("bfm_bt90", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertIn("bfm_bt90", bfm.ACTIONS)
+        cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
+        for cb in ("bfm_bt_sol", "bfm_bt90_sol", "bfm_bt_eth", "bfm_bt90_eth"):
+            self.assertIn(cb, cbs)
+        runs = []
+        with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset: runs.append((days, asset))):
+            bfm.handle("bfm_bt90_sol", self.send, "1", lambda fn: fn())
+            bfm.handle("bfm_bt_eth", self.send, "1", lambda fn: fn())
+            bfm.handle("bfm_bt", self.send, "1", lambda fn: fn())
+        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, "BTC")])
+        self.assertIn("— SOL", bfm.backtest_text({"days": [], "total": {}}, 40, 30, "SOL"))
         self.assertIn("bfm_bt", bfm.ACTIONS)
 
 

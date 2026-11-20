@@ -563,8 +563,12 @@ def cycle_all(send, chat, now=None):
 
 
 # ------------------------------------------------------------------ backtest (owner, Nov 20)
-def klines_history(days=BT_DAYS):
-    """5-minute BTC candles of the last `days` days (+ 3 days of warm-up for the chart reading), oldest first."""
+BT_ASSETS = {"BTC": ("BTCUSDT", "BTC-USD"), "SOL": ("SOLUSDT", "SOL-USD"), "ETH": ("ETHUSDT", "ETH-USD")}
+
+
+def klines_history(days=BT_DAYS, asset="BTC"):
+    """5-minute candles (BTC, SOL or ETH) of the last `days` days (+ 3 days of warm-up), oldest first."""
+    binance_sym, coinbase_sym = BT_ASSETS[asset]
     end = int(time.time()) // TF * TF
     start = end - (days + 3) * 86400
     rows = {}
@@ -572,7 +576,7 @@ def klines_history(days=BT_DAYS):
         try:
             t = start
             while t < end:
-                part = _get(base + "/api/v3/klines", {"symbol": "BTCUSDT", "interval": "5m", "startTime": t * 1000, "limit": 1000})
+                part = _get(base + "/api/v3/klines", {"symbol": binance_sym, "interval": "5m", "startTime": t * 1000, "limit": 1000})
                 if not part:
                     break
                 for r in part:
@@ -587,7 +591,7 @@ def klines_history(days=BT_DAYS):
     t = start
     while t < end:                                   # Coinbase: 300 candles per call
         e = min(end, t + 300 * TF)
-        for r in _get("https://api.exchange.coinbase.com/products/BTC-USD/candles",
+        for r in _get("https://api.exchange.coinbase.com/products/" + coinbase_sym + "/candles",
                       {"granularity": TF, "start": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)),
                        "end": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))}):
             rows[int(r[0])] = {"t": int(r[0]), "l": float(r[1]), "h": float(r[2]), "o": float(r[3]), "c": float(r[4])}
@@ -639,7 +643,7 @@ def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None):  # noqa: C901
     return d
 
 
-def backtest_text(d, leverage, span_days=BT_DAYS):
+def backtest_text(d, leverage, span_days=BT_DAYS, asset="BTC"):
     days = d.get("days") or []
     tt = d.get("total") or {}
     n = tt.get("trades", 0)
@@ -649,7 +653,7 @@ def backtest_text(d, leverage, span_days=BT_DAYS):
     pos_days = sum(1 for x in days if x["result"] > 0)
     hist = d.get("hist") or []
     held = max((h.get("held_h", 0) for h in hist), default=0)
-    L = ["🧪 BACKTEST " + str(span_days) + " DIAS — BTC Full Margin (estratégia atual, " + str(leverage) + "x)",
+    L = ["🧪 BACKTEST " + str(span_days) + " DIAS — " + asset + " (estratégia atual do Full Margin, " + str(leverage) + "x)",
          "Cada dia começa com US$ " + format(CAPITAL_USD, ".0f") + " (meta US$ " + format(TARGET_USD, ".0f") + ", limite US$ " +
          format(CAPITAL_USD * (1 - MAX_LOSS), ".0f") + "). Candles reais de 5 min, taxas da Jupiter incluídas.",
          "",
@@ -678,33 +682,39 @@ def backtest_text(d, leverage, span_days=BT_DAYS):
     return "\n".join(L)
 
 
-def backtest_png(d, days=BT_DAYS):
+def backtest_png(d, days=BT_DAYS, asset="BTC"):
     import demo_report
     curve = [[t, CAPITAL_USD + v] for t, v in (d.get("curve") or [])]
     if not curve:
         return None
     curve.insert(0, [curve[0][0] - 60, CAPITAL_USD])
-    return demo_report.chart_png([("Backtest " + str(days) + " dias (resultado acumulado)", CAPITAL_USD, curve, (255, 196, 0))])
+    color = {"BTC": (255, 196, 0), "SOL": (170, 110, 255), "ETH": (120, 170, 255)}.get(asset, (255, 196, 0))
+    return demo_report.chart_png([("Backtest " + asset + " " + str(days) + " dias (resultado acumulado)", CAPITAL_USD, curve, color)])
 
 
-def run_backtest(send, chat, leverage, days=BT_DAYS):
+def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC"):
     if BT["running"]:
         send(chat, "⏳ O backtest já está rodando, espera o resultado.")
         return
     BT["running"] = True
     try:
-        send(chat, "🧪 Backtest de " + str(days) + " dias começou: baixando os candles de 5 min do BTC e rodando a estratégia "
+        send(chat, "🧪 Backtest de " + str(days) + " dias do " + asset + " começou: baixando os candles de 5 min e rodando a estratégia "
              "atual (" + str(leverage) + "x). Leva uns " + ("2–5" if days <= 30 else "5–15") + " minutos. Nenhuma ordem real.")
-        cs = klines_history(days)
-        d = backtest(cs, leverage)
+        cs = klines_history(days, asset)
+        keep = dict(LAST)                             # the BTC screen keeps showing the BTC price
         try:
-            png = backtest_png(d, days)
+            d = backtest(cs, leverage)
+        finally:
+            LAST.clear()
+            LAST.update(keep)
+        try:
+            png = backtest_png(d, days, asset)
             if png and PHOTO:
-                PHOTO(chat, png, "📈 Backtest " + str(days) + " dias: resultado acumulado (acima da linha fraca = lucro)")
+                PHOTO(chat, png, "📈 Backtest " + asset + " " + str(days) + " dias: resultado acumulado (acima da linha fraca = lucro)")
         except Exception as exc:
             logging.warning("btc backtest chart: %s", type(exc).__name__)
         span = max(1, round((cs[-1]["t"] - cs[800]["t"]) / 86400))
-        send(chat, backtest_text(d, leverage, span), keyboard())
+        send(chat, backtest_text(d, leverage, span, asset), keyboard())
     except Exception as exc:
         send(chat, "⛔ Backtest: " + str(exc)[:200], keyboard())
     finally:
@@ -891,13 +901,16 @@ def keyboard():
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
     rows.append([{"text": "🧪 Backtest 30 dias", "callback_data": "bfm_bt"}, {"text": "🧪 Backtest 3 meses", "callback_data": "bfm_bt90"}])
+    rows.append([{"text": "🧪 SOL 30d", "callback_data": "bfm_bt_sol"}, {"text": "🧪 SOL 3m", "callback_data": "bfm_bt90_sol"},
+                 {"text": "🧪 ETH 30d", "callback_data": "bfm_bt_eth"}, {"text": "🧪 ETH 3m", "callback_data": "bfm_bt90_eth"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
-            "/aovivo", "bfm_bt", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
+            "/aovivo", "bfm_bt", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
+            "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
            {p + m for p in ("bfm_on_", "bfm_off_", "bfm_close_") for m in MODES})
 
 
@@ -930,10 +943,11 @@ def handle(action, send, chat, run_async):
     elif action == "bfm_live_stop":
         LIVE.pop(str(chat), None)
         send(chat, "⏹️ Ao vivo parado.", keyboard())
-    elif action in ("bfm_bt", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m"):
+    elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
-        days = 90 if action in ("bfm_bt90", "/backtest_btc_3m") else BT_DAYS
-        run_async(lambda: run_backtest(send, chat, lev, days))
+        days = 90 if ("bt90" in action or action.endswith("_3m")) else BT_DAYS
+        asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else "BTC")
+        run_async(lambda: run_backtest(send, chat, lev, days, asset))
     elif action in ("bfm_res", "/resultados_btc"):
         def go():
             try:
