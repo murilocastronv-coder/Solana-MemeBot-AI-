@@ -18,7 +18,7 @@
 //|  - 2 perdas seguidas = pausa de 15 min.                          |
 //| v4.22 (dono): 1a ordem com 30% da margem; VAI GANHAR (lucro e    |
 //|  leitura a favor) -> +1 ordem com 50%; VAI VOLTAR (prejuizo e    |
-//|  leitura virou a favor) -> +1 ordem FULL MARGIN; sem stop por    |
+//|  leitura virou a favor) -> ate +4 ordens (full margin dividida); |
 //|  ordem; FECHA TUDO com +5 pips (sobre o preco medio).            |
 //|  Saldo >= 500: risco cai 50% (15% / 25% / 50% da margem).        |
 //| Lote: FULL MARGIN - usa InpMarginUse % (padrao 100%) da margem   |
@@ -30,7 +30,7 @@
 //| meta diaria. Teste no Strategy Tester e na conta DEMO.           |
 //+------------------------------------------------------------------+
 #property copyright "Full Margin"
-#property version   "4.23"
+#property version   "4.24"
 #property description "Full Margin - le os candles do M1 e opera o dia inteiro; abre ordem assim que liga; full margin; para na META DO DIA (saldo 300) ou no limite de perda e volta depois da meia-noite. Alto risco."
 
 #include <Trade\Trade.mqh>
@@ -59,9 +59,10 @@ input int    InpStartHour    = 0;      // Opera a partir desta hora (servidor) -
 input int    InpEndHour      = 24;     // Ate esta hora (servidor)
 input double InpFirstPct     = 30.0;   // 1a ORDEM: % da margem livre
 input double InpWinAddPct    = 50.0;   // VAI GANHAR (lucro + leitura a favor): mais uma ordem com % da margem livre
-input double InpLossAddPct   = 100.0;  // VAI VOLTAR (perdendo + leitura virou a favor): mais uma com % da margem livre (100 = full)
+input double InpLossAddPct   = 100.0;  // VAI VOLTAR: FULL MARGIN dividida entre as ordens de recuperacao (100 = full)
+input int    InpLossAdds     = 4;      // VAI VOLTAR: ate X ordens a mais para matar as negativas
 input double InpWinAddPips   = 2.0;    // "Vai ganhar": a posicao precisa ter pelo menos X pips de lucro
-input double InpLossAddPips  = 5.0;    // "Vai voltar": a posicao precisa estar pelo menos X pips no prejuizo
+input double InpLossAddPips  = 5.0;    // "Vai voltar": X pips no prejuizo, e cada nova ordem X pips alem da anterior
 input double InpSafeFrom     = 500.0;  // Com saldo a partir disto o RISCO CAI (0 = desliga)
 input double InpSafeCut      = 50.0;   // ... cai X% (50 = metade: 30% vira 15%, 50% vira 25%, full vira 50%)
 input double InpClosePips    = 5.0;    // FECHA TUDO com X pips de lucro (1 ordem: +5; varias: +5 sobre o preco medio)
@@ -312,6 +313,8 @@ bool TryEntry(bool now)
 //+------------------------------------------------------------------+
 double PipSize() { return((_Digits == 5 || _Digits == 3) ? _Point * 10.0 : _Point); }
 bool   gWinAdded = false, gLossAdded = false;
+int    gLossAdds = 0;          // ordens de recuperacao ja abertas
+double gLastAddPrice = 0;
 double gBasketPips = 0;
 int    gBasketN = 0;
 
@@ -375,11 +378,19 @@ void ManageBasket()
       if(OpenOrder(dir, 0, "vai ganhar, " + why + " [50%]")) gWinAdded = true;
       return;
      }
-   //--- VAI VOLTAR: no prejuizo e a leitura virou a favor -> mais uma com FULL MARGIN (1 vez)
-   if(!gLossAdded && gBasketPips <= -InpLossAddPips && inFavor)
+   //--- VAI VOLTAR: no prejuizo e a leitura virou a favor -> ate InpLossAdds ordens a mais (full margin dividida
+   //--- entre elas: 1/4, 1/3, 1/2 e o resto da margem livre), cada uma pelo menos InpLossAddPips alem da anterior
+   double px = (dir == 1) ? ask : bid;
+   bool farEnough = (gLastAddPrice == 0) || ((gLastAddPrice - px) * dir >= InpLossAddPips * pip);
+   if(gLossAdds < InpLossAdds && gBasketPips <= -InpLossAddPips && inFavor && farEnough)
      {
-      gLotPct = InpLossAddPct;
-      if(OpenOrder(dir, 0, "vai voltar, " + why + " [FULL]")) gLossAdded = true;
+      gLotPct = InpLossAddPct / (InpLossAdds - gLossAdds);
+      if(OpenOrder(dir, 0, "vai voltar " + IntegerToString(gLossAdds + 1) + "/" + IntegerToString(InpLossAdds) + ", " + why))
+        {
+         gLossAdds++;
+         gLossAdded = true;
+         gLastAddPrice = px;
+        }
      }
   }
 
@@ -429,7 +440,7 @@ void Cycle()
    if(eq >= gDayTarget) { StopSession("META DO DIA BATIDA"); gDayDone = true; return; }
    if(eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { StopSession("LIMITE DE PERDA DO DIA"); gDayDone = true; return; }
    if(HasPosition()) { ManageBasket(); return; }       // conjunto: +5 pips fecha tudo; reforcos 50% / full
-   gWinAdded = false; gLossAdded = false; gBasketPips = 0; gBasketN = 0;
+   gWinAdded = false; gLossAdded = false; gLossAdds = 0; gLastAddPrice = 0; gBasketPips = 0; gBasketN = 0;
    if(InpMaxTrades > 0 && gTrades >= InpMaxTrades) { StopSession("maximo de operacoes da sessao"); return; }
 
    bool spreadOk = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) <= InpMaxSpread;
@@ -523,7 +534,7 @@ void Dashboard()
    Line(10, "Operacoes : " + IntegerToString(gTrades) + "   Ganhos: " + IntegerToString(gWins) + "   Perdas: " + IntegerToString(gLosses), CLR_TXT);
    Line(11, "Acerto    : " + (tot > 0 ? DoubleToString(100.0 * gWins / tot, 0) + "%" : "-"), CLR_TXT);
    Line(14, gBasketN > 0 ? "Ordens " + IntegerToString(gBasketN) + ": " + DoubleToString(gBasketPips, 1) + " pips (fecha com +" +
-            DoubleToString(InpClosePips, 0) + ")" + (gWinAdded ? " +50%" : "") + (gLossAdded ? " +FULL" : "") : "Sem ordens abertas",
+            DoubleToString(InpClosePips, 0) + ")" + (gWinAdded ? " +50%" : "") + (gLossAdds > 0 ? " +" + IntegerToString(gLossAdds) + " recuperacao" : "") : "Sem ordens abertas",
         gBasketPips >= 0 ? CLR_GREEN : CLR_RED, 9);
    Line(12, "Ultima: " + gLastPattern + "  lote " + DoubleToString(gLastLot, 2), CLR_DIM, 8);
    Line(13, "Ligado as " + TimeToString(gStartTime, TIME_MINUTES) + (InpSafeFrom > 0 && Equity() >= InpSafeFrom ? "  -  RISCO -" + DoubleToString(InpSafeCut, 0) + "% (saldo >= " + DoubleToString(InpSafeFrom, 0) + ")"
