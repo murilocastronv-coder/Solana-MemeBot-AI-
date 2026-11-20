@@ -27,7 +27,7 @@
 //| passado nao garante resultado futuro.                            |
 //+------------------------------------------------------------------+
 #property copyright "SinalTron"
-#property version   "1.31"
+#property version   "1.32"
 #property description "SinalTron - sinais de compra e venda o dia inteiro, com alvo e stop, alerta no celular e acerto real no historico."
 #property indicator_chart_window
 #property indicator_buffers 4
@@ -56,6 +56,7 @@ input int    InpShowBars   = 3;      // Mostra "COMPRAR/VENDER AGORA" por X cand
 input bool   InpNoRange    = true;   // NAO OPERA RANGE: so da sinal em TENDENCIA de alta (so compra) ou de baixa (so venda)
 input double InpADXMin     = 25.0;   // Tendencia: ADX(14) pelo menos isto (abaixo = range)
 input double InpSepATR     = 0.5;    // Tendencia: distancia entre EMA 50 e EMA 200 de pelo menos X ATR
+input int    InpTuneEvery  = 60;     // Refaz o ajuste automatico a cada X candles (mais rapido; 1 = todo candle)
 
 double BufBuy[], BufSell[];
 double BufTP[], BufSL[];              // para o robo: alvo e stop (em ATR) do ajuste em uso
@@ -337,7 +338,8 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
    for(int i = (prev_calculated > 0 ? MathMax(from0 - 1, prev_calculated - 2) : from0 - 1); i < rates_total; i++)
       gSc[i] = Score(i, open, high, low, close, e20, e50, e200, atr, nm);
    bool retune = false;
-   if(InpAutoTune && time[rates_total - 1] != gTunedBar)
+   if(InpAutoTune && time[rates_total - 1] != gTunedBar &&
+      (gTunedBar == 0 || (time[rates_total - 1] - gTunedBar) >= (datetime)(MathMax(1, InpTuneEvery) * PeriodSeconds())))
      {
       gTunedBar = time[rates_total - 1];
       int oM = gMin; double oT = gTP, oS = gSL;

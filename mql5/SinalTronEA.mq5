@@ -17,7 +17,7 @@
 //| Tester e na conta DEMO antes de usar dinheiro de verdade.        |
 //+------------------------------------------------------------------+
 #property copyright "SinalTron"
-#property version   "1.00"
+#property version   "1.01"
 #property description "Robo do SinalTron: entra nas setas do indicador (so em tendencia), stop/alvo do ajuste do indicador, trava lucro e deixa correr com stop movel; arrisca X% por ordem; para na meta (ex.: 50 -> 200)."
 
 #include <Trade\Trade.mqh>
@@ -30,12 +30,13 @@ input bool   InpLetRun      = true;   // MAXIMO LUCRO: no alvo trava parte do lu
 input double InpLockPct     = 80.0;   // Ao chegar no alvo, trava X% do alvo como lucro
 input double InpTrailPct    = 50.0;   // Stop movel a X% do tamanho do alvo atras do preco
 input double InpBEPct       = 50.0;   // Com X% do alvo, o stop vai para a entrada (sem perda)
-input int    InpMaxSpread   = 20;     // Spread maximo para entrar (pontos)
+input int    InpMaxSpread   = 30;     // Spread maximo para entrar (pontos)
 input int    InpMinScore    = 5;      // (indicador) forca minima, se o ajuste automatico estiver desligado
 input bool   InpAutoTune    = true;   // (indicador) ajuste automatico de 70% de acerto
 input double InpMinWin      = 70.0;   // (indicador) acerto minimo do ajuste automatico
 input double InpADXMin      = 25.0;   // (indicador) ADX minimo para ser tendencia
 input bool   InpPush        = true;   // Avisar no celular quando o robo abre e fecha
+input int    InpTuneEvery   = 60;     // (indicador) refaz o ajuste a cada X candles (mais rapido no backtest)
 input ulong  InpMagic       = 20261121;
 
 CTrade   trade;
@@ -47,6 +48,8 @@ bool     gLocked = false;
 bool     gStopped = false;
 string   gWhy = "", gLast = "-";
 int      gWins = 0, gLosses = 0;
+int      gSeen = 0, gSkipSpread = 0, gReadFail = 0;
+datetime gLastSigBar = 0;
 
 void Panel();   // definida no fim do arquivo
 
@@ -55,7 +58,7 @@ int OnInit()
   {
    //--- o indicador SinalTron com o celular e o alerta DESLIGADOS (quem avisa e o robo)
    hSig = iCustom(_Symbol, _Period, "SinalTron",
-                  InpMinScore, 1.0, 1.5, 30, 3000, false, false, true, InpAutoTune, 2.0, InpMinWin, 3, true, InpADXMin, 0.5);
+                  InpMinScore, 1.0, 1.5, 30, 3000, false, false, true, InpAutoTune, 2.0, InpMinWin, 3, true, InpADXMin, 0.5, InpTuneEvery);
    hATR = iATR(_Symbol, _Period, 14);
    if(hSig == INVALID_HANDLE || hATR == INVALID_HANDLE)
      {
@@ -130,13 +133,35 @@ double RiskLot(double slDist)
 //+------------------------------------------------------------------+
 void TryEntry()
   {
-   double b[1], s[1], tpm[1], slm[1], atr[1];
-   if(CopyBuffer(hSig, 0, 1, 1, b) != 1 || CopyBuffer(hSig, 1, 1, 1, s) != 1) return;
+   //--- olha os 2 ultimos candles fechados (o indicador pode atualizar um tick depois); nao repete o mesmo sinal
+   double b[2], s[2], tpm[1], slm[1], atr[1];
+   datetime tm[2];
+   if(CopyBuffer(hSig, 0, 1, 2, b) != 2 || CopyBuffer(hSig, 1, 1, 2, s) != 2 || CopyTime(_Symbol, _Period, 1, 2, tm) != 2)
+     {
+      gReadFail++;
+      if(gReadFail % 50 == 1) Print("SinalTron EA: indicador ainda sem dados (", GetLastError(), ") - esta compilado em MQL5/Indicators?");
+      return;
+     }
    if(CopyBuffer(hSig, 2, 0, 1, tpm) != 1 || CopyBuffer(hSig, 3, 0, 1, slm) != 1) return;
    if(CopyBuffer(hATR, 0, 1, 1, atr) != 1 || atr[0] <= 0) return;
-   int dir = (b[0] != EMPTY_VALUE && b[0] != 0) ? 1 : ((s[0] != EMPTY_VALUE && s[0] != 0) ? -1 : 0);
+   int dir = 0;
+   datetime sigBar = 0;
+   for(int k = 1; k >= 0; k--)                     // indice 1 = candle mais recente (arrays na ordem do tempo)
+     {
+      if(tm[k] <= gLastSigBar) continue;
+      if(b[k] != EMPTY_VALUE && b[k] != 0) { dir = 1; sigBar = tm[k]; break; }
+      if(s[k] != EMPTY_VALUE && s[k] != 0) { dir = -1; sigBar = tm[k]; break; }
+     }
    if(dir == 0) return;
-   if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpread) { Print("SinalTron EA: spread alto, sinal ignorado"); return; }
+   gLastSigBar = sigBar;
+   gSeen++;
+   Print("SinalTron EA: sinal de ", (dir == 1 ? "COMPRA" : "VENDA"), " no candle ", TimeToString(sigBar));
+   if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpread)
+     {
+      gSkipSpread++;
+      Print("SinalTron EA: sinal ignorado - spread ", SymbolInfoInteger(_Symbol, SYMBOL_SPREAD), " > maximo ", InpMaxSpread);
+      return;
+     }
    double tpA = (tpm[0] > 0 && tpm[0] != EMPTY_VALUE) ? tpm[0] : 1.0;
    double slA = (slm[0] > 0 && slm[0] != EMPTY_VALUE) ? slm[0] : 1.5;
    double sp = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
@@ -201,10 +226,7 @@ void Cycle()
    if(InpMaxLossPct > 0 && eq <= gStart * (1.0 - InpMaxLossPct / 100.0)) { Stop("LIMITE DE PERDA"); return; }
    ulong t;
    if(MyPosition(t)) { Manage(t); return; }
-   datetime bar = iTime(_Symbol, _Period, 0);
-   if(bar == 0 || bar == gLastBar) return;           // 1 vez por candle, logo depois de fechar
-   gLastBar = bar;
-   TryEntry();
+   TryEntry();                                       // le os 2 ultimos candles fechados; nao repete o mesmo sinal
   }
 
 void OnTick()  { Cycle(); }
@@ -253,7 +275,7 @@ void Panel()
       ObjectSetInteger(0, "STE_BG", OBJPROP_XDISTANCE, 12);
       ObjectSetInteger(0, "STE_BG", OBJPROP_YDISTANCE, 20);
       ObjectSetInteger(0, "STE_BG", OBJPROP_XSIZE, 360);
-      ObjectSetInteger(0, "STE_BG", OBJPROP_YSIZE, 190);
+      ObjectSetInteger(0, "STE_BG", OBJPROP_YSIZE, 205);
       ObjectSetInteger(0, "STE_BG", OBJPROP_BGCOLOR, C'14,16,26');
       ObjectSetInteger(0, "STE_BG", OBJPROP_COLOR, C'255,196,0');
       ObjectSetInteger(0, "STE_BG", OBJPROP_BORDER_TYPE, BORDER_FLAT);
@@ -272,6 +294,8 @@ void Panel()
      (tot > 0 ? "  -  acerto " + DoubleToString(100.0 * gWins / tot, 0) + "%" : ""), C'210,214,230');
    L("STE_5", 142, "Risco por ordem: " + DoubleToString(InpRiskPct, 1) + "% do saldo" + (InpLetRun ? "  -  deixa o lucro correr" : ""), C'120,126,150', 9);
    L("STE_6", 162, "Ultima: " + gLast, C'120,126,150', 9);
+   L("STE_8", 200, "Sinais vistos " + IntegerToString(gSeen) + " - ignorados por spread " + IntegerToString(gSkipSpread),
+     C'120,126,150', 8);
    L("STE_7", 182, gLocked ? "Lucro TRAVADO - stop movel seguindo o preco" : " ", clrLime, 9);
    ChartRedraw(0);
   }
