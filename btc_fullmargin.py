@@ -535,6 +535,8 @@ def cycle(mode, send, chat, now=None, klines=None):
                 _save(d)
                 return "sem sinal (" + reading + ")"
             factor = 1.0 if side_dir == sdir else WEAK_LOT
+        if ONLY_SIDE.get(mode) == "short":            # backtest "só venda": never buys
+            side_dir = -1
         side = "long" if side_dir == 1 else "short"
         label = {1: " [ALTA FORTE]", -1: " [QUEDA FORTE]"}.get(sdir, "")
         why = ("início do dia, " if first else "") + reading + label
@@ -563,6 +565,7 @@ def cycle_all(send, chat, now=None):
 
 
 # ------------------------------------------------------------------ backtest (owner, Nov 20)
+ONLY_SIDE = {}                  # mode -> "short" (backtest that only sells)
 BT_ASSETS = {"BTC": ("BTCUSDT", "BTC-USD"), "SOL": ("SOLUSDT", "SOL-USD"), "ETH": ("ETHUSDT", "ETH-USD")}
 
 
@@ -599,7 +602,7 @@ def klines_history(days=BT_DAYS, asset="BTC"):
     return [rows[k] for k in sorted(rows)]
 
 
-def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None):  # noqa: C901
+def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None, only=None):  # noqa: C901
     """Runs the robot's own cycle() over the candles, as a demo account that started 3 days into the data.
     Every 5-minute candle: it closes at the candle's close; the +0.25% close is also checked with the candle's
     high/low (the order touched the price). Fees are the same as the demo (open/close + borrow per hour)."""
@@ -612,6 +615,7 @@ def backtest(cs, leverage=DEFAULT_LEVERAGE, progress=None):  # noqa: C901
         p.unlink()
     d = _load("bt")
     d.update(on=True, leverage=leverage)
+    ONLY_SIDE["bt"] = only
     _save(d)
     old_curve, CURVE_MAX = CURVE_MAX, 100000
     msgs = []
@@ -692,7 +696,7 @@ def backtest_png(d, days=BT_DAYS, asset="BTC"):
     return demo_report.chart_png([("Backtest " + asset + " " + str(days) + " dias (resultado acumulado)", CAPITAL_USD, curve, color)])
 
 
-def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC"):
+def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None):
     if BT["running"]:
         send(chat, "⏳ O backtest já está rodando, espera o resultado.")
         return
@@ -703,7 +707,7 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC"):
         cs = klines_history(days, asset)
         keep = dict(LAST)                             # the BTC screen keeps showing the BTC price
         try:
-            d = backtest(cs, leverage)
+            d = backtest(cs, leverage, only=only)
         finally:
             LAST.clear()
             LAST.update(keep)
@@ -714,7 +718,7 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC"):
         except Exception as exc:
             logging.warning("btc backtest chart: %s", type(exc).__name__)
         span = max(1, round((cs[-1]["t"] - cs[800]["t"]) / 86400))
-        send(chat, backtest_text(d, leverage, span, asset), keyboard())
+        send(chat, backtest_text(d, leverage, span, asset + (" SÓ VENDA" if only == "short" else "")), keyboard())
     except Exception as exc:
         send(chat, "⛔ Backtest: " + str(exc)[:200], keyboard())
     finally:
@@ -903,6 +907,8 @@ def keyboard():
     rows.append([{"text": "🧪 Backtest 30 dias", "callback_data": "bfm_bt"}, {"text": "🧪 Backtest 3 meses", "callback_data": "bfm_bt90"}])
     rows.append([{"text": "🧪 SOL 30d", "callback_data": "bfm_bt_sol"}, {"text": "🧪 SOL 3m", "callback_data": "bfm_bt90_sol"},
                  {"text": "🧪 ETH 30d", "callback_data": "bfm_bt_eth"}, {"text": "🧪 ETH 3m", "callback_data": "bfm_bt90_eth"}])
+    rows.append([{"text": "📉 SOL venda 30d", "callback_data": "bfm_bts_sol"}, {"text": "📉 SOL venda 3m", "callback_data": "bfm_bts90_sol"},
+                 {"text": "📉 ETH venda 30d", "callback_data": "bfm_bts_eth"}, {"text": "📉 ETH venda 3m", "callback_data": "bfm_bts90_eth"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
@@ -910,7 +916,8 @@ def keyboard():
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
             "/aovivo", "bfm_bt", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
-            "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
+            "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
+            "bfm_bts_eth", "bfm_bts90_eth"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
            {p + m for p in ("bfm_on_", "bfm_off_", "bfm_close_") for m in MODES})
 
 
@@ -945,9 +952,10 @@ def handle(action, send, chat, run_async):
         send(chat, "⏹️ Ao vivo parado.", keyboard())
     elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
-        days = 90 if ("bt90" in action or action.endswith("_3m")) else BT_DAYS
+        days = 90 if ("bt90" in action or "bts90" in action or action.endswith("_3m")) else BT_DAYS
         asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else "BTC")
-        run_async(lambda: run_backtest(send, chat, lev, days, asset))
+        only = "short" if action.startswith("bfm_bts") else None
+        run_async(lambda: run_backtest(send, chat, lev, days, asset, only))
     elif action in ("bfm_res", "/resultados_btc"):
         def go():
             try:
