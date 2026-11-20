@@ -59,18 +59,23 @@ class Basket(unittest.TestCase):
     def short(self, **kw):
         return dict({"side": "short", "entry": 100.0, "size_usd": 500.0, "collateral_usd": 100.0, "n": 1, "last": 100.0}, **kw)
 
-    def test_margin_100pct_split_in_5_until_150_then_40pct(self):
-        self.assertEqual(bfm.order_collateral(100.0), 20.0)
-        self.assertEqual(bfm.order_collateral(149.0), 29.8)
-        self.assertEqual(bfm.order_collateral(150.0), 12.0)              # 40% / 5
-        self.assertEqual(bfm.order_collateral(100.0, 0.5), 10.0)         # no strong move: half lot
+    def test_first_order_30pct_and_risk_cut_from_500(self):
+        self.assertEqual(bfm.first_collateral(100.0), 30.0)
+        self.assertEqual(bfm.first_collateral(600.0), 90.0)                 # 30% x 0.5
+        self.assertEqual(bfm.risk_cut(499.0), 1.0)
+        self.assertEqual(bfm.risk_cut(500.0), 0.5)
 
-    def test_targets_for_short_and_long(self):
-        self.assertAlmostEqual(bfm.tp_price(self.short()), 99.6)
+    def test_close_leaves_profit_after_fees(self):
+        pos = self.short()
+        win = bfm.pnl_usd(pos, bfm.tp_price(pos))
+        self.assertGreater(win, 0)                                         # +0.25% beats the ~0.12% fees
+        self.assertAlmostEqual(bfm.tp_price(pos), 99.75)
+        self.assertAlmostEqual(bfm.tp_price(self.short(side="long")), 100.25)
+
+    def test_recovery_orders_get_further_apart(self):
         self.assertAlmostEqual(bfm.next_grid_price(self.short()), 100.5)
-        long_ = self.short(side="long")
-        self.assertAlmostEqual(bfm.tp_price(long_), 100.4)
-        self.assertAlmostEqual(bfm.next_grid_price(long_), 99.5)
+        self.assertAlmostEqual(bfm.next_grid_price(self.short(loss_adds=1, last=100.5)), 100.5 * 1.0075)
+        self.assertAlmostEqual(bfm.next_grid_price(self.short(side="long", loss_adds=2)), 100.0 * (1 - 0.01))
 
     def test_pnl_long_and_short(self):
         self.assertAlmostEqual(bfm.pnl_usd(self.short(), 99.0), 5.0 - 0.6)
@@ -79,12 +84,13 @@ class Basket(unittest.TestCase):
     def test_adding_moves_the_average_price(self):
         d = {"mode": "demo", "leverage": 5, "capital": 100.0, "trades": 0, "pos": None}
         bfm._open(d, 100.0, "short", "x")
-        bfm._open(d, 100.5, "short", "preço médio")
+        self.assertEqual(d["pos"]["collateral_usd"], 30.0)
+        self.assertAlmostEqual(bfm.free_capital(d), 70.0)
+        bfm._open(d, 100.5, "short", "vai voltar", 17.5)
         pos = d["pos"]
         self.assertEqual(pos["n"], 2)
-        self.assertEqual(pos["collateral_usd"], 40.0)
+        self.assertEqual(pos["collateral_usd"], 47.5)
         self.assertTrue(100.0 < pos["entry"] < 100.5)
-        self.assertEqual(pos["last"], 100.5)
 
 
 class Cycle(Base):
@@ -96,7 +102,7 @@ class Cycle(Base):
         self.assertEqual(self.cyc(candles(trend=1)), "abriu")
         d = bfm._load("demo")
         self.assertEqual(d["pos"]["side"], "long")
-        self.assertEqual(d["pos"]["collateral_usd"], 20.0)               # 100% / 5 orders
+        self.assertEqual(d["pos"]["collateral_usd"], 30.0)               # 1st order: 30% of the account
         self.assertIn("COMPRA (long) aberta", self.msgs[-1])
         bfm._save(dict(d, pos=None))
         self.turn_on(trades=0, last_bar=0)
@@ -108,7 +114,7 @@ class Cycle(Base):
         self.assertEqual(self.cyc(candles()), "abriu")                   # strong fall: sells with score >= 3
         d = bfm._load("demo")
         self.assertEqual(d["pos"]["side"], "short")
-        self.assertEqual(d["pos"]["collateral_usd"], 20.0)
+        self.assertEqual(d["pos"]["collateral_usd"], 30.0)
         self.assertIn("QUEDA FORTE", self.msgs[-1])
 
     def test_always_in_opens_the_next_right_after_closing(self):
@@ -118,7 +124,7 @@ class Cycle(Base):
             self.assertEqual(self.cyc(candles()), "abriu")
         pos = bfm._load("demo")["pos"]
         self.assertEqual(pos["side"], "short")
-        self.assertEqual(pos["collateral_usd"], 20.0)                    # full lot
+        self.assertEqual(pos["collateral_usd"], 30.0)                    # 30% of the account
 
     def test_no_strong_move_trades_much_less_when_always_in_is_off(self):
         self.turn_on(trades=1, last_entry=NOW - 600)
@@ -129,36 +135,59 @@ class Cycle(Base):
             bfm._save(d)
             with patch.object(bfm, "read_chart", return_value=(-8, 10.0, "leitura -8")):
                 self.assertEqual(self.cyc(candles()), "abriu")
-        self.assertEqual(bfm._load("demo")["pos"]["collateral_usd"], 10.0)   # half lot
+        self.assertEqual(bfm._load("demo")["pos"]["collateral_usd"], 15.0)   # half of the 30%
 
-    def test_average_price_then_close_all_in_profit(self):
+    def _open_short(self, cs):
         self.turn_on(trades=1)
-        cs = candles()
         bfm.cycle("demo", self.send, "1", now=NOW, klines=lambda: cs)
-        pos = bfm._load("demo")["pos"]
+        return bfm._load("demo")["pos"]
+
+    def _next_candle(self, cs, close, open_=None):
+        """A new closed 5-minute candle (open_ -> close) and the current price = close."""
+        o = open_ if open_ is not None else close
+        last = dict(cs[-2], t=cs[-1]["t"], o=o, c=close, h=max(close, o), l=min(close, o))
+        return cs[:-1] + [last, dict(last, t=last["t"] + 300)]
+
+    def test_it_will_come_back_adds_and_closes_all_in_profit(self):
+        cs = candles()
+        pos = self._open_short(cs)
         up = pos["entry"] * 1.006                                         # 0.6% against the short
-        later = cs[:-1] + [dict(cs[-1], c=up)]
-        self.assertEqual(self.cyc(later), "preço médio")
+        later = self._next_candle(cs, up, open_=up * 1.001)                # the last candle already turned down
+        with patch.object(bfm, "read_chart", return_value=(-5, 10.0, "leitura -5")):
+            self.assertEqual(self.cyc(later), "reforço")
         pos = bfm._load("demo")["pos"]
-        self.assertEqual(pos["n"], 2)
-        self.assertIn("ordem 2/5", self.msgs[-1])
+        self.assertEqual((pos["n"], pos["loss_adds"]), (2, 1))
+        self.assertAlmostEqual(pos["collateral_usd"], 30.0 + 70.0 / 4)     # the rest of the capital split in 4
+        self.assertIn("VAI VOLTAR 1/4", self.msgs[-1])
         back = cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]
         self.assertEqual(self.cyc(back), "fechou")
         d = bfm._load("demo")
         self.assertIsNone(d["pos"])
-        self.assertGreater(d["capital"], 100.0)
+        self.assertGreater(d["capital"], 100.0)                           # profit after the fees
         self.assertIn("2 ordem(ns)", self.msgs[-1])
 
-    def test_at_most_5_orders(self):
-        self.turn_on(trades=5)
+    def test_no_recovery_while_the_market_keeps_going_against(self):
         cs = candles()
-        price = cs[-1]["c"]
-        d = bfm._load("demo")
-        d["pos"] = {"side": "short", "entry": price / 1.01, "size_usd": 500.0, "collateral_usd": 100.0, "n": 5,
-                    "last": price / 1.006}
-        bfm._save(d)
-        self.assertEqual(self.cyc(cs), "posição aberta")
-        self.assertEqual(bfm._load("demo")["pos"]["n"], 5)
+        pos = self._open_short(cs)
+        up = pos["entry"] * 1.006
+        later = self._next_candle(cs, up, open_=up * 0.999)                # last candle still going up (against)
+        with patch.object(bfm, "read_chart", return_value=(-5, 10.0, "leitura -5")):
+            self.assertEqual(self.cyc(later), "posição aberta")
+        self.assertEqual(bfm._load("demo")["pos"]["n"], 1)
+
+    def test_it_will_win_adds_50pct_once(self):
+        cs = candles()
+        pos = self._open_short(cs)
+        down = pos["entry"] * 0.9985                                      # +0.15% for the short
+        later = self._next_candle(cs, down)
+        with patch.object(bfm, "read_chart", return_value=(-5, 10.0, "leitura -5")):
+            self.assertEqual(self.cyc(later), "reforço")
+            pos = bfm._load("demo")["pos"]
+            self.assertAlmostEqual(pos["collateral_usd"], 30.0 + 70.0 * 0.5)
+            self.assertIn("VAI GANHAR", self.msgs[-1])
+            again = self._next_candle(later, down)
+            self.assertEqual(self.cyc(again), "posição aberta")          # only once
+        self.assertEqual(bfm._load("demo")["pos"]["n"], 2)
 
     def test_liquidation_guard(self):
         self.turn_on(trades=5)
@@ -211,9 +240,9 @@ class Cycle(Base):
         with patch.dict("sys.modules", {"jupiter_perps": JP}), patch.object(bfm, "sol_usd", return_value=150.0):
             self.assertEqual(self.cyc(candles(), mode="real"), "abriu")
             d = bfm._load("real")
-            bfm._open(d, d["pos"]["entry"] * 1.006, "short", "preço médio")
-        self.assertEqual(calls[:2], [("usdc", 20.0), ("short", 20.0, bfm.DEFAULT_LEVERAGE, 0.0)])
-        self.assertEqual(calls[3][3], 20.0 * bfm.DEFAULT_LEVERAGE)       # the add waits for the bigger position
+            bfm._open(d, d["pos"]["entry"] * 1.006, "short", "vai voltar", 17.5)
+        self.assertEqual(calls[:2], [("usdc", 30.0), ("short", 30.0, bfm.DEFAULT_LEVERAGE, 0.0)])
+        self.assertEqual(calls[3][3], 30.0 * bfm.DEFAULT_LEVERAGE)       # the add waits for the bigger position
         self.assertIn("solscan.io/tx/SIG", self.msgs[-1])
 
 

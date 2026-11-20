@@ -6,10 +6,11 @@ Each one starts every day (00:00 UTC) with US$ 100 (minimum capital), day and ni
 - STRONG MOVE: BTC moved >= 1.5 ATR of the 1 h chart in the last 6 h and is on that side of the 1 h EMA50 ->
   trades MORE in that direction (score 3, full lot); otherwise trades MUCH LESS (score 7, at most 1 entry per
   hour, half lot). The first order of the day opens right away to the side of the reading;
-- AVERAGE PRICE: if the price goes 0.5% against the last order, it opens one more on the same side (up to 5) and
-  CLOSES ALL when the orders together are 0.4% above the average price (BTC version of "20 pips / +10 pips";
-  0.4% leaves profit after the ~0.12% Jupiter fees);
-- MARGIN: 100% of the balance split across the 5 orders while the balance is under US$ 150, then 40%;
+- MT5 FullMargin_7_2 orders (owner, Nov 20), in % of the BTC price: 1st order with 30% of the account; "it will win"
+  (+0.10% and the reading in favour) -> +1 order with 50% of the free capital; "it will come back" (-0.25%, the reading
+  in favour and the last 5-minute candle turning) -> up to 4 orders more with the rest of the capital, each one 0.5%,
+  0.75%, 1.0%, 1.25% beyond the previous; CLOSES ALL at +0.25% over the average price (2x the ~0.12% Jupiter fees, so
+  there is profit after the fees); from US$ 500 the risk is cut by 50%;
 - the day stops at the TARGET (US$ 300, like the MT5 robot) or at the LOSS LIMIT (50% = US$ 50);
   a protection closes everything before the liquidation price (60% of the way).
 - ALWAYS IN (owner, Nov 20, BTCFM_ALWAYS_IN=true): as soon as the orders close it opens the next one (full lot) to the
@@ -29,26 +30,44 @@ MIN_SCORE = int(os.getenv("BTCFM_MIN_SCORE", "4"))
 CAPITAL_USD = float(os.getenv("BTCFM_CAPITAL_USD", "100"))
 TARGET_USD = float(os.getenv("BTCFM_TARGET_USD", "300"))   # owner, Nov 20: same as the MT5 robot (target 300)
 MAX_LOSS = 0.5
-GRID_MAX = 5                    # up to 5 orders on the same side (average price)
-GRID_STEP_PCT = 0.005           # next order when the price goes 0.5% against the last one
-BASKET_TP_PCT = 0.004           # close ALL at +0.4% over the average price
+# owner, Nov 20: the MT5 FullMargin_7_2 strategy in % of the BTC price (no pips on BTC). The Jupiter fees are ~0.12%
+# of the position (open + close), so every exit is sized to leave profit AFTER the fees.
+FIRST_PCT = 0.30                # 1st order: 30% of the account as collateral
+WIN_ADD_PCT = 0.50              # "it will win" (profit + reading in favour): +1 order with 50% of the free capital
+WIN_TRIGGER = 0.001             # ... once the orders are +0.10% (= the "+2 pips" of the MT5 robot)
+LOSS_ADDS = 4                   # "it will come back": up to 4 orders more to kill the losing ones
+LOSS_TRIGGER = 0.0025           # ... once the orders are -0.25% (= the "-5 pips")
+LOSS_STEP = 0.005               # ... each one at least 0.5% beyond the previous order (= "10 pips")
+LOSS_STEP_GROW = 0.5            # ... growing 50% each time: 0.5%, 0.75%, 1.0%, 1.25%
+BASKET_TP_PCT = 0.0025          # CLOSE ALL at +0.25% over the average price (2x the 0.12% fees: profit after fees)
+SAFE_FROM, SAFE_CUT = 500.0, 0.5   # from US$ 500 the risk is cut by 50%
+GRID_MAX = 1 + 1 + LOSS_ADDS    # at most 6 orders together
 STRONG_ATR = 1.5                # strong move: >= 1.5 ATR(1 h) in 6 h, on that side of the 1 h EMA50
 SCORE_STRONG, SCORE_WEAK = 3, 7
-WEAK_EVERY_S = 3600             # no strong move: at most 1 entry per hour
-WEAK_LOT = 0.5                  # ... with half the lot
-TOTAL_MARGIN, SAFE_FROM, SAFE_MARGIN = 1.0, 150.0, 0.4
+WEAK_EVERY_S = 3600             # (selective mode) no strong move: at most 1 entry per hour
+WEAK_LOT = 0.5
+ADD_SCORE = 4                   # the reading must point to the side of the orders with at least this strength
 ALWAYS_IN = os.getenv("BTCFM_ALWAYS_IN", "true").strip().lower() != "false"   # owner, Nov 20: always with orders open
 LIQ_GUARD = 0.6                 # closes everything at 60% of the way to the liquidation price
 
 
-def total_margin(capital):
-    """Share of the balance used by the 5 orders together: 100% under US$ 150, 40% from US$ 150."""
-    return TOTAL_MARGIN if capital < SAFE_FROM else SAFE_MARGIN
+def risk_cut(capital):
+    """1.0 below US$ 500, 0.5 from US$ 500 (the risk is cut by half)."""
+    return SAFE_CUT if capital >= SAFE_FROM else 1.0
 
 
-def order_collateral(capital, factor=1.0):
-    """Collateral of ONE order: the total margin split across the GRID_MAX orders."""
-    return round(capital * total_margin(capital) / GRID_MAX * factor, 2)
+def free_capital(d):
+    """Account capital not yet used as collateral by the open orders."""
+    return max(0.0, d["capital"] - (d.get("pos") or {}).get("collateral_usd", 0.0))
+
+
+def first_collateral(capital):
+    return round(capital * FIRST_PCT * risk_cut(capital), 2)
+
+
+def loss_step(n_adds):
+    """Distance (in % of the price) from the previous order for the next recovery order."""
+    return LOSS_STEP * (1 + LOSS_STEP_GROW * n_adds)
 
 
 LEVERAGES = (2, 3, 5, 10, 15, 20, 30, 50)   # owner, Nov 20: max 50x
@@ -268,7 +287,8 @@ def tp_price(pos):
 
 
 def next_grid_price(pos):
-    return pos.get("last", pos["entry"]) * (1 - GRID_STEP_PCT * _sgn(pos))
+    """Price of the next recovery order (the price must be that far against the last order)."""
+    return pos.get("last", pos["entry"]) * (1 - loss_step(pos.get("loss_adds", 0)) * _sgn(pos))
 
 
 def side_name(pos_or_side):
@@ -290,10 +310,10 @@ def equity(d, price=None, now=None):
     return v
 
 
-def _open(d, price, side, why, factor=1.0, now=None):
-    """Opens the first order or ADDS one to the average price (same side). Returns the position."""
+def _open(d, price, side, why, col=None, now=None):
+    """Opens the first order or ADDS one (same side) with `col` US$ of collateral. Returns the position."""
     lev = d["leverage"]
-    col = order_collateral(d["capital"], factor)
+    col = round(first_collateral(d["capital"]) if col is None else col, 2)
     if col < 2:
         raise RuntimeError("saldo da conta baixo demais para mais uma ordem")
     pos = d.get("pos")
@@ -314,7 +334,7 @@ def _open(d, price, side, why, factor=1.0, now=None):
                    n=pos.get("n", 1) + 1, last=price)
     else:
         pos = {"side": side, "entry": onchain_avg or price, "size_usd": add, "collateral_usd": col, "n": 1,
-               "last": price, "opened": t, "why": why, "factor": factor}
+               "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0}
         d["pos"] = pos
     if sig:
         pos["signature"] = sig
@@ -442,21 +462,36 @@ def cycle(mode, send, chat, now=None, klines=None):
                 _save(d)
                 send(chat, close_text(d, why, price, pos["entry"], pos) + _tx(sig))
                 return "fechou"
-            # average price: the price went 0.5% against the last order -> one more on the same side (up to 5)
-            if d["on"] and not d["done_why"] and pos.get("n", 1) < GRID_MAX and \
-                    (price - next_grid_price(pos)) * _sgn(pos) <= 0:
-                try:
-                    _open(d, price, pos["side"], "preço médio", pos.get("factor", 1.0), now)
-                except Exception as exc:
+            # MT5 FullMargin_7_2 adds, once per closed 5-minute candle, with the chart reading in favour
+            if d["on"] and not d["done_why"] and closed[-1]["t"] != d.get("last_bar"):
+                d["last_bar"] = closed[-1]["t"]
+                score, _a, reading = read_chart(closed)
+                sg = _sgn(pos)
+                in_favor = score * sg >= ADD_SCORE
+                turning = (closed[-1]["c"] - closed[-1]["o"]) * sg > 0
+                add, label = 0.0, ""
+                if not pos.get("win_added") and bp >= WIN_TRIGGER and in_favor:
+                    add, label = free_capital(d) * WIN_ADD_PCT * risk_cut(d["capital"]), "VAI GANHAR (+50%)"
+                    pos["win_added"] = True
+                elif pos.get("loss_adds", 0) < LOSS_ADDS and bp <= -LOSS_TRIGGER and in_favor and turning and \
+                        (price - next_grid_price(pos)) * sg <= 0:
+                    left = LOSS_ADDS - pos.get("loss_adds", 0)
+                    add = free_capital(d) / left * risk_cut(d["capital"])
+                    pos["loss_adds"] = pos.get("loss_adds", 0) + 1
+                    label = "VAI VOLTAR " + str(pos["loss_adds"]) + "/" + str(LOSS_ADDS)
+                if label:
+                    try:
+                        _open(d, price, pos["side"], label + ", " + reading, add, now)
+                    except Exception as exc:
+                        _save(d)
+                        send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem " + label + " (" + str(exc)[:160] + ").")
+                        return "erro"
                     _save(d)
-                    send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem do preço médio (" + str(exc)[:160] + ").")
-                    return "erro"
-                _save(d)
-                send(chat, "➕ BTC FULL MARGIN " + tag + " — ordem " + str(pos["n"]) + "/" + str(GRID_MAX) + " (" +
-                     side_name(pos) + ") em $" + format(price, ",.0f") + "\nPreço médio agora $" + format(pos["entry"], ",.0f") +
-                     " · fecha tudo em $" + format(tp_price(pos), ",.0f") + " (+" + format(BASKET_TP_PCT * 100, ".1f") +
-                     "%)" + _tx(pos.get("signature")))
-                return "preço médio"
+                    send(chat, "➕ BTC FULL MARGIN " + tag + " — " + label + ": ordem " + str(pos["n"]) + " (" + side_name(pos) +
+                         ") em $" + format(price, ",.0f") + " · garantia US$ " + format(add, ".2f") +
+                         "\nPreço médio agora $" + format(pos["entry"], ",.0f") + " · fecha tudo em $" + format(tp_price(pos), ",.0f") +
+                         " (+" + format(BASKET_TP_PCT * 100, ".2f") + "%, lucro depois das taxas)" + _tx(pos.get("signature")))
+                    return "reforço"
             _save(d)
             return "posição aberta"
         if not d["on"]:
@@ -497,17 +532,17 @@ def cycle(mode, send, chat, now=None, klines=None):
         label = {1: " [ALTA FORTE]", -1: " [QUEDA FORTE]"}.get(sdir, "")
         why = ("início do dia, " if first else "") + reading + label
         try:
-            pos = _open(d, price, side, why, factor, now)
+            pos = _open(d, price, side, why, first_collateral(d["capital"]) * factor, now)
         except Exception as exc:
             _save(d)
             send(chat, "⛔ BTC FULL MARGIN " + tag + ": não abri a ordem (" + str(exc)[:160] + ").")
             return "erro"
         _save(d)
-        send(chat, "₿ BTC FULL MARGIN " + tag + " — " + side_name(side) + " aberta (ordem 1/" + str(GRID_MAX) + ")\n" + why +
+        send(chat, "₿ BTC FULL MARGIN " + tag + " — " + side_name(side) + " aberta (1ª ordem, 30% da conta)\n" + why +
              "\nEntrada $" + format(pos["entry"], ",.0f") + " · garantia US$ " + format(pos["collateral_usd"], ".2f") + " · " +
              str(d["leverage"]) + "x (posição US$ " + format(pos["size_usd"], ",.0f") + ")" +
-             "\n🎯 Fecha tudo em $" + format(tp_price(pos), ",.0f") + " (+" + format(BASKET_TP_PCT * 100, ".1f") +
-             "%) · ➕ próxima ordem se for a $" + format(next_grid_price(pos), ",.0f") + _tx(pos.get("signature")))
+             "\n🎯 Fecha tudo em $" + format(tp_price(pos), ",.0f") + " (+" + format(BASKET_TP_PCT * 100, ".2f") +
+             "%) · ➕ recuperação se for a $" + format(next_grid_price(pos), ",.0f") + " e o gráfico virar" + _tx(pos.get("signature")))
         return "abriu"
 
 
@@ -532,8 +567,9 @@ def account_text(mode):
     prog = max(0.0, min(1.0, (eq - CAPITAL_USD) / (TARGET_USD - CAPITAL_USD)))
     L.append("▕" + "█" * int(prog * 10) + "░" * (10 - int(prog * 10)) + "▏ " + format(prog * 100, ".0f") + "% da meta")
     tot = d["wins"] + d["losses"]
-    L.append("🛡️ Margem: " + format(total_margin(d["capital"]) * 100, ".0f") + "% do saldo em até " + str(GRID_MAX) +
-             " ordens (US$ " + format(order_collateral(d["capital"]), ".2f") + " cada) — 40% a partir de US$ " + format(SAFE_FROM, ".0f"))
+    L.append("🛡️ 1ª ordem 30% da conta (US$ " + format(first_collateral(d["capital"]), ".2f") + ") · vai ganhar +50% · vai voltar até " +
+             str(LOSS_ADDS) + " ordens com o resto" + (" · RISCO −50% (saldo ≥ US$ " + format(SAFE_FROM, ".0f") + ")"
+                                                      if risk_cut(d["capital"]) < 1 else ""))
     L.append("📊 Ordens " + str(d["trades"]) + " · fechamentos no lucro " + str(d["wins"]) + " · no prejuízo " + str(d["losses"]) +
              (" · acerto " + format(d["wins"] / tot * 100, ".0f") + "%" if tot else ""))
     tt = d.get("total") or {}
@@ -580,7 +616,7 @@ def live_text(mode, price, now=None, track=None):
               "💵 Bruto " + format(gross, "+.2f") + " · taxas −" + format(fees, ".2f") + " · BTC " + format(move, "+.2f") +
               "% desde o preço médio (" + ("a favor" if move * _sgn(pos) > 0 else "contra") + ")",
               "🎯 Fecha tudo em $" + format(tp, ",.0f") + " (falta " + format((tp / price - 1) * 100, "+.2f") + "%)" +
-              (" · ➕ próxima ordem em $" + format(nxt, ",.0f") if pos.get("n", 1) < GRID_MAX else " · grade completa")]
+              (" · ➕ próxima recuperação em $" + format(nxt, ",.0f") if pos.get("loss_adds", 0) < LOSS_ADDS else " · recuperação completa")]
         lo, hi = (nxt, tp) if pos.get("side") == "long" else (tp, nxt)
         if hi > lo:
             k = int(round(max(0.0, min(1.0, (price - lo) / (hi - lo))) * 14))
@@ -673,8 +709,9 @@ def results_png():
 def status_text():
     L = ["₿ BTC FULL MARGIN — Jupiter Perps · COMPRA e VENDA · preço médio",
          "Cada conta começa o dia com US$ " + format(CAPITAL_USD, ".0f") + ". Opera O TEMPO TODO: fechou, já abre a próxima ordem "
-         "(para o lado do movimento forte ou da leitura do gráfico). Se o preço vai " + format(GRID_STEP_PCT * 100, ".1f") + "% contra, abre mais uma ordem "
-         "(até " + str(GRID_MAX) + ") e fecha tudo com +" + format(BASKET_TP_PCT * 100, ".1f") + "% sobre o preço médio. "
+         "(para o lado do movimento forte ou da leitura do gráfico), com 30% da conta. Vai ganhar: +1 ordem com 50%. "
+         "Vai voltar (perdendo e o gráfico virou): até " + str(LOSS_ADDS) + " ordens a mais, cada vez mais distantes. "
+         "Fecha tudo com +" + format(BASKET_TP_PCT * 100, ".2f") + "% sobre o preço médio (lucro depois das taxas). "
          "Para no dia em US$ " + format(TARGET_USD, ".0f") + " (ou se cair a US$ " + format(CAPITAL_USD * (1 - MAX_LOSS), ".0f") +
          "). Recomeça todo dia às 00:00 UTC.",
          "", account_text("demo"), "", account_text("real")]
@@ -772,7 +809,7 @@ def handle(action, send, chat, run_async):
             d["on"] = False
             _save(d)
         send(chat, "⏸️ " + NAME[mode] + " desligada: não abre ordens novas." +
-             (" As ordens abertas continuam até o +" + format(BASKET_TP_PCT * 100, ".1f") + "% do preço médio; toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
+             (" As ordens abertas continuam até o +" + format(BASKET_TP_PCT * 100, ".2f") + "% do preço médio; toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
     elif action.startswith("bfm_close_"):
         mode = action[10:]
 
