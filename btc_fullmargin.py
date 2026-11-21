@@ -67,13 +67,9 @@ ALWAYS_IN = os.getenv("BTCFM_ALWAYS_IN", "true").strip().lower() != "false"   # 
 LIQ_GUARD = 0.6                 # closes everything at 60% of the way to the liquidation price
 
 
-# owner, Nov 21: the MT5 FullMargin v4.33 strategy, to test in the backtest on SOL (1 pip of the MT5 robot on crypto
-# = 0.01% of the price): 1st order 30%; winning (+2 pips, reading in favour) one more order per candle with 10% of the
-# account until 65% in margin; no recovery orders, no stop; losing (-5 pips) it CUTS 25% of the size at each 3-pip
-# bounce (max 6 cuts); risk -50% every US$ 200 of balance; take profit +3% over the average price (owner's choice)
-MT5_CFG = {"tp": 0.03, "adds": False, "entry": "score", "win_pct": 0.10, "win_max": 0.65, "win_trigger": 0.0002,
-           "cut_from": 0.0005, "cut_retrace": 0.0003, "cut_pct": 0.25, "cut_max": 6, "risk_step": 200.0,
-           "no_reserve": True}
+# owner, Nov 21 (latest): backtest of the SAME strategy the SOL accounts run, but every order against ("vai voltar")
+# only when SOL went 6% against the previous order - all of them 6% apart
+GRID6_CFG = {"step": 0.06}
 
 
 def risk_factor(capital, cf):
@@ -377,7 +373,8 @@ def tp_price(pos):
 
 def next_grid_price(pos):
     """Price of the next recovery order (the price must be that far against the last order)."""
-    return pos.get("last", pos["entry"]) * (1 - loss_step(pos.get("loss_adds", 0)) * _sgn(pos))
+    step = pos.get("step") or loss_step(pos.get("loss_adds", 0))
+    return pos.get("last", pos["entry"]) * (1 - step * _sgn(pos))
 
 
 def side_name(pos_or_side):
@@ -468,7 +465,7 @@ def _open(d, price, side, why, col=None, now=None, lev=None):
     else:
         pos = {"side": side, "entry": onchain_avg or price, "size_usd": add, "collateral_usd": col, "n": 1,
                "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0, "lev": lev, "asset": ASSET,
-               "tp": (CFG.get(d["mode"]) or {}).get("tp")}
+               "tp": (CFG.get(d["mode"]) or {}).get("tp"), "step": (CFG.get(d["mode"]) or {}).get("step")}
         d["pos"] = pos
     if sig:
         pos["signature"] = sig
@@ -917,12 +914,6 @@ def backtest_text(d, leverage, span_days=BT_DAYS, asset="BTC"):
          "🏆 Melhor fechamento " + format(tt.get("best", 0), "+.2f") + " · pior " + format(tt.get("worst", 0), "+.2f"),
          "⏱️ Maior tempo com ordens abertas: " + format(held, ".0f") + " h" +
          (" (sem stop por ordem: ficou esperando o preço voltar e o dia não virou nesse tempo)" if held > 24 else "")]
-    if "MT5" in asset:                                # owner, Nov 21: the MT5 FullMargin v4.33 strategy
-        L[0] = "🧪 BACKTEST " + str(span_days) + " DIAS — " + asset + " · " + str(leverage) + "x"
-        L[1] = ("Cada dia começa com US$ " + format(CAPITAL_USD, ".0f") + " (sem reserva de margem) · 1ª ordem 30% · ganhando, "
-                "+1 ordem de 10% por candle até 65% · perdendo, corta 25% do lote a cada repique (até 6) · sem stop · "
-                "alvo +" + format(MT5_CFG["tp"] * 100, ".0f") + "% sobre o preço médio · risco −50% a cada US$ 200. "
-                "Candles reais de 5 min, taxas da Jupiter incluídas (cada corte conta como um fechamento).")
     if days:
         best = max(days, key=lambda x: x["result"])
         worst = min(days, key=lambda x: x["result"])
@@ -973,8 +964,8 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, pla
         except Exception as exc:
             logging.warning("btc backtest chart: %s", type(exc).__name__)
         span = max(1, round((cs[-1]["t"] - cs[800]["t"]) / 86400))
-        tag = asset + (" SÓ VENDA" if only == "short" else "") + (" · ESTRATÉGIA DO MT5 v4.33 (alvo +" +
-                                                                   format(cfg["tp"] * 100, ".0f") + "%)" if cfg is MT5_CFG else "")
+        tag = asset + (" SÓ VENDA" if only == "short" else "") + (" · ORDENS CONTRA A CADA " + format(cfg["step"] * 100, ".0f") +
+                                                                   "%" if cfg and cfg.get("step") else "")
         if plan:
             tag += " · ALAVANCAGEM DINÂMICA " + str(plan["first"]) + "x → " + "/".join(str(x) for x in plan["loss"]) + \
                    "x perdendo, " + str(plan["win"]) + "x ganhando"
@@ -1277,17 +1268,17 @@ def keyboard():
                  {"text": "🧪 Backtest " + ASSET + " 2 meses", "callback_data": "bfm_bt60"}])
     rows.append([{"text": "🧪 Backtest " + ASSET + " 4 meses", "callback_data": "bfm_bt120"},
                  {"text": "🧪 Backtest " + ASSET + " 1 ano", "callback_data": "bfm_bt365"}])
-    rows.append([{"text": "🤖 SOL estratégia MT5 30 dias", "callback_data": "bfm_btm_sol"},
-                 {"text": "🤖 SOL MT5 3 meses", "callback_data": "bfm_btm90_sol"},
-                 {"text": "🤖 SOL MT5 1 ano", "callback_data": "bfm_btm365_sol"}])
+    rows.append([{"text": "📏 SOL ordens a cada 6% · 30 dias", "callback_data": "bfm_btg_sol"},
+                 {"text": "📏 6% · 3 meses", "callback_data": "bfm_btg90_sol"},
+                 {"text": "📏 6% · 1 ano", "callback_data": "bfm_btg365_sol"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
-            "/aovivo", "bfm_bt", "bfm_bt60", "bfm_bt120", "bfm_bt365", "bfm_btm_sol",
-            "bfm_btm90_sol", "bfm_btm365_sol", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
+            "/aovivo", "bfm_bt", "bfm_bt60", "bfm_bt120", "bfm_bt365", "bfm_btg_sol",
+            "bfm_btg90_sol", "bfm_btg365_sol", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
             "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
             "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol", "bfm_opt_sol", "bfm_opt_btc", "bfm_opt_eth",
             "bfm_use_demo", "bfm_use_real"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
@@ -1338,7 +1329,7 @@ def handle(action, send, chat, run_async):
         asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else ASSET)
         only = "short" if action.startswith("bfm_bts") else None
         plan = DYN_PLAN if action.startswith("bfm_btd") else None
-        cfg = MT5_CFG if action.startswith("bfm_btm") else None
+        cfg = GRID6_CFG if action.startswith("bfm_btg") else None
         run_async(lambda: run_backtest(send, chat, lev, days, asset, only, plan, cfg))
     elif action in ("bfm_res", "/resultados_btc"):
         def go():
