@@ -37,7 +37,8 @@ START_TOTAL = CAPITAL_USD + RESERVE_USD
 TARGET_PROFIT = TARGET_USD - CAPITAL_USD          # day target: +200 (the old "100 -> 300")
 TOPUP_USD = 50.0                # margin added each time
 TOPUP_AT = 0.35                 # ... when the orders lost 35% of the way to the liquidation (the guard closes at 60%)
-BANK_STEP = 100.0               # owner, Nov 21: every US$ 100 of profit in the day goes to the reserve (future margin)
+BANK_EVERY = 300.0              # owner, Nov 21 (latest): every US$ 300 of profit in the day...
+BANK_PUT = 200.0                # ... US$ 200 leave the trading money and go to the margin reserve (not traded)
 # owner, Nov 20: the MT5 FullMargin_7_2 strategy in % of the BTC price (no pips on BTC). The Jupiter fees are ~0.12%
 # of the position (open + close), so every exit is sized to leave profit AFTER the fees.
 FIRST_PCT = 0.30                # 1st order: 30% of the account as collateral
@@ -380,15 +381,15 @@ def day_result(d, price=None, now=None):
 
 
 def bank_profit(d):
-    """Every US$ 100 of profit in the day leaves the trading money and goes to the reserve, which is used as margin
-    when the orders need it. Returns the amount moved now."""
+    """Every US$ 300 of profit in the day, US$ 200 leave the trading money and go to the reserve, which is only used as
+    margin when the orders need it. Returns the amount moved now."""
     moved = 0.0
-    while (d["capital"] + d.get("reserve", 0.0) - START_TOTAL >= d.get("banked", 0.0) + BANK_STEP and
-           d["capital"] - BANK_STEP >= CAPITAL_USD * 0.5):
-        d["capital"] -= BANK_STEP
-        d["reserve"] = round(d.get("reserve", 0.0) + BANK_STEP, 2)
-        d["banked"] = round(d.get("banked", 0.0) + BANK_STEP, 2)
-        moved += BANK_STEP
+    while (d["capital"] + d.get("reserve", 0.0) - START_TOTAL >= (round(d.get("banked", 0.0) / BANK_PUT) + 1) * BANK_EVERY and
+           d["capital"] - BANK_PUT >= CAPITAL_USD * 0.5):
+        d["capital"] -= BANK_PUT
+        d["reserve"] = round(d.get("reserve", 0.0) + BANK_PUT, 2)
+        d["banked"] = round(d.get("banked", 0.0) + BANK_PUT, 2)
+        moved += BANK_PUT
     return moved
 
 
@@ -856,8 +857,8 @@ def backtest_text(d, leverage, span_days=BT_DAYS, asset="BTC"):
     held = max((h.get("held_h", 0) for h in hist), default=0)
     L = ["🧪 BACKTEST " + str(span_days) + " DIAS — " + asset + " (estratégia atual do Full Margin, " + str(leverage) + "x)",
          "Cada dia: US$ " + format(START_TOTAL, ".0f") + " = opera com US$ " + format(CAPITAL_USD, ".0f") + " + US$ " +
-         format(RESERVE_USD, ".0f") + " de reserva (vira margem quando a margem acaba; cada US$ " + format(BANK_STEP, ".0f") +
-         " de lucro também vai para a reserva) · meta +" + format(TARGET_PROFIT, ".0f") +
+         format(RESERVE_USD, ".0f") + " de reserva (vira margem quando a margem acaba; a cada US$ " + format(BANK_EVERY, ".0f") +
+         " de lucro, US$ " + format(BANK_PUT, ".0f") + " vão para a reserva) · meta +" + format(TARGET_PROFIT, ".0f") +
          " · limite −" + format(START_TOTAL * MAX_LOSS, ".0f") + ". Candles reais de 5 min, taxas da Jupiter incluídas.",
          "",
          ("✅ LUCROU " if total > 0 else "❌ PERDEU ") + format(total, "+.2f") + " USD em " + str(span_days) + " dias (soma dos dias)",
@@ -1039,7 +1040,7 @@ def account_text(mode):
          (" · já adicionou US$ " + format(d.get("injected", 0.0), ".2f") + " de margem hoje" if d.get("injected") else
           " · entra como margem quando a margem das ordens está acabando") +
          (" · 🏦 guardou US$ " + format(d.get("banked", 0.0), ".0f") + " do lucro" if d.get("banked") else
-          " · a cada US$ " + format(BANK_STEP, ".0f") + " de lucro guarda US$ " + format(BANK_STEP, ".0f") + " aqui")]
+          " · a cada US$ " + format(BANK_EVERY, ".0f") + " de lucro guarda US$ " + format(BANK_PUT, ".0f") + " aqui")]
     prog = max(0.0, min(1.0, (eq - START_TOTAL) / TARGET_PROFIT))
     L.append("▕" + "█" * int(prog * 10) + "░" * (10 - int(prog * 10)) + "▏ " + format(prog * 100, ".0f") + "% da meta")
     tot = d["wins"] + d["losses"]
@@ -1188,7 +1189,7 @@ def status_text():
     L = [LABEL + " FULL MARGIN — Jupiter Perps · opera só " + ASSET + " · COMPRA e VENDA · preço médio",
          "Cada conta tem US$ " + format(START_TOTAL, ".0f") + " por dia: opera com US$ " + format(CAPITAL_USD, ".0f") + " e guarda US$ " +
          format(RESERVE_USD, ".0f") + " de reserva, que entra como MARGEM (US$ " + format(TOPUP_USD, ".0f") + " por vez) quando a margem "
-         "das ordens está acabando; a cada US$ " + format(BANK_STEP, ".0f") + " de lucro no dia, guarda US$ " + format(BANK_STEP, ".0f") +
+         "das ordens está acabando; a cada US$ " + format(BANK_EVERY, ".0f") + " de lucro no dia, guarda US$ " + format(BANK_PUT, ".0f") +
          " na reserva. Opera O TEMPO TODO: fechou, já abre a próxima ordem "
          "(para o lado do movimento forte ou da leitura do gráfico), com 30% da conta. Vai ganhar: +1 ordem com 50%. "
          "Vai voltar (perdendo e o gráfico virou): até " + str(LOSS_ADDS) + " ordens a mais, cada vez mais distantes. "

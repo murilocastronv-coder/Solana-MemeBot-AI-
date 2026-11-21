@@ -325,26 +325,28 @@ class OnlySol(Base):
 
 
 class Bank(Base):
-    def test_every_100_of_profit_goes_to_the_reserve(self):
+    def test_every_300_of_profit_puts_200_in_the_reserve(self):
         d = bfm._load("demo")
-        d.update(day=bfm.today(NOW), capital=150.0, reserve=200.0)
-        self.assertEqual(bfm.bank_profit(d), 0.0)                         # +50: nothing yet
-        d["capital"] = 215.0                                              # +115 in the day
-        self.assertEqual(bfm.bank_profit(d), 100.0)
-        self.assertEqual((d["capital"], d["reserve"], d["banked"]), (115.0, 300.0, 100.0))
-        self.assertEqual(bfm.bank_profit(d), 0.0)                         # the same 100 only once
-        d["capital"] = 205.0                                              # +205 in the day
-        self.assertEqual(bfm.bank_profit(d), 100.0)
-        self.assertEqual((d["reserve"], d["banked"]), (400.0, 200.0))
-        self.assertAlmostEqual(bfm.day_result(d), 205.0)                  # moving money does not change the result
+        d.update(day=bfm.today(NOW), capital=350.0, reserve=200.0)
+        self.assertEqual(bfm.bank_profit(d), 0.0)                         # +250: nothing yet
+        d["capital"] = 420.0                                              # +320 in the day
+        self.assertEqual(bfm.bank_profit(d), 200.0)
+        self.assertEqual((d["capital"], d["reserve"], d["banked"]), (220.0, 400.0, 200.0))
+        self.assertEqual(bfm.bank_profit(d), 0.0)                         # the same 300 only once
+        d["capital"] = 450.0                                              # +550: not 600 yet
+        self.assertEqual(bfm.bank_profit(d), 0.0)
+        d["capital"] = 510.0                                              # +610 in the day
+        self.assertEqual(bfm.bank_profit(d), 200.0)
+        self.assertEqual((d["reserve"], d["banked"]), (600.0, 400.0))
+        self.assertAlmostEqual(bfm.day_result(d), 610.0)                  # moving money does not change the result
 
     def test_close_banks_and_says_so(self):
         d = bfm._load("demo")
-        d.update(day=bfm.today(NOW), capital=210.0, reserve=200.0,
+        d.update(day=bfm.today(NOW), capital=410.0, reserve=200.0,
                  pos={"side": "short", "entry": 100.0, "size_usd": 500.0, "collateral_usd": 50.0, "n": 1, "last": 100.0})
         bfm._close(d, 99.0, "🎯 ALVO", now=NOW)
-        self.assertEqual((d["reserve"], d["banked"]), (300.0, 100.0))
-        self.assertIn("Guardei US$ 100", bfm.close_text(d, "🎯 ALVO", 99.0, 100.0))
+        self.assertEqual((d["reserve"], d["banked"]), (400.0, 200.0))
+        self.assertIn("Guardei US$ 200", bfm.close_text(d, "🎯 ALVO", 99.0, 100.0))
 
     def test_new_day_resets_the_bank(self):
         d = bfm._load("demo")
