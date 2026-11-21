@@ -840,7 +840,7 @@ def backtest_text(d, leverage, span_days=BT_DAYS, asset="BTC"):
          format(RESERVE_USD, ".0f") + " de reserva (vira margem quando a margem acaba) · meta +" + format(TARGET_PROFIT, ".0f") +
          " · limite −" + format(START_TOTAL * MAX_LOSS, ".0f") + ". Candles reais de 5 min, taxas da Jupiter incluídas.",
          "",
-         ("✅ LUCROU " if total > 0 else "❌ PERDEU ") + format(total, "+.2f") + " USD no mês (soma dos dias)",
+         ("✅ LUCROU " if total > 0 else "❌ PERDEU ") + format(total, "+.2f") + " USD em " + str(span_days) + " dias (soma dos dias)",
          "📅 Dias no lucro " + str(pos_days) + " de " + str(len(days)) + " · 🎯 meta batida " + str(hit) + " · 🛑 limite " + str(lim),
          "📊 Fechamentos " + str(n) + (" · no lucro " + format(tt.get("wins", 0) / n * 100, ".0f") + "%" if n else "") +
          " · taxas pagas " + format(tt.get("fees", 0), ".2f") + " USD",
@@ -1194,13 +1194,14 @@ def keyboard():
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
     rows.append([{"text": "🧪 Backtest " + ASSET + " 30 dias", "callback_data": "bfm_bt"},
                  {"text": "🧪 Backtest " + ASSET + " 2 meses", "callback_data": "bfm_bt60"}])
+    rows.append([{"text": "🧪 Backtest " + ASSET + " 4 meses", "callback_data": "bfm_bt120"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
-            "/aovivo", "bfm_bt", "bfm_bt60", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
+            "/aovivo", "bfm_bt", "bfm_bt60", "bfm_bt120", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
             "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
             "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol", "bfm_opt_sol", "bfm_opt_btc", "bfm_opt_eth",
             "bfm_use_demo", "bfm_use_real"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
@@ -1246,7 +1247,8 @@ def handle(action, send, chat, run_async):
              if best else "Rode primeiro um 🔬 Otimizar.", keyboard())
     elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
-        days = 90 if ("90" in action or action.endswith("_3m")) else (60 if "60" in action else BT_DAYS)
+        days = (120 if "120" in action else 90 if ("90" in action or action.endswith("_3m")) else
+                60 if "60" in action else BT_DAYS)
         asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else ASSET)
         only = "short" if action.startswith("bfm_bts") else None
         plan = DYN_PLAN if action.startswith("bfm_btd") else None
