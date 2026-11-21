@@ -46,13 +46,11 @@ LOSS_ADDS = 4                   # "it will come back": up to 4 orders more to ki
 LOSS_TRIGGER = 0.0025           # ... once the orders are -0.25% (= the "-5 pips")
 LOSS_STEP = 0.005               # ... each one at least 0.5% beyond the previous order (= "10 pips")
 LOSS_STEP_GROW = 0.5            # ... growing 50% each time: 0.5%, 0.75%, 1.0%, 1.25%
-# owner, Nov 21: two targets over the average price - at +0.40% it closes HALF (profit guaranteed) and the other half
-# looks for +1%; if the price comes back to +0.20% the rest is closed (still in profit after the fees)
-TP1_PCT = 0.004
-TP1_FRAC = 0.5
-TP2_PCT = 0.01
-TP_BACK = 0.002
-BASKET_TP_PCT = TP1_PCT
+# owner, Nov 21 (latest): the 1st order alone closes at +1% over its price; once there are more orders (recovery /
+# "it will win"), everything closes together at +5% over the average price
+TP_ONE = 0.01
+TP_MANY = 0.05
+BASKET_TP_PCT = TP_ONE
 SAFE_FROM, SAFE_CUT = 500.0, 0.5   # from US$ 500 the risk is cut by 50%
 GRID_MAX = 1 + 1 + LOSS_ADDS    # at most 6 orders together
 STRONG_ATR = 1.5                # strong move: >= 1.5 ATR(1 h) in 6 h, on that side of the 1 h EMA50
@@ -145,11 +143,12 @@ def _load(mode):
         d.pop("total", None); d.pop("last_close", None)
         if legacy and mode == "real":
             d["legacy_pos"] = legacy
-    if mode in MODES and d.get("tp_v") != 2:
-        # owner, Nov 21: only the demo/real robot with the two targets (+0.40% half / +1% rest): no optimizer variant
-        d.update(tp_v=2, cfg=None, cfg_name=None)
+    if mode in MODES and d.get("tp_v") != 3:
+        # owner, Nov 21: targets +1% (1 order) / +5% (more orders) over the average price; no optimizer variant
+        d.update(tp_v=3, cfg=None, cfg_name=None)
         if d.get("pos"):
-            d["pos"]["tp"] = TP1_PCT
+            d["pos"].pop("tp", None)
+            d["pos"].pop("half", None)
     if d.get("lev_v") != 40:                 # owner, Nov 20: both accounts switch to 40x once (the buttons still work)
         d["leverage"], d["lev_v"] = DEFAULT_LEVERAGE, 40
     return d
@@ -339,20 +338,18 @@ def px(p):
     return format(p, ",.2f") if p < 1000 else format(p, ",.0f")
 
 
-def tp2_price(pos):
-    return pos["entry"] * (1 + TP2_PCT * _sgn(pos))
+def basket_tp(pos):
+    """+1% with the 1st order alone, +5% over the average price once there are more orders."""
+    return TP_ONE if pos.get("n", 1) <= 1 else TP_MANY
 
 
 def tp_text(pos):
-    if pos.get("half"):
-        return ("metade já fechada · resto em $" + px(tp2_price(pos)) + " (+" + format(TP2_PCT * 100, ".0f") +
-                "%) ou volta a +" + format(TP_BACK * 100, ".2f") + "%")
-    return ("metade em $" + px(tp_price(pos)) + " (+" + format(pos.get("tp", TP1_PCT) * 100, ".2f") + "%) · resto em $" +
-            px(tp2_price(pos)) + " (+" + format(TP2_PCT * 100, ".0f") + "%)")
+    return ("fecha tudo em $" + px(tp_price(pos)) + " (+" + format(basket_tp(pos) * 100, ".0f") + "% sobre " +
+            ("a entrada" if pos.get("n", 1) <= 1 else "o preço médio das " + str(pos.get("n", 1)) + " ordens") + ")")
 
 
 def tp_price(pos):
-    return pos["entry"] * (1 + pos.get("tp", BASKET_TP_PCT) * _sgn(pos))
+    return pos["entry"] * (1 + basket_tp(pos) * _sgn(pos))
 
 
 def next_grid_price(pos):
@@ -601,17 +598,11 @@ def cycle(mode, send, chat, now=None, klines=None):
                          format(d["reserve"], ".2f") + _tx(pos.get("signature")))
             why = ""
             cf = CFG.get(mode) or {}
-            if not pos.get("half") and bp >= pos.get("tp", TP1_PCT):
-                why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO: fechei METADE"
-                pnl, sig = _close(d, price, why, now, frac=TP1_FRAC)
-                _save(d)
-                send(chat, close_text(d, why, price, pos["entry"], pos) + "\n➡️ A outra metade busca $" + px(tp2_price(pos)) +
-                     " (+" + format(TP2_PCT * 100, ".0f") + "%)" + _tx(sig))
-                return "fechou metade"
-            if pos.get("half") and bp >= TP2_PCT:
-                why = "🎯🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO: fechei o resto (2º alvo)"
-            elif pos.get("half") and bp <= TP_BACK:
-                why = "🔒 Voltou a +" + format(bp * 100, ".2f") + "%: fechei o resto no lucro"
+            if bp >= basket_tp(pos):
+                why = ("🎯 +" + format(bp * 100, ".2f") + "% SOBRE A ENTRADA (1 ordem: alvo +" + format(TP_ONE * 100, ".0f") + "%)"
+                       if pos.get("n", 1) <= 1 else
+                       "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO (" + str(pos.get("n", 1)) + " ordens: alvo +" +
+                       format(TP_MANY * 100, ".0f") + "%)")
             elif bp <= -LIQ_GUARD / effective_lev(pos):
                 why = "🛑 PROTEÇÃO (perto da liquidação)"
             elif cf.get("stop") and bp <= -cf["stop"]:
@@ -1078,9 +1069,8 @@ def live_text(mode, price, now=None, track=None):
               "% da garantia) — já com as taxas",
               "💵 Bruto " + format(gross, "+.2f") + " · taxas −" + format(fees, ".2f") + " · " + ASSET + " " + format(move, "+.2f") +
               "% desde o preço médio (" + ("a favor" if move * _sgn(pos) > 0 else "contra") + ")",
-              "🎯 " + tp_text(pos) + " (falta " + format(((tp2_price(pos) if pos.get("half") else tp) / price - 1) * 100, "+.2f") + "%)" +
-              ("" if pos.get("half") else (" · ➕ próxima recuperação em $" + px(nxt) if pos.get("loss_adds", 0) < LOSS_ADDS
-                                           else " · recuperação completa"))]
+              "🎯 " + tp_text(pos) + " (falta " + format((tp / price - 1) * 100, "+.2f") + "%)" +
+              (" · ➕ próxima recuperação em $" + px(nxt) if pos.get("loss_adds", 0) < LOSS_ADDS else " · recuperação completa")]
         lo, hi = (nxt, tp) if pos.get("side") == "long" else (tp, nxt)
         if hi > lo:
             k = int(round(max(0.0, min(1.0, (price - lo) / (hi - lo))) * 14))
@@ -1178,8 +1168,8 @@ def status_text():
          "das ordens está acabando. Opera O TEMPO TODO: fechou, já abre a próxima ordem "
          "(para o lado do movimento forte ou da leitura do gráfico), com 30% da conta. Vai ganhar: +1 ordem com 50%. "
          "Vai voltar (perdendo e o gráfico virou): até " + str(LOSS_ADDS) + " ordens a mais, cada vez mais distantes. "
-         "Com +" + format(TP1_PCT * 100, ".2f") + "% sobre o preço médio fecha METADE (lucro garantido); a outra metade busca +" +
-         format(TP2_PCT * 100, ".0f") + "% (se voltar a +" + format(TP_BACK * 100, ".2f") + "%, fecha o resto no lucro). "
+         "A 1ª ordem sozinha fecha com +" + format(TP_ONE * 100, ".0f") + "%; com mais ordens abertas, fecha tudo junto com +" +
+         format(TP_MANY * 100, ".0f") + "% sobre o preço médio. "
          "Para no dia com +" + format(TARGET_PROFIT, ".0f") + " (ou com −" + format(START_TOTAL * MAX_LOSS, ".0f") +
          "). Recomeça todo dia às 00:00 UTC.",
          "", account_text("demo"), "", account_text("real")]
@@ -1300,7 +1290,7 @@ def handle(action, send, chat, run_async):
             d["on"] = False
             _save(d)
         send(chat, "⏸️ " + NAME[mode] + " desligada: não abre ordens novas." +
-             (" As ordens abertas continuam até os alvos (+" + format(TP1_PCT * 100, ".2f") + "% / +" + format(TP2_PCT * 100, ".0f") + "%); toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
+             (" As ordens abertas continuam até o alvo (+" + format(TP_ONE * 100, ".0f") + "% com 1 ordem / +" + format(TP_MANY * 100, ".0f") + "% com mais); toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
     elif action.startswith("bfm_close_"):
         mode = action[10:]
 
