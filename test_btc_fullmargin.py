@@ -68,11 +68,11 @@ class Basket(unittest.TestCase):
     def test_close_leaves_profit_after_fees(self):
         pos = self.short()
         win = bfm.pnl_usd(pos, bfm.tp_price(pos))
-        self.assertGreater(win, 0)                                         # +0.40% beats the ~0.12% fees
-        self.assertAlmostEqual(bfm.tp_price(pos), 99.6)
-        self.assertAlmostEqual(bfm.tp_price(self.short(side="long")), 100.4)
-        self.assertAlmostEqual(bfm.tp2_price(pos), 99.0)                  # the rest at +1%
-        self.assertGreater(bfm.pnl_usd(pos, pos["entry"] * (1 - bfm.TP_BACK)), 0)   # back to +0.20%: still profit
+        self.assertGreater(win, 0)                                         # +1% beats the ~0.12% fees
+        self.assertAlmostEqual(bfm.tp_price(pos), 99.0)                   # 1 order: +1%
+        self.assertAlmostEqual(bfm.tp_price(self.short(side="long")), 101.0)
+        self.assertAlmostEqual(bfm.tp_price(self.short(n=3)), 95.0)       # more orders: +5% over the average price
+        self.assertAlmostEqual(bfm.tp_price(self.short(side="long", n=2)), 105.0)
 
     def test_recovery_orders_get_further_apart(self):
         self.assertAlmostEqual(bfm.next_grid_price(self.short()), 100.5)
@@ -161,42 +161,23 @@ class Cycle(Base):
         self.assertEqual((pos["n"], pos["loss_adds"]), (2, 1))
         self.assertAlmostEqual(pos["collateral_usd"], 30.0 + 70.0 / 4)     # the rest of the capital split in 4
         self.assertIn("VAI VOLTAR 1/4", self.msgs[-1])
-        back = cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]
-        self.assertEqual(self.cyc(back), "fechou metade")                  # +0.40%: half closed
-        d = bfm._load("demo")
-        self.assertTrue(d["pos"]["half"])
-        self.assertAlmostEqual(d["pos"]["collateral_usd"], (30.0 + 70.0 / 4) / 2)
-        self.assertGreater(d["capital"], 100.0)                           # profit after the fees
-        self.assertIn("2 ordem(ns)", self.msgs[-1])
-        self.assertIn("METADE", self.msgs[-1])
-        far = cs[:-1] + [dict(cs[-1], c=bfm.tp2_price(pos) * 0.999)]
-        self.assertEqual(self.cyc(far), "fechou")                          # +1%: the rest
-        d = bfm._load("demo")
-        self.assertIsNone(d["pos"])
-        self.assertIn("2º alvo", self.msgs[-1])
-        self.assertEqual(d["total"]["trades"], 2)
-
-    def test_rest_is_closed_in_profit_if_the_price_comes_back(self):
-        cs = candles()
-        pos = self._open_short(cs)
-        hit = cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]
-        self.assertEqual(self.cyc(hit), "fechou metade")
-        cap = bfm._load("demo")["capital"]
-        back = cs[:-1] + [dict(cs[-1], c=pos["entry"] * (1 - bfm.TP_BACK * 0.9))]
+        near = cs[:-1] + [dict(cs[-1], c=pos["entry"] * 0.99)]             # +1% over the average: not enough with 2 orders
+        with patch.object(bfm, "read_chart", return_value=(0, 10.0, "leitura 0")):
+            self.assertEqual(self.cyc(near), "posição aberta")
+        back = cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]       # +5% over the average price
         self.assertEqual(self.cyc(back), "fechou")
         d = bfm._load("demo")
         self.assertIsNone(d["pos"])
-        self.assertGreater(d["capital"], cap)                             # the rest also in profit
-        self.assertIn("Voltou", self.msgs[-1])
+        self.assertGreater(d["capital"], 100.0)                           # profit after the fees
+        self.assertIn("2 ordem(ns)", self.msgs[-1])
+        self.assertIn("alvo +5%", self.msgs[-1])
 
-    def test_no_adds_after_half_is_closed(self):
+    def test_first_order_alone_closes_at_1pct(self):
         cs = candles()
         pos = self._open_short(cs)
-        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]), "fechou metade")
-        mid = self._next_candle(cs, pos["entry"] * 0.995, open_=pos["entry"] * 0.994)
-        with patch.object(bfm, "read_chart", return_value=(-9, 10.0, "leitura -9")):
-            self.assertEqual(self.cyc(mid), "posição aberta")
-        self.assertEqual(bfm._load("demo")["pos"]["n"], 1)
+        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 0.995)]), "posição aberta")   # +0.5%: waits
+        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 0.9899)]), "fechou")
+        self.assertIn("alvo +1%", self.msgs[-1])
 
     def test_no_recovery_while_the_market_keeps_going_against(self):
         cs = candles()
