@@ -564,7 +564,9 @@ class Backtest(Base):
             bfm.handle("bfm_bt_eth", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt60", self.send, "1", lambda fn: fn())
-        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET), (60, bfm.ASSET)])
+            bfm.handle("bfm_bt120", self.send, "1", lambda fn: fn())
+        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET), (60, bfm.ASSET), (120, bfm.ASSET)])
+        self.assertIn("bfm_bt120", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertIn("— SOL", bfm.backtest_text({"days": [], "total": {}}, 40, 30, "SOL"))
         self.assertIn("bfm_bt", bfm.ACTIONS)
 
