@@ -67,6 +67,23 @@ ALWAYS_IN = os.getenv("BTCFM_ALWAYS_IN", "true").strip().lower() != "false"   # 
 LIQ_GUARD = 0.6                 # closes everything at 60% of the way to the liquidation price
 
 
+# owner, Nov 21: the MT5 FullMargin v4.33 strategy, to test in the backtest on SOL (1 pip of the MT5 robot on crypto
+# = 0.01% of the price): 1st order 30%; winning (+2 pips, reading in favour) one more order per candle with 10% of the
+# account until 65% in margin; no recovery orders, no stop; losing (-5 pips) it CUTS 25% of the size at each 3-pip
+# bounce (max 6 cuts); risk -50% every US$ 200 of balance; take profit +3% over the average price (owner's choice)
+MT5_CFG = {"tp": 0.03, "adds": False, "entry": "score", "win_pct": 0.10, "win_max": 0.65, "win_trigger": 0.0002,
+           "cut_from": 0.0005, "cut_retrace": 0.0003, "cut_pct": 0.25, "cut_max": 6, "risk_step": 200.0,
+           "no_reserve": True}
+
+
+def risk_factor(capital, cf):
+    """MT5 v4.33: the risk halves every `risk_step` of balance (200 -> 50%, 400 -> 25%...), never below 10%."""
+    step = (cf or {}).get("risk_step")
+    if not step:
+        return 1.0
+    return max(0.1, 0.5 ** int(capital // step))
+
+
 def risk_cut(capital):
     """1.0 below US$ 500, 0.5 from US$ 500 (the risk is cut by half)."""
     return SAFE_CUT if capital >= SAFE_FROM else 1.0
@@ -342,7 +359,10 @@ def px(p):
 
 
 def basket_tp(pos):
-    """+1% with the 1st order alone, +5% over the average price once there are more orders."""
+    """+1% with the 1st order alone, +5% over the average price once there are more orders (a backtest strategy
+    variant can set its own target in pos["tp"])."""
+    if pos.get("tp"):
+        return pos["tp"]
     return TP_ONE if pos.get("n", 1) <= 1 else TP_MANY
 
 
@@ -448,7 +468,7 @@ def _open(d, price, side, why, col=None, now=None, lev=None):
     else:
         pos = {"side": side, "entry": onchain_avg or price, "size_usd": add, "collateral_usd": col, "n": 1,
                "last": price, "opened": t, "why": why, "win_added": False, "loss_adds": 0, "lev": lev, "asset": ASSET,
-               "tp": (CFG.get(d["mode"]) or {}).get("tp", BASKET_TP_PCT)}
+               "tp": (CFG.get(d["mode"]) or {}).get("tp")}
         d["pos"] = pos
     if sig:
         pos["signature"] = sig
@@ -457,7 +477,7 @@ def _open(d, price, side, why, col=None, now=None, lev=None):
     return pos
 
 
-def _close(d, price, why, now=None, frac=1.0):
+def _close(d, price, why, now=None, frac=1.0, half=True):
     """Closes the orders (frac < 1: only that part, e.g. half at the 1st target). The result after the fees goes into
     the account; lifetime totals and the curve are updated."""
     full = d["pos"]
@@ -517,11 +537,13 @@ def _close(d, price, why, now=None, frac=1.0):
                                                  "why": why, "t": tnow,
                                                  "held_h": round((tnow - pos.get("opened", tnow)) / 3600, 1)}]
     if part:
-        full.update(size_usd=full["size_usd"] - pos["size_usd"], collateral_usd=full["collateral_usd"] - pos["collateral_usd"],
-                    half=True)
+        full.update(size_usd=full["size_usd"] - pos["size_usd"], collateral_usd=full["collateral_usd"] - pos["collateral_usd"])
+        if half:
+            full["half"] = True
     else:
         d["pos"] = None
-        d["last_bank"] = bank_profit(d)
+        if not (CFG.get(d["mode"]) or {}).get("no_reserve"):
+            d["last_bank"] = bank_profit(d)
     return net, sig
 
 
@@ -604,7 +626,8 @@ def cycle(mode, send, chat, now=None, klines=None):
             return d["done_why"]
         if pos:
             bp = basket_pct(pos, price)
-            if d["on"] and d.get("reserve", 0.0) >= 2 and bp <= -TOPUP_AT / effective_lev(pos):
+            cf = CFG.get(mode) or {}
+            if d["on"] and not cf.get("no_reserve") and d.get("reserve", 0.0) >= 2 and bp <= -TOPUP_AT / effective_lev(pos):
                 try:
                     amt = topup(d, price, now)
                 except Exception as exc:
@@ -618,7 +641,9 @@ def cycle(mode, send, chat, now=None, klines=None):
                          format(d["reserve"], ".2f") + _tx(pos.get("signature")))
             why = ""
             cf = CFG.get(mode) or {}
-            if bp >= basket_tp(pos):
+            if pos.get("tp") and bp >= pos["tp"]:
+                why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO (alvo +" + format(pos["tp"] * 100, ".1f") + "%)"
+            elif bp >= basket_tp(pos):
                 why = ("🎯 +" + format(bp * 100, ".2f") + "% SOBRE A ENTRADA (1 ordem: alvo +" + format(TP_ONE * 100, ".0f") + "%)"
                        if pos.get("n", 1) <= 1 else
                        "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO (" + str(pos.get("n", 1)) + " ordens: alvo +" +
@@ -634,6 +659,18 @@ def cycle(mode, send, chat, now=None, klines=None):
                 _save(d)
                 send(chat, close_text(d, why, price, pos["entry"], pos) + _tx(sig))
                 return "fechou"
+            if cf.get("cut_pct"):                        # MT5 v4.33: losing -> cut part of the size at each bounce
+                pos["worst"] = min(pos.get("worst", bp), bp)
+                if (pos.get("cuts", 0) < cf["cut_max"] and pos["worst"] <= -cf["cut_from"] and bp < 0 and
+                        bp >= pos["worst"] + cf["cut_retrace"]):
+                    pos["cuts"] = pos.get("cuts", 0) + 1
+                    why = "✂️ CORTE DE PERDA " + str(pos["cuts"]) + "/" + str(cf["cut_max"]) + " no repique (" + \
+                          format(bp * 100, "+.2f") + "%; pior " + format(pos["worst"] * 100, "+.2f") + "%)"
+                    pos["worst"] = bp
+                    pnl, sig = _close(d, price, why, now, frac=cf["cut_pct"], half=False)
+                    _save(d)
+                    send(chat, close_text(d, why, price, pos["entry"], pos) + _tx(sig))
+                    return "corte"
             # MT5 FullMargin_7_2 adds, once per closed 5-minute candle, with the chart reading in favour
             if d["on"] and not d["done_why"] and not pos.get("half") and closed[-1]["t"] != d.get("last_bar"):
                 d["last_bar"] = closed[-1]["t"]
@@ -643,7 +680,14 @@ def cycle(mode, send, chat, now=None, klines=None):
                 turning = (closed[-1]["c"] - closed[-1]["o"]) * sg > 0
                 add, label, plan = 0.0, "", LEV_PLAN.get(mode)
                 add_lev = None
-                if not pos.get("win_added") and bp >= WIN_TRIGGER and in_favor:
+                rf = risk_factor(d["capital"], cf)
+                room = d["capital"] * cf.get("win_max", 0) * rf - pos["collateral_usd"]
+                win_add = min(d["capital"] * cf.get("win_pct", 0) * rf, room, free_capital(d))
+                if cf.get("win_max"):                    # MT5 v4.33: one more order per candle while winning, up to 65%
+                    if pos.get("loss_adds", 0) == 0 and bp >= cf["win_trigger"] and in_favor and win_add >= 2:
+                        add, label = win_add, "VAI GANHAR " + str(pos.get("win_adds", 0) + 1)
+                        pos["win_adds"] = pos.get("win_adds", 0) + 1
+                elif not pos.get("win_added") and bp >= WIN_TRIGGER and in_favor:
                     add_lev = plan["win"] if plan else None
                     add, label = free_capital(d) * WIN_ADD_PCT * risk_cut(d["capital"]), "VAI GANHAR (+50%)"
                     pos["win_added"] = True
@@ -686,7 +730,12 @@ def cycle(mode, send, chat, now=None, klines=None):
         sdir, move = strong_move(closed)
         LAST.update(score=score, reading=reading, strong=sdir, move=round(move, 2))
         cf = CFG.get(mode) or {}
-        if cf.get("entry") == "trend":                 # optimizer variant: only with a strong move, to its side
+        if cf.get("entry") == "score":                 # MT5 v4.33: reading of the chart >= 4 to one side
+            if abs(score) < ADD_SCORE:
+                _save(d)
+                return "sem sinal (" + reading + ")"
+            side_dir, factor = (1 if score > 0 else -1), risk_factor(d["capital"], cf)
+        elif cf.get("entry") == "trend":                 # optimizer variant: only with a strong move, to its side
             if not sdir:
                 _save(d)
                 return "sem tendência forte"
@@ -868,6 +917,12 @@ def backtest_text(d, leverage, span_days=BT_DAYS, asset="BTC"):
          "🏆 Melhor fechamento " + format(tt.get("best", 0), "+.2f") + " · pior " + format(tt.get("worst", 0), "+.2f"),
          "⏱️ Maior tempo com ordens abertas: " + format(held, ".0f") + " h" +
          (" (sem stop por ordem: ficou esperando o preço voltar e o dia não virou nesse tempo)" if held > 24 else "")]
+    if "MT5" in asset:                                # owner, Nov 21: the MT5 FullMargin v4.33 strategy
+        L[0] = "🧪 BACKTEST " + str(span_days) + " DIAS — " + asset + " · " + str(leverage) + "x"
+        L[1] = ("Cada dia começa com US$ " + format(CAPITAL_USD, ".0f") + " (sem reserva de margem) · 1ª ordem 30% · ganhando, "
+                "+1 ordem de 10% por candle até 65% · perdendo, corta 25% do lote a cada repique (até 6) · sem stop · "
+                "alvo +" + format(MT5_CFG["tp"] * 100, ".0f") + "% sobre o preço médio · risco −50% a cada US$ 200. "
+                "Candles reais de 5 min, taxas da Jupiter incluídas (cada corte conta como um fechamento).")
     if days:
         best = max(days, key=lambda x: x["result"])
         worst = min(days, key=lambda x: x["result"])
@@ -896,7 +951,7 @@ def backtest_png(d, days=BT_DAYS, asset="BTC"):
     return demo_report.chart_png([("Backtest " + asset + " " + str(days) + " dias (resultado acumulado)", CAPITAL_USD, curve, color)])
 
 
-def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, plan=None):
+def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, plan=None, cfg=None):
     if BT["running"]:
         send(chat, "⏳ O backtest já está rodando, espera o resultado.")
         return
@@ -907,7 +962,7 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, pla
         cs = klines_history(days, asset)
         keep = dict(LAST)                             # the robot screen keeps showing its own price
         try:
-            d = backtest(cs, leverage, only=only, plan=plan)
+            d = backtest(cs, leverage, only=only, plan=plan, cfg=cfg)
         finally:
             LAST.clear()
             LAST.update(keep)
@@ -918,7 +973,8 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, pla
         except Exception as exc:
             logging.warning("btc backtest chart: %s", type(exc).__name__)
         span = max(1, round((cs[-1]["t"] - cs[800]["t"]) / 86400))
-        tag = asset + (" SÓ VENDA" if only == "short" else "")
+        tag = asset + (" SÓ VENDA" if only == "short" else "") + (" · ESTRATÉGIA DO MT5 v4.33 (alvo +" +
+                                                                   format(cfg["tp"] * 100, ".0f") + "%)" if cfg is MT5_CFG else "")
         if plan:
             tag += " · ALAVANCAGEM DINÂMICA " + str(plan["first"]) + "x → " + "/".join(str(x) for x in plan["loss"]) + \
                    "x perdendo, " + str(plan["win"]) + "x ganhando"
@@ -1221,13 +1277,17 @@ def keyboard():
                  {"text": "🧪 Backtest " + ASSET + " 2 meses", "callback_data": "bfm_bt60"}])
     rows.append([{"text": "🧪 Backtest " + ASSET + " 4 meses", "callback_data": "bfm_bt120"},
                  {"text": "🧪 Backtest " + ASSET + " 1 ano", "callback_data": "bfm_bt365"}])
+    rows.append([{"text": "🤖 SOL estratégia MT5 30 dias", "callback_data": "bfm_btm_sol"},
+                 {"text": "🤖 SOL MT5 3 meses", "callback_data": "bfm_btm90_sol"},
+                 {"text": "🤖 SOL MT5 1 ano", "callback_data": "bfm_btm365_sol"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
-            "/aovivo", "bfm_bt", "bfm_bt60", "bfm_bt120", "bfm_bt365", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
+            "/aovivo", "bfm_bt", "bfm_bt60", "bfm_bt120", "bfm_bt365", "bfm_btm_sol",
+            "bfm_btm90_sol", "bfm_btm365_sol", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
             "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
             "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol", "bfm_opt_sol", "bfm_opt_btc", "bfm_opt_eth",
             "bfm_use_demo", "bfm_use_real"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
@@ -1278,7 +1338,8 @@ def handle(action, send, chat, run_async):
         asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else ASSET)
         only = "short" if action.startswith("bfm_bts") else None
         plan = DYN_PLAN if action.startswith("bfm_btd") else None
-        run_async(lambda: run_backtest(send, chat, lev, days, asset, only, plan))
+        cfg = MT5_CFG if action.startswith("bfm_btm") else None
+        run_async(lambda: run_backtest(send, chat, lev, days, asset, only, plan, cfg))
     elif action in ("bfm_res", "/resultados_btc"):
         def go():
             try:
