@@ -324,6 +324,36 @@ class OnlySol(Base):
         self.assertNotIn("legacy_pos", bfm._load("real"))
 
 
+class Bank(Base):
+    def test_every_100_of_profit_goes_to_the_reserve(self):
+        d = bfm._load("demo")
+        d.update(day=bfm.today(NOW), capital=150.0, reserve=200.0)
+        self.assertEqual(bfm.bank_profit(d), 0.0)                         # +50: nothing yet
+        d["capital"] = 215.0                                              # +115 in the day
+        self.assertEqual(bfm.bank_profit(d), 100.0)
+        self.assertEqual((d["capital"], d["reserve"], d["banked"]), (115.0, 300.0, 100.0))
+        self.assertEqual(bfm.bank_profit(d), 0.0)                         # the same 100 only once
+        d["capital"] = 205.0                                              # +205 in the day
+        self.assertEqual(bfm.bank_profit(d), 100.0)
+        self.assertEqual((d["reserve"], d["banked"]), (400.0, 200.0))
+        self.assertAlmostEqual(bfm.day_result(d), 205.0)                  # moving money does not change the result
+
+    def test_close_banks_and_says_so(self):
+        d = bfm._load("demo")
+        d.update(day=bfm.today(NOW), capital=210.0, reserve=200.0,
+                 pos={"side": "short", "entry": 100.0, "size_usd": 500.0, "collateral_usd": 50.0, "n": 1, "last": 100.0})
+        bfm._close(d, 99.0, "🎯 ALVO", now=NOW)
+        self.assertEqual((d["reserve"], d["banked"]), (300.0, 100.0))
+        self.assertIn("Guardei US$ 100", bfm.close_text(d, "🎯 ALVO", 99.0, 100.0))
+
+    def test_new_day_resets_the_bank(self):
+        d = bfm._load("demo")
+        d.update(day="2000-01-01", banked=200.0, reserve=400.0, capital=120.0)
+        bfm.new_day(d, NOW)
+        self.assertEqual((d["banked"], d["reserve"], d["capital"]), (0.0, bfm.RESERVE_USD, bfm.CAPITAL_USD))
+        self.assertEqual(d["days"][-1]["banked"], 200.0)
+
+
 class Results(Base):
     def close_one(self, exit_price, mode="demo"):
         d = bfm._load(mode)
@@ -565,7 +595,8 @@ class Backtest(Base):
             bfm.handle("bfm_bt", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt60", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt120", self.send, "1", lambda fn: fn())
-        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET), (60, bfm.ASSET), (120, bfm.ASSET)])
+            bfm.handle("bfm_bt365", self.send, "1", lambda fn: fn())
+        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET), (60, bfm.ASSET), (120, bfm.ASSET), (365, bfm.ASSET)])
         self.assertIn("bfm_bt120", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertIn("— SOL", bfm.backtest_text({"days": [], "total": {}}, 40, 30, "SOL"))
         self.assertIn("bfm_bt", bfm.ACTIONS)

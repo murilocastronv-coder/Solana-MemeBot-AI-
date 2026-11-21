@@ -37,6 +37,7 @@ START_TOTAL = CAPITAL_USD + RESERVE_USD
 TARGET_PROFIT = TARGET_USD - CAPITAL_USD          # day target: +200 (the old "100 -> 300")
 TOPUP_USD = 50.0                # margin added each time
 TOPUP_AT = 0.35                 # ... when the orders lost 35% of the way to the liquidation (the guard closes at 60%)
+BANK_STEP = 100.0               # owner, Nov 21: every US$ 100 of profit in the day goes to the reserve (future margin)
 # owner, Nov 20: the MT5 FullMargin_7_2 strategy in % of the BTC price (no pips on BTC). The Jupiter fees are ~0.12%
 # of the position (open + close), so every exit is sized to leave profit AFTER the fees.
 FIRST_PCT = 0.30                # 1st order: 30% of the account as collateral
@@ -169,10 +170,11 @@ def _save(d):
 def new_day(d, now=None):
     """Starts the day: capital back to US$ 100, counters reset, target/limit unlocked."""
     if d["day"]:
-        d["days"] = (d.get("days") or [])[-(119 if d["mode"] == "bt" else 29):] + [{"day": d["day"], "end": round(d["capital"], 2),
+        d["days"] = (d.get("days") or [])[-(399 if d["mode"] == "bt" else 29):] + [{"day": d["day"], "end": round(d["capital"], 2),
                                                      "result": round(d["capital"] + d.get("reserve", 0.0) - START_TOTAL, 2),
+                                                     "banked": round(d.get("banked", 0.0), 2),
                                                      "why": d.get("done_why") or ""}]
-    d.update(day=today(now), capital=CAPITAL_USD, reserve=RESERVE_USD, injected=0.0, done_why="", wins=0, losses=0, trades=0, consec=0,
+    d.update(day=today(now), capital=CAPITAL_USD, reserve=RESERVE_USD, injected=0.0, banked=0.0, last_bank=0.0, done_why="", wins=0, losses=0, trades=0, consec=0,
              pause_until=0, last_bar=0, last_entry=0)
 
 
@@ -377,6 +379,19 @@ def day_result(d, price=None, now=None):
     return total_value(d, price, now) - START_TOTAL
 
 
+def bank_profit(d):
+    """Every US$ 100 of profit in the day leaves the trading money and goes to the reserve, which is used as margin
+    when the orders need it. Returns the amount moved now."""
+    moved = 0.0
+    while (d["capital"] + d.get("reserve", 0.0) - START_TOTAL >= d.get("banked", 0.0) + BANK_STEP and
+           d["capital"] - BANK_STEP >= CAPITAL_USD * 0.5):
+        d["capital"] -= BANK_STEP
+        d["reserve"] = round(d.get("reserve", 0.0) + BANK_STEP, 2)
+        d["banked"] = round(d.get("banked", 0.0) + BANK_STEP, 2)
+        moved += BANK_STEP
+    return moved
+
+
 def topup(d, price, now=None):
     """Adds margin (collateral, no size) to the open orders from the reserve. Returns the amount added."""
     pos = d.get("pos")
@@ -445,6 +460,7 @@ def _close(d, price, why, now=None, frac=1.0):
     """Closes the orders (frac < 1: only that part, e.g. half at the 1st target). The result after the fees goes into
     the account; lifetime totals and the curve are updated."""
     full = d["pos"]
+    d["last_bank"] = 0.0
     part = frac < 1.0
     pos = dict(full, size_usd=full["size_usd"] * frac, collateral_usd=full["collateral_usd"] * frac) if part else full
     sig = None
@@ -504,6 +520,7 @@ def _close(d, price, why, now=None, frac=1.0):
                     half=True)
     else:
         d["pos"] = None
+        d["last_bank"] = bank_profit(d)
     return net, sig
 
 
@@ -520,6 +537,8 @@ def close_text(d, why, price, entry, pos=None):
             "\n💼 Saldo total: US$ " + format(d["capital"] + d.get("reserve", 0.0), ".2f") + " (operando " +
             format(d["capital"], ".2f") + " + reserva " + format(d.get("reserve", 0.0), ".2f") + " · hoje " +
             format(d["capital"] + d.get("reserve", 0.0) - START_TOTAL, "+.2f") + ")" +
+            ("\n🏦 Guardei US$ " + format(d["last_bank"], ".0f") + " do lucro na reserva (vira margem) · reserva US$ " +
+             format(d.get("reserve", 0.0), ".2f") if d.get("last_bank") else "") +
             "\n📈 Total desde o início: " + format(tot["net"], "+.2f") + " USD em " + str(tot["trades"]) + " operações (" +
             format(tot["wins"] / tot["trades"] * 100, ".0f") + "% no lucro)")
 
@@ -837,7 +856,8 @@ def backtest_text(d, leverage, span_days=BT_DAYS, asset="BTC"):
     held = max((h.get("held_h", 0) for h in hist), default=0)
     L = ["🧪 BACKTEST " + str(span_days) + " DIAS — " + asset + " (estratégia atual do Full Margin, " + str(leverage) + "x)",
          "Cada dia: US$ " + format(START_TOTAL, ".0f") + " = opera com US$ " + format(CAPITAL_USD, ".0f") + " + US$ " +
-         format(RESERVE_USD, ".0f") + " de reserva (vira margem quando a margem acaba) · meta +" + format(TARGET_PROFIT, ".0f") +
+         format(RESERVE_USD, ".0f") + " de reserva (vira margem quando a margem acaba; cada US$ " + format(BANK_STEP, ".0f") +
+         " de lucro também vai para a reserva) · meta +" + format(TARGET_PROFIT, ".0f") +
          " · limite −" + format(START_TOTAL * MAX_LOSS, ".0f") + ". Candles reais de 5 min, taxas da Jupiter incluídas.",
          "",
          ("✅ LUCROU " if total > 0 else "❌ PERDEU ") + format(total, "+.2f") + " USD em " + str(span_days) + " dias (soma dos dias)",
@@ -882,7 +902,7 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, pla
     BT["running"] = True
     try:
         send(chat, "🧪 Backtest de " + str(days) + " dias do " + asset + " começou: baixando os candles de 5 min e rodando a estratégia "
-             "atual (" + str(leverage) + "x). Leva uns " + ("2–5" if days <= 30 else "5–15") + " minutos. Nenhuma ordem real.")
+             "atual (" + str(leverage) + "x). Leva uns " + ("2–5" if days <= 30 else "5–15" if days <= 120 else "15–30") + " minutos. Nenhuma ordem real.")
         cs = klines_history(days, asset)
         keep = dict(LAST)                             # the robot screen keeps showing its own price
         try:
@@ -906,6 +926,7 @@ def run_backtest(send, chat, leverage, days=BT_DAYS, asset="BTC", only=None, pla
         send(chat, "⛔ Backtest: " + str(exc)[:200], keyboard())
     finally:
         BT["running"] = False
+        BT_CACHE.clear()                              # 1 year = ~105k candles: free the chart readings (512 MB server)
 
 
 # ------------------------------------------------------------------ optimizer (owner, Nov 20)
@@ -1016,7 +1037,9 @@ def account_text(mode):
          format(START_TOTAL, ".0f") + " · 🎯 meta +" + format(TARGET_PROFIT, ".0f") + ")",
          "🛟 Reserva US$ " + format(d.get("reserve", 0.0), ".2f") + " de " + format(RESERVE_USD, ".0f") +
          (" · já adicionou US$ " + format(d.get("injected", 0.0), ".2f") + " de margem hoje" if d.get("injected") else
-          " · entra como margem quando a margem das ordens está acabando")]
+          " · entra como margem quando a margem das ordens está acabando") +
+         (" · 🏦 guardou US$ " + format(d.get("banked", 0.0), ".0f") + " do lucro" if d.get("banked") else
+          " · a cada US$ " + format(BANK_STEP, ".0f") + " de lucro guarda US$ " + format(BANK_STEP, ".0f") + " aqui")]
     prog = max(0.0, min(1.0, (eq - START_TOTAL) / TARGET_PROFIT))
     L.append("▕" + "█" * int(prog * 10) + "░" * (10 - int(prog * 10)) + "▏ " + format(prog * 100, ".0f") + "% da meta")
     tot = d["wins"] + d["losses"]
@@ -1165,7 +1188,8 @@ def status_text():
     L = [LABEL + " FULL MARGIN — Jupiter Perps · opera só " + ASSET + " · COMPRA e VENDA · preço médio",
          "Cada conta tem US$ " + format(START_TOTAL, ".0f") + " por dia: opera com US$ " + format(CAPITAL_USD, ".0f") + " e guarda US$ " +
          format(RESERVE_USD, ".0f") + " de reserva, que entra como MARGEM (US$ " + format(TOPUP_USD, ".0f") + " por vez) quando a margem "
-         "das ordens está acabando. Opera O TEMPO TODO: fechou, já abre a próxima ordem "
+         "das ordens está acabando; a cada US$ " + format(BANK_STEP, ".0f") + " de lucro no dia, guarda US$ " + format(BANK_STEP, ".0f") +
+         " na reserva. Opera O TEMPO TODO: fechou, já abre a próxima ordem "
          "(para o lado do movimento forte ou da leitura do gráfico), com 30% da conta. Vai ganhar: +1 ordem com 50%. "
          "Vai voltar (perdendo e o gráfico virou): até " + str(LOSS_ADDS) + " ordens a mais, cada vez mais distantes. "
          "A 1ª ordem sozinha fecha com +" + format(TP_ONE * 100, ".0f") + "%; com mais ordens abertas, fecha tudo junto com +" +
@@ -1194,14 +1218,15 @@ def keyboard():
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
     rows.append([{"text": "🧪 Backtest " + ASSET + " 30 dias", "callback_data": "bfm_bt"},
                  {"text": "🧪 Backtest " + ASSET + " 2 meses", "callback_data": "bfm_bt60"}])
-    rows.append([{"text": "🧪 Backtest " + ASSET + " 4 meses", "callback_data": "bfm_bt120"}])
+    rows.append([{"text": "🧪 Backtest " + ASSET + " 4 meses", "callback_data": "bfm_bt120"},
+                 {"text": "🧪 Backtest " + ASSET + " 1 ano", "callback_data": "bfm_bt365"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
-            "/aovivo", "bfm_bt", "bfm_bt60", "bfm_bt120", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
+            "/aovivo", "bfm_bt", "bfm_bt60", "bfm_bt120", "bfm_bt365", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
             "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
             "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol", "bfm_opt_sol", "bfm_opt_btc", "bfm_opt_eth",
             "bfm_use_demo", "bfm_use_real"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
@@ -1247,7 +1272,7 @@ def handle(action, send, chat, run_async):
              if best else "Rode primeiro um 🔬 Otimizar.", keyboard())
     elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
-        days = (120 if "120" in action else 90 if ("90" in action or action.endswith("_3m")) else
+        days = (365 if "365" in action else 120 if "120" in action else 90 if ("90" in action or action.endswith("_3m")) else
                 60 if "60" in action else BT_DAYS)
         asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else ASSET)
         only = "short" if action.startswith("bfm_bts") else None
