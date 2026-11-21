@@ -39,7 +39,13 @@ LOSS_ADDS = 4                   # "it will come back": up to 4 orders more to ki
 LOSS_TRIGGER = 0.0025           # ... once the orders are -0.25% (= the "-5 pips")
 LOSS_STEP = 0.005               # ... each one at least 0.5% beyond the previous order (= "10 pips")
 LOSS_STEP_GROW = 0.5            # ... growing 50% each time: 0.5%, 0.75%, 1.0%, 1.25%
-BASKET_TP_PCT = 0.0025          # CLOSE ALL at +0.25% over the average price (2x the 0.12% fees: profit after fees)
+# owner, Nov 21: two targets over the average price - at +0.40% it closes HALF (profit guaranteed) and the other half
+# looks for +1%; if the price comes back to +0.20% the rest is closed (still in profit after the fees)
+TP1_PCT = 0.004
+TP1_FRAC = 0.5
+TP2_PCT = 0.01
+TP_BACK = 0.002
+BASKET_TP_PCT = TP1_PCT
 SAFE_FROM, SAFE_CUT = 500.0, 0.5   # from US$ 500 the risk is cut by 50%
 GRID_MAX = 1 + 1 + LOSS_ADDS    # at most 6 orders together
 STRONG_ATR = 1.5                # strong move: >= 1.5 ATR(1 h) in 6 h, on that side of the 1 h EMA50
@@ -131,6 +137,11 @@ def _load(mode):
         d.pop("total", None); d.pop("last_close", None)
         if legacy and mode == "real":
             d["legacy_pos"] = legacy
+    if mode in MODES and d.get("tp_v") != 2:
+        # owner, Nov 21: only the demo/real robot with the two targets (+0.40% half / +1% rest): no optimizer variant
+        d.update(tp_v=2, cfg=None, cfg_name=None)
+        if d.get("pos"):
+            d["pos"]["tp"] = TP1_PCT
     if d.get("lev_v") != 40:                 # owner, Nov 20: both accounts switch to 40x once (the buttons still work)
         d["leverage"], d["lev_v"] = DEFAULT_LEVERAGE, 40
     return d
@@ -315,6 +326,23 @@ def basket_pct(pos, price):
     return (price - pos["entry"]) / pos["entry"] * _sgn(pos)
 
 
+def px(p):
+    """Price with cents below $1,000 (SOL), without above (BTC)."""
+    return format(p, ",.2f") if p < 1000 else format(p, ",.0f")
+
+
+def tp2_price(pos):
+    return pos["entry"] * (1 + TP2_PCT * _sgn(pos))
+
+
+def tp_text(pos):
+    if pos.get("half"):
+        return ("metade já fechada · resto em $" + px(tp2_price(pos)) + " (+" + format(TP2_PCT * 100, ".0f") +
+                "%) ou volta a +" + format(TP_BACK * 100, ".2f") + "%")
+    return ("metade em $" + px(tp_price(pos)) + " (+" + format(pos.get("tp", TP1_PCT) * 100, ".2f") + "%) · resto em $" +
+            px(tp2_price(pos)) + " (+" + format(TP2_PCT * 100, ".0f") + "%)")
+
+
 def tp_price(pos):
     return pos["entry"] * (1 + pos.get("tp", BASKET_TP_PCT) * _sgn(pos))
 
@@ -377,9 +405,12 @@ def _open(d, price, side, why, col=None, now=None, lev=None):
     return pos
 
 
-def _close(d, price, why, now=None):
-    """Closes the short. Result after the fees goes into the account; lifetime totals and the curve are updated."""
-    pos = d["pos"]
+def _close(d, price, why, now=None, frac=1.0):
+    """Closes the orders (frac < 1: only that part, e.g. half at the 1st target). The result after the fees goes into
+    the account; lifetime totals and the curve are updated."""
+    full = d["pos"]
+    part = frac < 1.0
+    pos = dict(full, size_usd=full["size_usd"] * frac, collateral_usd=full["collateral_usd"] * frac) if part else full
     sig = None
     tnow = int(now or time.time())
     gross, fees, net = breakdown(pos, price, now)
@@ -389,7 +420,11 @@ def _close(d, price, why, now=None):
         from bot_wallet_service import get_address
         owner = Pubkey.from_string(get_address())
         before = jp.usdc_balance(owner)
-        out = jp.close_position(pos.get("side", "short"), price, asset=pos.get("asset", "BTC"))
+        if part:
+            out = jp.reduce_position(pos.get("side", "short"), pos["size_usd"], pos["collateral_usd"], price,
+                                     asset=pos.get("asset", "BTC"))
+        else:
+            out = jp.close_position(pos.get("side", "short"), price, asset=pos.get("asset", "BTC"))
         sig = out.get("signature")
         try:                                  # the real result: USDC that came back minus the collateral put in
             received = jp.usdc_balance(owner) - before
@@ -428,7 +463,11 @@ def _close(d, price, why, now=None):
                                                  "gross": round(gross, 2), "fees": round(fees, 2),
                                                  "why": why, "t": tnow,
                                                  "held_h": round((tnow - pos.get("opened", tnow)) / 3600, 1)}]
-    d["pos"] = None
+    if part:
+        full.update(size_usd=full["size_usd"] - pos["size_usd"], collateral_usd=full["collateral_usd"] - pos["collateral_usd"],
+                    half=True)
+    else:
+        d["pos"] = None
     return net, sig
 
 
@@ -439,7 +478,7 @@ def close_text(d, why, price, entry, pos=None):
     head = ("✅ LUCRO " if lc["net"] >= 0 else "❌ PREJUÍZO ") + format(lc["net"], "+.2f") + " USD (depois das taxas)"
     return (LABEL + " FULL MARGIN " + NAME[d["mode"]] + " — " + why + "\n" + head +
             "\n" + side_name(pos.get("side", "short")) + " · " + str(pos.get("n", 1)) + " ordem(ns) · preço médio $" +
-            format(entry, ",.0f") + " → saída $" + format(price, ",.0f") +
+            px(entry) + " → saída $" + px(price) +
             "\n💵 Bruto " + format(lc["gross"], "+.2f") + " · taxas −" + format(lc["fees"], ".2f") +
             " · líquido " + format(lc["net"], "+.2f") +
             "\n💼 Saldo da conta: US$ " + format(d["capital"], ".2f") + " (hoje " + format(d["capital"] - CAPITAL_USD, "+.2f") + ")" +
@@ -508,8 +547,17 @@ def cycle(mode, send, chat, now=None, klines=None):
             bp = basket_pct(pos, price)
             why = ""
             cf = CFG.get(mode) or {}
-            if bp >= pos.get("tp", BASKET_TP_PCT):
-                why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO"
+            if not pos.get("half") and bp >= pos.get("tp", TP1_PCT):
+                why = "🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO: fechei METADE"
+                pnl, sig = _close(d, price, why, now, frac=TP1_FRAC)
+                _save(d)
+                send(chat, close_text(d, why, price, pos["entry"], pos) + "\n➡️ A outra metade busca $" + px(tp2_price(pos)) +
+                     " (+" + format(TP2_PCT * 100, ".0f") + "%)" + _tx(sig))
+                return "fechou metade"
+            if pos.get("half") and bp >= TP2_PCT:
+                why = "🎯🎯 +" + format(bp * 100, ".2f") + "% SOBRE O PREÇO MÉDIO: fechei o resto (2º alvo)"
+            elif pos.get("half") and bp <= TP_BACK:
+                why = "🔒 Voltou a +" + format(bp * 100, ".2f") + "%: fechei o resto no lucro"
             elif bp <= -LIQ_GUARD / effective_lev(pos):
                 why = "🛑 PROTEÇÃO (perto da liquidação)"
             elif cf.get("stop") and bp <= -cf["stop"]:
@@ -522,7 +570,7 @@ def cycle(mode, send, chat, now=None, klines=None):
                 send(chat, close_text(d, why, price, pos["entry"], pos) + _tx(sig))
                 return "fechou"
             # MT5 FullMargin_7_2 adds, once per closed 5-minute candle, with the chart reading in favour
-            if d["on"] and not d["done_why"] and closed[-1]["t"] != d.get("last_bar"):
+            if d["on"] and not d["done_why"] and not pos.get("half") and closed[-1]["t"] != d.get("last_bar"):
                 d["last_bar"] = closed[-1]["t"]
                 score, _a, reading = read_chart(closed)
                 sg = _sgn(pos)
@@ -553,9 +601,8 @@ def cycle(mode, send, chat, now=None, klines=None):
                         return "erro"
                     _save(d)
                     send(chat, "➕ " + ASSET + " FULL MARGIN " + tag + " — " + label + ": ordem " + str(pos["n"]) + " (" + side_name(pos) +
-                         ") em $" + format(price, ",.0f") + " · garantia US$ " + format(add, ".2f") +
-                         "\nPreço médio agora $" + format(pos["entry"], ",.0f") + " · fecha tudo em $" + format(tp_price(pos), ",.0f") +
-                         " (+" + format(BASKET_TP_PCT * 100, ".2f") + "%, lucro depois das taxas)" + _tx(pos.get("signature")))
+                         ") em $" + px(price) + " · garantia US$ " + format(add, ".2f") +
+                         "\nPreço médio agora $" + px(pos["entry"]) + " · 🎯 " + tp_text(pos) + _tx(pos.get("signature")))
                     return "reforço"
             _save(d)
             return "posição aberta"
@@ -613,10 +660,9 @@ def cycle(mode, send, chat, now=None, klines=None):
             return "erro"
         _save(d)
         send(chat, LABEL + " FULL MARGIN " + tag + " — " + side_name(side) + " aberta (1ª ordem, 30% da conta)\n" + why +
-             "\nEntrada $" + format(pos["entry"], ",.0f") + " · garantia US$ " + format(pos["collateral_usd"], ".2f") + " · " +
+             "\nEntrada $" + px(pos["entry"]) + " · garantia US$ " + format(pos["collateral_usd"], ".2f") + " · " +
              str(d["leverage"]) + "x (posição US$ " + format(pos["size_usd"], ",.0f") + ")" +
-             "\n🎯 Fecha tudo em $" + format(tp_price(pos), ",.0f") + " (+" + format(BASKET_TP_PCT * 100, ".2f") +
-             "%) · ➕ recuperação se for a $" + format(next_grid_price(pos), ",.0f") + " e o gráfico virar" + _tx(pos.get("signature")))
+             "\n🎯 " + tp_text(pos) + " · ➕ recuperação se for a $" + px(next_grid_price(pos)) + " e o gráfico virar" + _tx(pos.get("signature")))
         return "abriu"
 
 
@@ -938,7 +984,7 @@ def account_text(mode):
     pos = d.get("pos")
     if pos:
         L.append(("📈 " if pos.get("side") == "long" else "📉 ") + side_name(pos) + ": " + str(pos.get("n", 1)) + "/" + str(GRID_MAX) +
-                 " ordens · preço médio $" + format(pos["entry"], ",.0f") + " · fecha tudo em $" + format(tp_price(pos), ",.0f") +
+                 " ordens · preço médio $" + px(pos["entry"]) + " · fecha tudo em $" + px(tp_price(pos)) +
                  (" · agora " + format(pnl_usd(pos, price), "+.2f") + " USD" if price else ""))
     if d["pause_until"] > time.time():
         L.append("⏸️ Pausa até " + time.strftime("%H:%M", time.gmtime(d["pause_until"])) + " UTC (perdas seguidas)")
@@ -973,8 +1019,9 @@ def live_text(mode, price, now=None, track=None):
               "% da garantia) — já com as taxas",
               "💵 Bruto " + format(gross, "+.2f") + " · taxas −" + format(fees, ".2f") + " · " + ASSET + " " + format(move, "+.2f") +
               "% desde o preço médio (" + ("a favor" if move * _sgn(pos) > 0 else "contra") + ")",
-              "🎯 Fecha tudo em $" + format(tp, ",.0f") + " (falta " + format((tp / price - 1) * 100, "+.2f") + "%)" +
-              (" · ➕ próxima recuperação em $" + format(nxt, ",.0f") if pos.get("loss_adds", 0) < LOSS_ADDS else " · recuperação completa")]
+              "🎯 " + tp_text(pos) + " (falta " + format(((tp2_price(pos) if pos.get("half") else tp) / price - 1) * 100, "+.2f") + "%)" +
+              ("" if pos.get("half") else (" · ➕ próxima recuperação em $" + px(nxt) if pos.get("loss_adds", 0) < LOSS_ADDS
+                                           else " · recuperação completa"))]
         lo, hi = (nxt, tp) if pos.get("side") == "long" else (tp, nxt)
         if hi > lo:
             k = int(round(max(0.0, min(1.0, (price - lo) / (hi - lo))) * 14))
@@ -1069,7 +1116,8 @@ def status_text():
          "Cada conta começa o dia com US$ " + format(CAPITAL_USD, ".0f") + ". Opera O TEMPO TODO: fechou, já abre a próxima ordem "
          "(para o lado do movimento forte ou da leitura do gráfico), com 30% da conta. Vai ganhar: +1 ordem com 50%. "
          "Vai voltar (perdendo e o gráfico virou): até " + str(LOSS_ADDS) + " ordens a mais, cada vez mais distantes. "
-         "Fecha tudo com +" + format(BASKET_TP_PCT * 100, ".2f") + "% sobre o preço médio (lucro depois das taxas). "
+         "Com +" + format(TP1_PCT * 100, ".2f") + "% sobre o preço médio fecha METADE (lucro garantido); a outra metade busca +" +
+         format(TP2_PCT * 100, ".0f") + "% (se voltar a +" + format(TP_BACK * 100, ".2f") + "%, fecha o resto no lucro). "
          "Para no dia em US$ " + format(TARGET_USD, ".0f") + " (ou se cair a US$ " + format(CAPITAL_USD * (1 - MAX_LOSS), ".0f") +
          "). Recomeça todo dia às 00:00 UTC.",
          "", account_text("demo"), "", account_text("real")]
@@ -1092,25 +1140,15 @@ def keyboard():
     rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
-    rows.append([{"text": "🧪 Backtest " + ASSET + " 30 dias", "callback_data": "bfm_bt"}, {"text": "🧪 Backtest " + ASSET + " 3 meses", "callback_data": "bfm_bt90"}])
-    rows.append([{"text": "🧪 SOL 30d", "callback_data": "bfm_bt_sol"}, {"text": "🧪 SOL 3m", "callback_data": "bfm_bt90_sol"},
-                 {"text": "🧪 ETH 30d", "callback_data": "bfm_bt_eth"}, {"text": "🧪 ETH 3m", "callback_data": "bfm_bt90_eth"}])
-    rows.append([{"text": "📉 SOL venda 30d", "callback_data": "bfm_bts_sol"}, {"text": "📉 SOL venda 3m", "callback_data": "bfm_bts90_sol"},
-                 {"text": "📉 ETH venda 30d", "callback_data": "bfm_bts_eth"}, {"text": "📉 ETH venda 3m", "callback_data": "bfm_bts90_eth"}])
-    rows.append([{"text": "🔬 Otimizar SOL 3m", "callback_data": "bfm_opt_sol"}, {"text": "🔬 Otimizar BTC 3m", "callback_data": "bfm_opt_btc"},
-                 {"text": "🔬 Otimizar ETH 3m", "callback_data": "bfm_opt_eth"}])
-    if BT.get("best"):
-        rows.append([{"text": "✅ Usar a melhor na DEMO", "callback_data": "bfm_use_demo"},
-                     {"text": "✅ Usar a melhor na REAL", "callback_data": "bfm_use_real"}])
-    rows.append([{"text": "⚡ SOL alavancagem dinâmica 30d", "callback_data": "bfm_btd_sol"},
-                 {"text": "⚡ SOL dinâmica 3m", "callback_data": "bfm_btd90_sol"}])
+    rows.append([{"text": "🧪 Backtest " + ASSET + " 30 dias", "callback_data": "bfm_bt"},
+                 {"text": "🧪 Backtest " + ASSET + " 2 meses", "callback_data": "bfm_bt60"}])
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
 
 
 ACTIONS = ({"bfm", "/btc", "bfm_real_ok", "bfm_res", "/resultados_btc", "bfm_live_demo", "bfm_live_real", "bfm_live_stop",
-            "/aovivo", "bfm_bt", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
+            "/aovivo", "bfm_bt", "bfm_bt60", "/backtest_btc", "bfm_bt90", "/backtest_btc_3m", "bfm_bt_sol", "bfm_bt90_sol",
             "bfm_bt_eth", "bfm_bt90_eth", "/backtest_sol", "/backtest_eth", "bfm_bts_sol", "bfm_bts90_sol",
             "bfm_bts_eth", "bfm_bts90_eth", "bfm_btd_sol", "bfm_btd90_sol", "bfm_opt_sol", "bfm_opt_btc", "bfm_opt_eth",
             "bfm_use_demo", "bfm_use_real"} | {"bfm_lev" + str(x) for x in LEVERAGES} |
@@ -1156,7 +1194,7 @@ def handle(action, send, chat, run_async):
              if best else "Rode primeiro um 🔬 Otimizar.", keyboard())
     elif action.startswith("bfm_bt") or action.startswith("/backtest_"):
         lev = _load("demo")["leverage"]
-        days = 90 if ("90" in action or action.endswith("_3m")) else BT_DAYS
+        days = 90 if ("90" in action or action.endswith("_3m")) else (60 if "60" in action else BT_DAYS)
         asset = "SOL" if "sol" in action else ("ETH" if "eth" in action else ASSET)
         only = "short" if action.startswith("bfm_bts") else None
         plan = DYN_PLAN if action.startswith("bfm_btd") else None
@@ -1199,7 +1237,7 @@ def handle(action, send, chat, run_async):
             d["on"] = False
             _save(d)
         send(chat, "⏸️ " + NAME[mode] + " desligada: não abre ordens novas." +
-             (" As ordens abertas continuam até o +" + format(BASKET_TP_PCT * 100, ".2f") + "% do preço médio; toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
+             (" As ordens abertas continuam até os alvos (+" + format(TP1_PCT * 100, ".2f") + "% / +" + format(TP2_PCT * 100, ".0f") + "%); toque em ❌ para fechar agora." if d.get("pos") else ""), keyboard())
     elif action.startswith("bfm_close_"):
         mode = action[10:]
 

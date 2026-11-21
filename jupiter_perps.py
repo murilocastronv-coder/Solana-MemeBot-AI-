@@ -223,18 +223,19 @@ def close_position(side, btc_price, asset="BTC"):
     return pos
 
 
-def reduce_position(side, size_usd, collateral_usd, btc_price):
-    """Close only part of the position (one of two entries merged on-chain on the same side)."""
+def reduce_position(side, size_usd, collateral_usd, btc_price, asset="BTC"):
+    """Close only part of the position (one of two entries merged on-chain on the same side, or half at a target)."""
     owner = Pubkey.from_string(get_address())
-    current = read_position(owner, side)
+    current = read_position(owner, side, asset=asset)
     if not current or current["size_usd"] == 0:
         return {"size_usd": 0, "already_closed": True}
     if size_usd >= current["size_usd"] * 0.98:
-        return close_position(side, btc_price)
+        return close_position(side, btc_price, asset=asset)
     counter = random.getrandbits(63)
     limit = btc_price * (1 - SLIPPAGE if side == "long" else 1 + SLIPPAGE)
-    sig = _send([decrease_ix(owner, side, int(limit * 1e6), counter, int(size_usd * 1e6), int(collateral_usd * 1e6))])
-    pos = _wait(owner, side, opened=False, max_size=current["size_usd"] - size_usd * 0.5)
+    sig = _send([decrease_ix(owner, side, int(limit * 1e6), counter, int(size_usd * 1e6), int(collateral_usd * 1e6),
+                             asset=asset)])
+    pos = _wait(owner, side, opened=False, max_size=current["size_usd"] - size_usd * 0.5, asset=asset)
     pos["signature"] = sig
     return pos
 
