@@ -228,6 +228,7 @@ class Cycle(Base):
         d = bfm._load("demo")
         d["pos"] = {"side": "short", "entry": price / 1.2, "size_usd": 100.0, "collateral_usd": 20.0, "n": 5, "last": price}
         d["capital"] = 200.0                                              # so the daily limit does not fire first
+        d["reserve"] = 0.0                                                # no reserve left to add margin
         bfm._save(d)
         self.assertEqual(self.cyc(cs), "fechou")
         self.assertIn("PROTEÇÃO", self.msgs[-1])
@@ -242,8 +243,31 @@ class Cycle(Base):
         self.assertEqual(d["days"][-1]["result"], bfm.TARGET_USD + 2 - 100)
 
     def test_daily_loss_limit(self):
-        self.turn_on(capital=49.0, trades=2)
+        self.turn_on(capital=49.0, reserve=100.0, trades=2)                # 300 -> 149: lost half of the US$ 300
         self.assertEqual(self.cyc(candles()), "LIMITE DE PERDA DO DIA")
+
+    def test_losing_half_of_the_100_is_no_longer_the_limit(self):
+        self.turn_on(capital=49.0, trades=2)                               # 49 + 200 reserve = 249: keeps going
+        self.assertEqual(self.cyc(candles()), "abriu")
+
+    def test_margin_is_added_from_the_reserve_when_it_runs_out(self):
+        self.turn_on(trades=5)
+        cs = candles()
+        price = cs[-1]["c"]
+        d = bfm._load("demo")
+        d["pos"] = {"side": "short", "entry": price / 1.008, "size_usd": 1200.0, "collateral_usd": 30.0, "n": 1, "last": price,
+                    "opened": NOW}
+        bfm._save(d)                                                       # 40x, -0.8%: 32% of the way... not yet
+        self.assertEqual(self.cyc(cs), "posição aberta")
+        self.assertEqual(bfm._load("demo")["reserve"], 200.0)
+        d = bfm._load("demo")
+        d["pos"]["entry"] = price / 1.01                                   # -1%: 40% of the way to the liquidation
+        bfm._save(d)
+        self.cyc(cs)
+        d = bfm._load("demo")
+        self.assertEqual((d["reserve"], d["pos"]["collateral_usd"], d["capital"]), (150.0, 80.0, 150.0))
+        self.assertIn("ADICIONEI US$ 50.00", " ".join(self.msgs))
+        self.assertAlmostEqual(bfm.day_result(d), 0.0)                    # money moved, nothing won or lost
 
     def test_no_more_stop_after_2_losses(self):
         self.turn_on(trades=2, losses=2)
@@ -339,7 +363,7 @@ class Results(Base):
         t = bfm.close_text(d, "🎯 ALVO", 99.0, 100.0)
         self.assertIn("✅ LUCRO +4.40 USD (depois das taxas)", t)
         self.assertIn("Bruto +5.00 · taxas −0.60 · líquido +4.40", t)
-        self.assertIn("Saldo da conta: US$ 104.40", t)
+        self.assertIn("Saldo total: US$ 304.40 (operando 104.40 + reserva 200.00", t)
         self.assertIn("Total desde o início: +4.40", t)
 
     def test_loss_notification(self):

@@ -209,6 +209,33 @@ def open_position(side, collateral_usd, leverage, btc_price, min_size=0.0, asset
     return pos
 
 
+def add_collateral(side, collateral_usd, price, asset="BTC"):
+    """Deposit more USDC collateral into the open position (size unchanged): lower leverage, liquidation further away."""
+    owner = Pubkey.from_string(get_address())
+    current = read_position(owner, side, asset)
+    if not current or current["size_usd"] == 0:
+        raise PerpsError("Nenhuma posição aberta para adicionar margem")
+    if usdc_balance(owner) < collateral_usd:
+        raise PerpsError("USDC insuficiente na carteira do bot para adicionar $" + format(collateral_usd, ".2f") + " de margem")
+    counter = random.getrandbits(63)
+    collateral_raw = int(collateral_usd * 1e6)
+    limit = price * (1 + SLIPPAGE if side == "long" else 1 - SLIPPAGE)
+    min_out = None
+    if side == "long":  # the program swaps USDC -> the asset (long collateral); guard the swap
+        from jupiter_v2_executor import order
+        out = int(order(str(USDC_MINT), str(LONG_MINT[asset]), collateral_raw)["outAmount"])
+        min_out = int(out * (1 - SLIPPAGE))
+    sig = _send([increase_ix(owner, side, collateral_raw, 0, int(limit * 1e6), min_out, counter, asset)])
+    deadline = time.monotonic() + CONFIRM_TIMEOUT
+    while time.monotonic() < deadline:
+        pos = read_position(owner, side, asset) or {}
+        if pos.get("collateral_usd", 0) > current["collateral_usd"] + collateral_usd * 0.5:
+            pos["signature"] = sig
+            return pos
+        time.sleep(3)
+    raise PerpsError("A Jupiter não executou o pedido de margem em " + str(CONFIRM_TIMEOUT) + " s")
+
+
 def close_position(side, btc_price, asset="BTC"):
     """Close the whole position back to USDC. Returns the final on-chain state."""
     owner = Pubkey.from_string(get_address())
