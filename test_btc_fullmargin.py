@@ -68,9 +68,11 @@ class Basket(unittest.TestCase):
     def test_close_leaves_profit_after_fees(self):
         pos = self.short()
         win = bfm.pnl_usd(pos, bfm.tp_price(pos))
-        self.assertGreater(win, 0)                                         # +0.25% beats the ~0.12% fees
-        self.assertAlmostEqual(bfm.tp_price(pos), 99.75)
-        self.assertAlmostEqual(bfm.tp_price(self.short(side="long")), 100.25)
+        self.assertGreater(win, 0)                                         # +0.40% beats the ~0.12% fees
+        self.assertAlmostEqual(bfm.tp_price(pos), 99.6)
+        self.assertAlmostEqual(bfm.tp_price(self.short(side="long")), 100.4)
+        self.assertAlmostEqual(bfm.tp2_price(pos), 99.0)                  # the rest at +1%
+        self.assertGreater(bfm.pnl_usd(pos, pos["entry"] * (1 - bfm.TP_BACK)), 0)   # back to +0.20%: still profit
 
     def test_recovery_orders_get_further_apart(self):
         self.assertAlmostEqual(bfm.next_grid_price(self.short()), 100.5)
@@ -160,11 +162,41 @@ class Cycle(Base):
         self.assertAlmostEqual(pos["collateral_usd"], 30.0 + 70.0 / 4)     # the rest of the capital split in 4
         self.assertIn("VAI VOLTAR 1/4", self.msgs[-1])
         back = cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]
+        self.assertEqual(self.cyc(back), "fechou metade")                  # +0.40%: half closed
+        d = bfm._load("demo")
+        self.assertTrue(d["pos"]["half"])
+        self.assertAlmostEqual(d["pos"]["collateral_usd"], (30.0 + 70.0 / 4) / 2)
+        self.assertGreater(d["capital"], 100.0)                           # profit after the fees
+        self.assertIn("2 ordem(ns)", self.msgs[-1])
+        self.assertIn("METADE", self.msgs[-1])
+        far = cs[:-1] + [dict(cs[-1], c=bfm.tp2_price(pos) * 0.999)]
+        self.assertEqual(self.cyc(far), "fechou")                          # +1%: the rest
+        d = bfm._load("demo")
+        self.assertIsNone(d["pos"])
+        self.assertIn("2º alvo", self.msgs[-1])
+        self.assertEqual(d["total"]["trades"], 2)
+
+    def test_rest_is_closed_in_profit_if_the_price_comes_back(self):
+        cs = candles()
+        pos = self._open_short(cs)
+        hit = cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]
+        self.assertEqual(self.cyc(hit), "fechou metade")
+        cap = bfm._load("demo")["capital"]
+        back = cs[:-1] + [dict(cs[-1], c=pos["entry"] * (1 - bfm.TP_BACK * 0.9))]
         self.assertEqual(self.cyc(back), "fechou")
         d = bfm._load("demo")
         self.assertIsNone(d["pos"])
-        self.assertGreater(d["capital"], 100.0)                           # profit after the fees
-        self.assertIn("2 ordem(ns)", self.msgs[-1])
+        self.assertGreater(d["capital"], cap)                             # the rest also in profit
+        self.assertIn("Voltou", self.msgs[-1])
+
+    def test_no_adds_after_half_is_closed(self):
+        cs = candles()
+        pos = self._open_short(cs)
+        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=bfm.tp_price(pos) * 0.999)]), "fechou metade")
+        mid = self._next_candle(cs, pos["entry"] * 0.995, open_=pos["entry"] * 0.994)
+        with patch.object(bfm, "read_chart", return_value=(-9, 10.0, "leitura -9")):
+            self.assertEqual(self.cyc(mid), "posição aberta")
+        self.assertEqual(bfm._load("demo")["pos"]["n"], 1)
 
     def test_no_recovery_while_the_market_keeps_going_against(self):
         cs = candles()
@@ -515,17 +547,19 @@ class Backtest(Base):
 
     def test_button(self):
         self.assertIn("bfm_bt", [b["callback_data"] for row in bfm.keyboard() for b in row])
-        self.assertIn("bfm_bt90", [b["callback_data"] for row in bfm.keyboard() for b in row])
+        self.assertIn("bfm_bt60", [b["callback_data"] for row in bfm.keyboard() for b in row])
+        self.assertNotIn("bfm_opt_sol", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertIn("bfm_bt90", bfm.ACTIONS)
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
-        for cb in ("bfm_bt_sol", "bfm_bt90_sol", "bfm_bt_eth", "bfm_bt90_eth"):
-            self.assertIn(cb, cbs)
+        for cb in ("bfm_bt_sol", "bfm_bt90_sol", "bfm_bt_eth", "bfm_bt90_eth", "bfm_btd_sol"):
+            self.assertNotIn(cb, cbs)                                     # owner, Nov 21: only SOL 30 days / 2 months
         runs = []
         with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None, plan=None: runs.append((days, asset))):
             bfm.handle("bfm_bt90_sol", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt_eth", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt", self.send, "1", lambda fn: fn())
-        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET)])
+            bfm.handle("bfm_bt60", self.send, "1", lambda fn: fn())
+        self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET), (60, bfm.ASSET)])
         self.assertIn("— SOL", bfm.backtest_text({"days": [], "total": {}}, 40, 30, "SOL"))
         self.assertIn("bfm_bt", bfm.ACTIONS)
 
