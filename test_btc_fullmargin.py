@@ -324,82 +324,45 @@ class OnlySol(Base):
         self.assertNotIn("legacy_pos", bfm._load("real"))
 
 
-class Mt5Strategy(Base):
-    """owner, Nov 21: the MT5 FullMargin v4.33 strategy in the SOL backtest (target +3%)."""
-    def setUp(self):
-        super().setUp()
+class Grid6(Base):
+    """owner, Nov 21: backtest of the SOL strategy with every order against 6% from the previous one."""
+    def test_orders_against_only_every_6pct(self):
+        bfm.CFG["demo"] = None
         self.addCleanup(bfm.CFG.pop, "demo", None)
-
-    def _open(self, cs):
-        self.turn_on(trades=3, cfg=dict(bfm.MT5_CFG))                    # the account runs the MT5 variant
-        self.assertEqual(self.cyc(cs, score=-5), "abriu")
-        return bfm._load("demo")["pos"]
-
-    def cyc(self, cs, mode="demo", now=NOW, score=0):
-        with patch.object(bfm, "read_chart", return_value=(score, 10.0, "leitura " + str(score))):
-            return bfm.cycle(mode, self.send, "1", now=now, klines=lambda: cs)
-
-    def test_opens_with_30pct_and_target_3pct(self):
+        self.turn_on(trades=1, cfg=dict(bfm.GRID6_CFG))
         cs = candles()
-        pos = self._open(cs)
-        self.assertEqual(pos["side"], "short")
-        self.assertAlmostEqual(pos["collateral_usd"], 30.0)
-        self.assertAlmostEqual(bfm.tp_price(pos), pos["entry"] * 0.97)
-        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 0.98)]), "posição aberta")   # +2%: waits
-        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 0.969)]), "fechou")
-
-    def test_no_signal_no_entry(self):
-        self.turn_on(trades=3, cfg=dict(bfm.MT5_CFG))
-        self.assertEqual(self.cyc(candles(), score=2), "sem sinal (leitura 2)")
-
-    def test_winning_adds_10pct_per_candle_up_to_65pct(self):
-        cs = candles()
-        pos = self._open(cs)
-        cols = []
-        for k in range(6):
-            nxt = cs[:-1] + [dict(cs[-1], t=cs[-1]["t"] + 300 * (k + 1), c=pos["entry"] * 0.999)]
-            nxt = nxt[1:] + [dict(nxt[-1], t=nxt[-1]["t"] + 300)]
-            self.cyc(nxt, score=-6)
-            cols.append(round(bfm._load("demo")["pos"]["collateral_usd"], 2))
-        self.assertEqual(cols[:4], [40.0, 50.0, 60.0, 65.0])               # 30% + 10% + 10% + 10% + 5% = 65%
-        self.assertEqual(cols[-1], 65.0)
-        self.assertNotIn("VAI VOLTAR", " ".join(self.msgs))               # no recovery orders
-
-    def test_losing_cuts_25pct_at_each_bounce(self):
-        cs = candles()
-        pos = self._open(cs)
-        size = pos["size_usd"]
-        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 1.004)]), "posição aberta")   # -0.4%
-        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 1.0036)]), "corte")           # bounced 0.04%
+        bfm.cycle("demo", self.send, "1", now=NOW, klines=lambda: cs)
+        pos = bfm._load("demo")["pos"]
+        self.assertEqual(pos["step"], 0.06)
+        self.assertAlmostEqual(bfm.next_grid_price(pos), pos["last"] * (1 - 0.06 * bfm._sgn(pos)))
+        sg = bfm._sgn(pos)
+        d = bfm._load("demo")
+        d["pos"].update(collateral_usd=60.0, size_usd=120.0)              # 2x: far from the liquidation
+        bfm._save(d)
+        for move, expect in ((0.03, 1), (0.061, 2)):                      # 3% against: no order; 6%: the 1st recovery
+            price = pos["entry"] * (1 - move * sg)
+            last = dict(cs[-2], t=cs[-1]["t"] + int(move * 1e5), o=price * (1 - 0.001 * sg), c=price,
+                        h=price * 1.002, l=price * 0.998)
+            nxt = cs[:-1] + [last, dict(last, t=last["t"] + 300)]
+            with patch.object(bfm, "read_chart", return_value=(5 * sg, 10.0, "leitura")):
+                bfm.cycle("demo", self.send, "1", now=NOW, klines=lambda: nxt)
+            self.assertEqual(bfm._load("demo")["pos"]["n"], expect)
         p = bfm._load("demo")["pos"]
-        self.assertAlmostEqual(p["size_usd"], size * 0.75)
-        self.assertIn("CORTE DE PERDA 1/6", self.msgs[-1])
-        self.assertLess(bfm._load("demo")["capital"], 100.0)              # the loss of that part was taken
-        self.assertEqual(self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 1.0035)]), "posição aberta")  # needs a new bounce
+        self.assertAlmostEqual(bfm.next_grid_price(p), p["last"] * (1 - 0.06 * sg))   # the next one 6% further again
 
-    def test_no_reserve_topup_nor_bank(self):
-        cs = candles()
-        pos = self._open(cs)
-        self.cyc(cs[:-1] + [dict(cs[-1], c=pos["entry"] * 1.012)])        # -1.2% at 40x: would add margin normally
-        self.assertEqual(bfm._load("demo")["reserve"], bfm.RESERVE_USD)
-
-    def test_risk_halves_every_200(self):
-        self.assertEqual(bfm.risk_factor(150, bfm.MT5_CFG), 1.0)
-        self.assertEqual(bfm.risk_factor(250, bfm.MT5_CFG), 0.5)
-        self.assertEqual(bfm.risk_factor(450, bfm.MT5_CFG), 0.25)
-        self.assertEqual(bfm.risk_factor(5000, bfm.MT5_CFG), 0.1)
-        self.assertEqual(bfm.risk_factor(5000, None), 1.0)
+    def test_live_accounts_keep_the_normal_distance(self):
+        self.assertIsNone(bfm._load("demo").get("cfg"))
+        self.assertAlmostEqual(bfm.next_grid_price({"side": "short", "entry": 100.0, "last": 100.0}), 100.5)
 
     def test_buttons(self):
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
-        self.assertIn("bfm_btm_sol", cbs)
+        self.assertIn("bfm_btg_sol", cbs)
+        self.assertNotIn("bfm_btm_sol", cbs)
         runs = []
         with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None, plan=None, cfg=None:
-                          runs.append((days, asset, cfg is bfm.MT5_CFG))):
-            bfm.handle("bfm_btm_sol", self.send, "1", lambda fn: fn())
-            bfm.handle("bfm_btm90_sol", self.send, "1", lambda fn: fn())
-            bfm.handle("bfm_btm365_sol", self.send, "1", lambda fn: fn())
-            bfm.handle("bfm_bt", self.send, "1", lambda fn: fn())
+                          runs.append((days, asset, cfg is bfm.GRID6_CFG))):
+            for a in ("bfm_btg_sol", "bfm_btg90_sol", "bfm_btg365_sol", "bfm_bt"):
+                bfm.handle(a, self.send, "1", lambda fn: fn())
         self.assertEqual(runs, [(30, "SOL", True), (90, "SOL", True), (365, "SOL", True), (30, bfm.ASSET, False)])
 
 
