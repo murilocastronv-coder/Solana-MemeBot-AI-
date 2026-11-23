@@ -724,7 +724,9 @@ def airdrop_loop():
  time.sleep(20)
  while True:
   chats=([active_chat()] if active_chat() else [])+user_trade.users()
-  if trade_panel.HOME not in ("superteam","airdrop"):
+  if trade_panel.HOME=="btc":
+   chats=[active_chat()] if active_chat() else []    # owner, Nov 23: airdrop hunter back for the owner in the SOL robot bot
+  if trade_panel.HOME not in ("superteam","airdrop","btc"):
    time.sleep(60)                # owner (Nov 18, latest): airdrops and Superteam removed
    continue
   if trade_panel.HOME=="superteam":
