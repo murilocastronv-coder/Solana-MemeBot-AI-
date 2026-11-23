@@ -116,22 +116,20 @@ class HandleTest(unittest.TestCase):
             data = {b.get("callback_data") for row in tp.home_keyboard(5) for b in row}
         self.assertTrue({"tbuy", "tsellm", "tpl", "tlim", "tdl", "tcopy", "tscan", "twl", "wallet_withdraw", "tset", "thelp", "thome"} <= data)
 
-    def test_sol_robot_bot_has_the_airdrop_hunter_for_the_owner(self):
-        """owner, Nov 23: airdrops back next to the SOL robot; replies prepared, the owner posts them on X."""
+    def test_sol_robot_bot_is_only_the_robot(self):
+        """owner, Nov 23 (latest): only the SOL robot (demo + real); airdrops and the other accounts' trading off."""
         import btc_fullmargin
-        import airdrop_bot
+        self.assertFalse(tp.USER_TRADING)                                # off by default (BTCFM_USER_TRADING)
         with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "AIRDROP_ONLY", True), \
                 mock.patch.object(tp, "HOME", "btc"), mock.patch.object(btc_fullmargin, "keyboard", return_value=[]), \
-                mock.patch.object(tp, "settings", return_value={}), \
-                mock.patch.object(airdrop_bot, "screen", return_value=("🪂 AIRDROPS DA SOLANA", [])):
-            data = {b.get("callback_data") for row in tp.home_keyboard(1) for b in row}
-            self.assertIn("tad", data)
+                mock.patch.object(tp, "settings", return_value={}):
+            self.assertNotIn("tad", {b.get("callback_data") for row in tp.home_keyboard(1) for b in row})
             sent = []
             tp.handle("tad", None, lambda c, t, k=None: sent.append(t), 1, run_async=lambda fn: fn())
-            self.assertIn("AIRDROPS", sent[-1])
-            sent.clear()
-            tp.handle("tcopy", None, lambda c, t, k=None: sent.append(t), 1, run_async=lambda fn: fn())
-            self.assertIn("Full Margin SOL", sent[-1])                    # the rest stays off for the owner
+            self.assertIn("só o robô Full Margin SOL", sent[-1])
+        with mock.patch.object(tp, "is_owner", return_value=False), mock.patch.object(tp, "AIRDROP_ONLY", True), \
+                mock.patch.object(tp, "HOME", "btc"):
+            self.assertEqual(tp.home_keyboard(5), [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]])
 
     def test_sol_robot_bot_lets_other_accounts_buy_and_sell_with_the_fee(self):
         """owner, Nov 23: in the SOL robot bot the other accounts buy / sell coins and pay 2% per buy and per sell."""

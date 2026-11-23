@@ -44,7 +44,8 @@ def is_owner(chat):
 
 # owner, Nov 23: in the SOL robot bot (HOME "btc") the OTHER accounts can buy and sell coins with their own wallet,
 # paying ut.FEE_RATE (2%) of each buy and each sell to the fee wallet; the owner keeps only the Full Margin SOL robot
-USER_TRADING = HOME == "btc"
+# owner, Nov 23 (latest): only the SOL robot (demo + real) - the other accounts' trading is off unless BTCFM_USER_TRADING=true
+USER_TRADING = HOME == "btc" and os.getenv("BTCFM_USER_TRADING", "false").strip().lower() == "true"
 USER_BLOCKED = {"tcopy", "trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "/robo", "/backtest", "trpos", "/posicoes_robo",
                 "tscan", "twl", "tdl", "tlim", "/ordens", "towner", "trd_on", "trd_off", "trd_reset", "trd_go", "tterms_robot"}
 USER_BLOCKED_PREFIX = ("tad", "/airdrop", "sup", "vid", "/tarefas", "/videos", "tlo", "tld", "tla", "tlx", "tdo", "tdp",
@@ -545,8 +546,7 @@ def home_keyboard(chat):
         if not is_owner(chat):
             return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
         import btc_fullmargin
-        # owner, Nov 23: the Solana airdrop hunter is back next to the SOL robot (replies prepared, posted by the owner)
-        return btc_fullmargin.keyboard() + [[{"text": "🪂 Airdrops da Solana (respostas no X)", "callback_data": "tad"}]]
+        return btc_fullmargin.keyboard()              # owner, Nov 23: only the SOL robot (airdrops removed again)
     if airdrop_only(chat) and HOME == "robot":
         import big_bot
         kb = [[{"text": "📊 Resultados da carteira de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat)
@@ -781,6 +781,9 @@ def handle(action, text, send, chat, tail=None, run_async=None):
                                               action in ("towner", "tcopy")):
         send(chat, "🤖 O bot agora é só o robô das moedas grandes (demo e real). Essa função foi removida.", home_keyboard(chat))
         return True
+    if airdrop_only(chat) and HOME == "btc" and str(action).startswith(("tad", "/airdrop")):
+        send(chat, "O bot agora é só o robô Full Margin SOL (contas demo e real). Os airdrops foram removidos.", home_keyboard(chat))
+        return True
     if AIRDROP_ONLY and HOME == "superteam" and (str(action).startswith(("tad", "/airdrop")) or
                                                   (text is not None and __import__("airdrop_bot").STATUS_RE.search(str(text)))):
         send(chat, "💰 O bot agora é só de tarefas pagas da Solana (Superteam Earn). Os airdrops foram removidos.", home_keyboard(chat))
@@ -790,7 +793,7 @@ def handle(action, text, send, chat, tail=None, run_async=None):
              "% por compra e por venda). Essa função não está disponível.", home_keyboard(chat))
         return True
     if airdrop_only(chat) and cb_blocked(action):
-        send(chat, "O bot agora é o robô Full Margin SOL (demo e real) e os airdrops da Solana. Essa função foi removida."
+        send(chat, "O bot agora é só o robô Full Margin SOL (contas demo e real). Essa função foi removida."
              if HOME == "btc" else "🪂 O bot agora é só o caçador de airdrops. Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("tpl", "/posicoes"):
@@ -886,10 +889,7 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         if not is_owner(chat):
             return False
         return btc_fullmargin.handle(action, send, chat, run_async)
-    import airdrop_bot as _ab
-    airdrop_input = str(action).startswith(("tad", "/airdrop")) or (text is not None and (chat in _ab.WAIT or
-                                                                                         _ab.STATUS_RE.search(str(text))))
-    if airdrop_only(chat) and HOME == "btc" and action not in ("thome", "/home") and not airdrop_input:
+    if airdrop_only(chat) and HOME == "btc" and action not in ("thome", "/home"):
         send(chat, "O bot agora é só o robô Full Margin SOL (contas demo e real). Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("trpos", "/posicoes_robo"):
