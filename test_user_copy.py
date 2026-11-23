@@ -14,6 +14,14 @@ LEADER = "7HtLL1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 MINT = "MintAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 
+class FeeWalletDefault(unittest.TestCase):
+    def test_owner_fee_wallet_is_the_default(self):
+        with patch.dict(os.environ, {"FEE_WALLET": ""}):
+            self.assertEqual(uc.fee_wallet(), "HNqfndofnEtbyFsgjWcvRU9WY75rP8T5zVaJHmY4Lr3e")
+        with patch.dict(os.environ, {"FEE_WALLET": "X"}):
+            self.assertEqual(uc.fee_wallet(), "X")
+
+
 class UserCopyTests(unittest.TestCase):
     def setUp(self):
         d = tempfile.mkdtemp()
@@ -25,6 +33,9 @@ class UserCopyTests(unittest.TestCase):
         q.start()
         self.addCleanup(q.stop)
         self.owner_wallet, _ = uw.create_or_get(100)
+        f = patch.dict(os.environ, {"FEE_WALLET": self.owner_wallet})     # the fee wallet of these tests
+        f.start()
+        self.addCleanup(f.stop)
         self.sent = []
         self.send = lambda chat, text: self.sent.append((chat, text))
 

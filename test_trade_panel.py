@@ -112,9 +112,29 @@ class HandleTest(unittest.TestCase):
         self.assertEqual(bought, [0.5])
 
     def test_home_has_all_menu_buttons(self):
-        with mock.patch.object(tp, "is_owner", return_value=False):
+        with mock.patch.object(tp, "is_owner", return_value=False), mock.patch.object(tp, "USER_TRADING", False):
             data = {b.get("callback_data") for row in tp.home_keyboard(5) for b in row}
         self.assertTrue({"tbuy", "tsellm", "tpl", "tlim", "tdl", "tcopy", "tscan", "twl", "wallet_withdraw", "tset", "thelp", "thome"} <= data)
+
+    def test_sol_robot_bot_lets_other_accounts_buy_and_sell_with_the_fee(self):
+        """owner, Nov 23: in the SOL robot bot the other accounts buy / sell coins and pay 2% per buy and per sell."""
+        with mock.patch.object(tp, "is_owner", return_value=False), mock.patch.object(tp, "USER_TRADING", True), \
+                mock.patch.object(tp, "AIRDROP_ONLY", True), mock.patch.object(tp, "HOME", "btc"):
+            data = {b.get("callback_data") for row in tp.home_keyboard(5) for b in row}
+            self.assertTrue({"tbuy", "tsellm", "tpl", "wallet_deposit", "wallet_withdraw"} <= data)
+            self.assertFalse({"tcopy", "tscan", "trob", "tlim"} & data)
+            self.assertFalse(tp.airdrop_only(5))
+            self.assertTrue(tp.user_blocked(5, "tcopy"))
+            self.assertTrue(tp.user_blocked(5, "tlo:" + MINT))
+            self.assertFalse(tp.user_blocked(5, "tb:0.5:" + MINT))
+            sent = []
+            with mock.patch.object(tp, "settings", return_value={}):
+                tp.handle("tcopy", None, lambda c, t, k=None: sent.append(t), 5, run_async=lambda fn: fn())
+            self.assertIn("2% por compra e por venda", sent[-1])
+        self.assertEqual(tp.ut.FEE_RATE, 0.02)
+        with mock.patch.object(tp, "is_owner", return_value=True), mock.patch.object(tp, "AIRDROP_ONLY", True), \
+                mock.patch.object(tp, "HOME", "btc"):
+            self.assertTrue(tp.airdrop_only(1))                          # the owner keeps only the SOL robot
 
     def test_dca_runs_and_counts_down(self):
         bought = []

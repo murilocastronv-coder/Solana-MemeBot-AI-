@@ -92,12 +92,13 @@ def busy_wallets():
     return out
 
 
+# owner, Nov 23: the users' fees (2% of each buy and each sell) go to this wallet (FEE_WALLET on Render overrides it)
+OWNER_FEE_WALLET = "HNqfndofnEtbyFsgjWcvRU9WY75rP8T5zVaJHmY4Lr3e"
+
+
 def fee_wallet():
     explicit = os.getenv("FEE_WALLET", "").strip()
-    if explicit:
-        return explicit
-    import bot_wallet_service
-    return bot_wallet_service.get_address()
+    return explicit or OWNER_FEE_WALLET
 
 
 # ---------------------------------------------------------------- settings

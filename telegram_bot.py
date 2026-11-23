@@ -297,7 +297,7 @@ def handle(update):
    (not cb and chat in WITHDRAW and time.time()-WITHDRAW[chat]["at"]<600 and
     (not text.startswith("/") or text.strip()=="/cancelar"))):
   owner_withdraw(chat,action,text.strip());return
- if trade_panel.AIRDROP_ONLY and trade_panel.HOME!="superteam" and not cb and trade_panel.candidates(text) and not text.startswith("/"):
+ if trade_panel.AIRDROP_ONLY and trade_panel.HOME not in ("superteam","btc") and not cb and trade_panel.candidates(text) and not text.startswith("/"):
   airdrop_bot.WAIT[chat]=time.time()          # only airdrops now: a pasted address is the airdrop wallet
   trade_panel.handle(action,text,send,chat,[[{"text":"⬅️ Início","callback_data":"thome"}]],run_async);return
  if not cb and trade_panel.candidates(text) and not text.startswith("/") and not (authorized(chat) and (chat in EVAL_WALLET or chat in ADD_WALLET)):
