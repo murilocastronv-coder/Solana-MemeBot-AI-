@@ -356,8 +356,7 @@ class Grid6(Base):
 
     def test_buttons(self):
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
-        self.assertIn("bfm_btg_sol", cbs)
-        self.assertNotIn("bfm_btm_sol", cbs)
+        self.assertFalse([c for c in cbs if c.startswith("bfm_bt")])     # owner, Nov 23: no backtest buttons
         runs = []
         with patch.object(bfm, "run_backtest", lambda send, chat, lev, days, asset, only=None, plan=None, cfg=None:
                           runs.append((days, asset, cfg is bfm.GRID6_CFG))):
@@ -625,8 +624,6 @@ class Backtest(Base):
         self.assertIn("agora opera com", self.msgs[-1])
 
     def test_button(self):
-        self.assertIn("bfm_bt", [b["callback_data"] for row in bfm.keyboard() for b in row])
-        self.assertIn("bfm_bt60", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertNotIn("bfm_opt_sol", [b["callback_data"] for row in bfm.keyboard() for b in row])
         self.assertIn("bfm_bt90", bfm.ACTIONS)
         cbs = [b["callback_data"] for row in bfm.keyboard() for b in row]
@@ -641,7 +638,7 @@ class Backtest(Base):
             bfm.handle("bfm_bt120", self.send, "1", lambda fn: fn())
             bfm.handle("bfm_bt365", self.send, "1", lambda fn: fn())
         self.assertEqual(runs, [(90, "SOL"), (30, "ETH"), (30, bfm.ASSET), (60, bfm.ASSET), (120, bfm.ASSET), (365, bfm.ASSET)])
-        self.assertIn("bfm_bt120", [b["callback_data"] for row in bfm.keyboard() for b in row])
+        self.assertFalse([c for c in cbs if c.startswith("bfm_bt")])     # buttons removed; old ones still answer
         self.assertIn("— SOL", bfm.backtest_text({"days": [], "total": {}}, 40, 30, "SOL"))
         self.assertIn("bfm_bt", bfm.ACTIONS)
 
