@@ -35,6 +35,32 @@ MAX_LOSS = 0.5
 RESERVE_USD = float(os.getenv("BTCFM_RESERVE_USD", "200"))
 START_TOTAL = CAPITAL_USD + RESERVE_USD
 TARGET_PROFIT = TARGET_USD - CAPITAL_USD          # day target: +200 (the old "100 -> 300")
+# owner, Nov 23: the REAL account runs with US$ 50 and every order (1st, "vai ganhar", "vai voltar") is US$ 10
+REAL_CAPITAL = float(os.getenv("BTCFM_REAL_CAPITAL", "50"))
+REAL_RESERVE = float(os.getenv("BTCFM_REAL_RESERVE", "0"))
+REAL_ORDER = float(os.getenv("BTCFM_REAL_ORDER", "10"))
+
+
+def cap(mode):
+    return REAL_CAPITAL if mode == "real" else CAPITAL_USD
+
+
+def resv(mode):
+    return REAL_RESERVE if mode == "real" else RESERVE_USD
+
+
+def total0(mode):
+    return cap(mode) + resv(mode)
+
+
+def target(mode):
+    """Day target: +200 on the demo's 100; the same proportion on the real account (50 -> +100)."""
+    return TARGET_PROFIT * cap(mode) / CAPITAL_USD
+
+
+def order_usd(mode):
+    """Fixed collateral of every order (0 = the % rules of the demo)."""
+    return REAL_ORDER if mode == "real" else 0.0
 TOPUP_USD = 50.0                # margin added each time
 TOPUP_AT = 0.35                 # ... when the orders lost 35% of the way to the liquidation (the guard closes at 60%)
 BANK_EVERY = 300.0              # owner, Nov 21 (latest): every US$ 300 of profit in the day...
@@ -138,8 +164,8 @@ BT_MEM = {}                     # backtest account kept in memory (no disk write
 def _load(mode):
     if mode == "bt" and BT_MEM.get("d") is not None:
         return BT_MEM["d"]
-    d = {"mode": mode, "on": False, "leverage": DEFAULT_LEVERAGE, "pos": None, "capital": CAPITAL_USD, "day": "",
-         "reserve": RESERVE_USD, "injected": 0.0,
+    d = {"mode": mode, "on": False, "leverage": DEFAULT_LEVERAGE, "pos": None, "capital": cap(mode), "day": "",
+         "reserve": resv(mode), "injected": 0.0,
          "done_why": "", "wins": 0, "losses": 0, "trades": 0, "consec": 0, "pause_until": 0, "last_bar": 0,
          "hist": [], "days": []}
     p = _path(mode)
@@ -153,7 +179,7 @@ def _load(mode):
         # owner, Nov 20: the robot now trades only ASSET (SOL) - both accounts start again from US$ 100, clean results.
         # An order still open on the old asset is kept aside: the real one is closed on-chain by the next cycle.
         legacy = d.get("pos") if d.get("pos") and d["pos"].get("asset", "BTC") != ASSET else None
-        d.update(asset_v=ASSET, pos=None, capital=CAPITAL_USD, day="", done_why="", wins=0, losses=0, trades=0,
+        d.update(asset_v=ASSET, pos=None, capital=cap(mode), day="", done_why="", wins=0, losses=0, trades=0,
                  consec=0, pause_until=0, last_bar=0, hist=[], days=[], curve=[])
         d.pop("total", None); d.pop("last_close", None)
         if legacy and mode == "real":
@@ -164,6 +190,11 @@ def _load(mode):
         if d.get("pos"):
             d["pos"].pop("tp", None)
             d["pos"].pop("half", None)
+    if mode == "real" and d.get("real_v") != 1:
+        # owner, Nov 23: the real account starts again with US$ 50 (orders of US$ 10, no reserve)
+        d.update(real_v=1, reserve=REAL_RESERVE, injected=0.0, banked=0.0)
+        if not d.get("pos"):
+            d.update(capital=REAL_CAPITAL, day="")
     if d.get("lev_v") != 40:                 # owner, Nov 20: both accounts switch to 40x once (the buttons still work)
         d["leverage"], d["lev_v"] = DEFAULT_LEVERAGE, 40
     return d
@@ -185,10 +216,10 @@ def new_day(d, now=None):
     """Starts the day: capital back to US$ 100, counters reset, target/limit unlocked."""
     if d["day"]:
         d["days"] = (d.get("days") or [])[-(399 if d["mode"] == "bt" else 29):] + [{"day": d["day"], "end": round(d["capital"], 2),
-                                                     "result": round(d["capital"] + d.get("reserve", 0.0) - START_TOTAL, 2),
+                                                     "result": round(d["capital"] + d.get("reserve", 0.0) - total0(d["mode"]), 2),
                                                      "banked": round(d.get("banked", 0.0), 2),
                                                      "why": d.get("done_why") or ""}]
-    d.update(day=today(now), capital=CAPITAL_USD, reserve=RESERVE_USD, injected=0.0, banked=0.0, last_bank=0.0, done_why="", wins=0, losses=0, trades=0, consec=0,
+    d.update(day=today(now), capital=cap(d["mode"]), reserve=resv(d["mode"]), injected=0.0, banked=0.0, last_bank=0.0, done_why="", wins=0, losses=0, trades=0, consec=0,
              pause_until=0, last_bar=0, last_entry=0)
 
 
@@ -394,15 +425,15 @@ def total_value(d, price=None, now=None):
 
 
 def day_result(d, price=None, now=None):
-    return total_value(d, price, now) - START_TOTAL
+    return total_value(d, price, now) - total0(d["mode"])
 
 
 def bank_profit(d):
     """Every US$ 300 of profit in the day, US$ 200 leave the trading money and go to the reserve, which is only used as
     margin when the orders need it. Returns the amount moved now."""
     moved = 0.0
-    while (d["capital"] + d.get("reserve", 0.0) - START_TOTAL >= (round(d.get("banked", 0.0) / BANK_PUT) + 1) * BANK_EVERY and
-           d["capital"] - BANK_PUT >= CAPITAL_USD * 0.5):
+    while (d["capital"] + d.get("reserve", 0.0) - total0(d["mode"]) >= (round(d.get("banked", 0.0) / BANK_PUT) + 1) * BANK_EVERY and
+           d["capital"] - BANK_PUT >= cap(d["mode"]) * 0.5):
         d["capital"] -= BANK_PUT
         d["reserve"] = round(d.get("reserve", 0.0) + BANK_PUT, 2)
         d["banked"] = round(d.get("banked", 0.0) + BANK_PUT, 2)
@@ -556,7 +587,7 @@ def close_text(d, why, price, entry, pos=None):
             " · líquido " + format(lc["net"], "+.2f") +
             "\n💼 Saldo total: US$ " + format(d["capital"] + d.get("reserve", 0.0), ".2f") + " (operando " +
             format(d["capital"], ".2f") + " + reserva " + format(d.get("reserve", 0.0), ".2f") + " · hoje " +
-            format(d["capital"] + d.get("reserve", 0.0) - START_TOTAL, "+.2f") + ")" +
+            format(d["capital"] + d.get("reserve", 0.0) - total0(d["mode"]), "+.2f") + ")" +
             ("\n🏦 Guardei US$ " + format(d["last_bank"], ".0f") + " do lucro na reserva (vira margem) · reserva US$ " +
              format(d.get("reserve", 0.0), ".2f") if d.get("last_bank") else "") +
             "\n📈 Total desde o início: " + format(tot["net"], "+.2f") + " USD em " + str(tot["trades"]) + " operações (" +
@@ -604,12 +635,12 @@ def cycle(mode, send, chat, now=None, klines=None):
         if d["day"] != today(now) and not pos:
             new_day(d, now)
             if d["on"] and d["days"]:
-                send(chat, "🌅 " + ASSET + " FULL MARGIN " + tag + ": novo dia, de volta a US$ " + format(CAPITAL_USD, ".0f") +
-                     " operando + US$ " + format(RESERVE_USD, ".0f") + " de reserva · meta +" + format(TARGET_PROFIT, ".0f") + ". Ontem: " + format(d["days"][-1]["result"], "+.2f") + " USD.")
+                send(chat, "🌅 " + ASSET + " FULL MARGIN " + tag + ": novo dia, de volta a US$ " + format(cap(mode), ".0f") +
+                     " operando + US$ " + format(resv(mode), ".0f") + " de reserva · meta +" + format(target(mode), ".0f") + ". Ontem: " + format(d["days"][-1]["result"], "+.2f") + " USD.")
         # daily target / loss limit
         res = day_result(d, price, now)
-        hit = res >= TARGET_PROFIT
-        if d["on"] and not d["done_why"] and (hit or res <= -START_TOTAL * MAX_LOSS):
+        hit = res >= target(mode)
+        if d["on"] and not d["done_why"] and (hit or res <= -total0(mode) * MAX_LOSS):
             if pos:
                 _close(d, price, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA", now)
                 send(chat, close_text(d, "🎯 META DO DIA" if hit else "🛑 LIMITE DO DIA", price, pos["entry"], pos))
@@ -617,9 +648,9 @@ def cycle(mode, send, chat, now=None, klines=None):
             _save(d)
             send(chat, ("🎯 " + ASSET + " FULL MARGIN " + tag + ": META DO DIA BATIDA! " if hit else
                         "🛑 " + ASSET + " FULL MARGIN " + tag + ": LIMITE DE PERDA DO DIA. ") +
-                 "US$ " + format(START_TOTAL, ".0f") + " → US$ " + format(d["capital"] + d.get("reserve", 0.0), ".2f") +
-                 ". Parou de operar hoje; volta sozinho amanhã (00:00 UTC) com US$ " + format(CAPITAL_USD, ".0f") +
-                 " + US$ " + format(RESERVE_USD, ".0f") + " de reserva.")
+                 "US$ " + format(total0(mode), ".0f") + " → US$ " + format(d["capital"] + d.get("reserve", 0.0), ".2f") +
+                 ". Parou de operar hoje; volta sozinho amanhã (00:00 UTC) com US$ " + format(cap(mode), ".0f") +
+                 (" + US$ " + format(resv(mode), ".0f") + " de reserva." if resv(mode) else "."))
             return d["done_why"]
         if pos:
             bp = basket_pct(pos, price)
@@ -687,6 +718,8 @@ def cycle(mode, send, chat, now=None, klines=None):
                 elif not pos.get("win_added") and bp >= WIN_TRIGGER and in_favor:
                     add_lev = plan["win"] if plan else None
                     add, label = free_capital(d) * WIN_ADD_PCT * risk_cut(d["capital"]), "VAI GANHAR (+50%)"
+                    if order_usd(mode):
+                        add, label = min(order_usd(mode), free_capital(d)), "VAI GANHAR (US$ " + format(order_usd(mode), ".0f") + ")"
                     pos["win_added"] = True
                 elif (CFG.get(mode) or {}).get("adds", True) and \
                         pos.get("loss_adds", 0) < LOSS_ADDS and bp <= -LOSS_TRIGGER and in_favor and turning and \
@@ -694,6 +727,8 @@ def cycle(mode, send, chat, now=None, klines=None):
                     left = LOSS_ADDS - pos.get("loss_adds", 0)
                     add_lev = plan["loss"][min(pos.get("loss_adds", 0), len(plan["loss"]) - 1)] if plan else None
                     add = free_capital(d) / left * risk_cut(d["capital"])
+                    if order_usd(mode):
+                        add = min(order_usd(mode), free_capital(d))
                     pos["loss_adds"] = pos.get("loss_adds", 0) + 1
                     label = "VAI VOLTAR " + str(pos["loss_adds"]) + "/" + str(LOSS_ADDS)
                 if label:
@@ -763,14 +798,15 @@ def cycle(mode, send, chat, now=None, klines=None):
         label = {1: " [ALTA FORTE]", -1: " [QUEDA FORTE]"}.get(sdir, "")
         why = ("início do dia, " if first else "") + reading + label
         try:
-            pos = _open(d, price, side, why, first_collateral(d["capital"]) * factor, now,
+            first_col = min(order_usd(mode), d["capital"]) if order_usd(mode) else first_collateral(d["capital"]) * factor
+            pos = _open(d, price, side, why, first_col, now,
                         (LEV_PLAN.get(mode) or {}).get("first"))
         except Exception as exc:
             _save(d)
             send(chat, "⛔ " + ASSET + " FULL MARGIN " + tag + ": não abri a ordem (" + str(exc)[:160] + ").")
             return "erro"
         _save(d)
-        send(chat, LABEL + " FULL MARGIN " + tag + " — " + side_name(side) + " aberta (1ª ordem, 30% da conta)\n" + why +
+        send(chat, LABEL + " FULL MARGIN " + tag + " — " + side_name(side) + " aberta (1ª ordem, " + ("US$ " + format(order_usd(mode), ".0f") if order_usd(mode) else "30% da conta") + ")\n" + why +
              "\nEntrada $" + px(pos["entry"]) + " · garantia US$ " + format(pos["collateral_usd"], ".2f") + " · " +
              str(d["leverage"]) + "x (posição US$ " + format(pos["size_usd"], ",.0f") + ")" +
              "\n🎯 " + tp_text(pos) + " · ➕ recuperação se for a $" + px(next_grid_price(pos)) + " e o gráfico virar" + _tx(pos.get("signature")))
@@ -1081,19 +1117,23 @@ def account_text(mode):
     eq = total_value(d, price)
     state = ("🟢 ligada" if d["on"] else "🔴 desligada") + (" · ⛔ " + d["done_why"] + " (volta amanhã)" if d["on"] and d["done_why"] else "")
     L = [NAME[mode] + " — " + state + " · " + str(d["leverage"]) + "x" + (" · versão: " + d["cfg_name"] if d.get("cfg_name") else ""),
-         "💼 Saldo total: US$ " + format(eq, ".2f") + " (hoje " + format(eq - START_TOTAL, "+.2f") + " · começou com US$ " +
-         format(START_TOTAL, ".0f") + " · 🎯 meta +" + format(TARGET_PROFIT, ".0f") + ")",
-         "🛟 Reserva US$ " + format(d.get("reserve", 0.0), ".2f") + " de " + format(RESERVE_USD, ".0f") +
+         "💼 Saldo total: US$ " + format(eq, ".2f") + " (hoje " + format(eq - total0(mode), "+.2f") + " · começou com US$ " +
+         format(total0(mode), ".0f") + " · 🎯 meta +" + format(target(mode), ".0f") + ")",
+         "🛟 Reserva US$ " + format(d.get("reserve", 0.0), ".2f") + " de " + format(resv(mode), ".0f") +
          (" · já adicionou US$ " + format(d.get("injected", 0.0), ".2f") + " de margem hoje" if d.get("injected") else
           " · entra como margem quando a margem das ordens está acabando") +
          (" · 🏦 guardou US$ " + format(d.get("banked", 0.0), ".0f") + " do lucro" if d.get("banked") else
           " · a cada US$ " + format(BANK_EVERY, ".0f") + " de lucro guarda US$ " + format(BANK_PUT, ".0f") + " aqui")]
-    prog = max(0.0, min(1.0, (eq - START_TOTAL) / TARGET_PROFIT))
+    prog = max(0.0, min(1.0, (eq - total0(mode)) / target(mode)))
     L.append("▕" + "█" * int(prog * 10) + "░" * (10 - int(prog * 10)) + "▏ " + format(prog * 100, ".0f") + "% da meta")
     tot = d["wins"] + d["losses"]
-    L.append("🛡️ 1ª ordem 30% da conta (US$ " + format(first_collateral(d["capital"]), ".2f") + ") · vai ganhar +50% · vai voltar até " +
-             str(LOSS_ADDS) + " ordens com o resto" + (" · RISCO −50% (saldo ≥ US$ " + format(SAFE_FROM, ".0f") + ")"
-                                                      if risk_cut(d["capital"]) < 1 else ""))
+    if order_usd(mode):
+        L.append("🛡️ Cada ordem US$ " + format(order_usd(mode), ".0f") + " (1ª, vai ganhar e até " + str(LOSS_ADDS) +
+                 " de vai voltar, enquanto tiver saldo livre)")
+    else:
+        L.append("🛡️ 1ª ordem 30% da conta (US$ " + format(first_collateral(d["capital"]), ".2f") + ") · vai ganhar +50% · vai voltar até " +
+                 str(LOSS_ADDS) + " ordens com o resto" + (" · RISCO −50% (saldo ≥ US$ " + format(SAFE_FROM, ".0f") + ")"
+                                                          if risk_cut(d["capital"]) < 1 else ""))
     L.append("📊 Ordens " + str(d["trades"]) + " · fechamentos no lucro " + str(d["wins"]) + " · no prejuízo " + str(d["losses"]) +
              (" · acerto " + format(d["wins"] / tot * 100, ".0f") + "%" if tot else ""))
     tt = d.get("total") or {}
@@ -1124,7 +1164,7 @@ def live_text(mode, price, now=None, track=None):
     if not pos:
         L.append("⏳ Nenhuma ordem aberta agora " + ("— esperando sinal nos candles de 5 min." if d["on"] else "— conta desligada."))
         L.append("💼 Saldo total: US$ " + format(d["capital"] + d.get("reserve", 0.0), ".2f") + " (hoje " +
-                 format(d["capital"] + d.get("reserve", 0.0) - START_TOTAL, "+.2f") + ")")
+                 format(d["capital"] + d.get("reserve", 0.0) - total0(mode), "+.2f") + ")")
     else:
         gross, fees, net = breakdown(pos, price, now)
         if track is not None:
@@ -1150,8 +1190,8 @@ def live_text(mode, price, now=None, track=None):
         if track is not None:
             L.append("📊 Nesta tela: máx " + format(track["hi"], "+.2f") + " · mín " + format(track["lo"], "+.2f") + " USD")
         tv = d["capital"] + d.get("reserve", 0.0) + net
-        L.append("💼 Saldo total agora: US$ " + format(tv, ".2f") + " (hoje " + format(tv - START_TOTAL, "+.2f") +
-                 ") · 🛟 reserva US$ " + format(d.get("reserve", 0.0), ".2f") + " · 🎯 meta +" + format(TARGET_PROFIT, ".0f"))
+        L.append("💼 Saldo total agora: US$ " + format(tv, ".2f") + " (hoje " + format(tv - total0(mode), "+.2f") +
+                 ") · 🛟 reserva US$ " + format(d.get("reserve", 0.0), ".2f") + " · 🎯 meta +" + format(target(mode), ".0f"))
         L.append("⏱️ Aberta há " + str(int((now - pos.get("opened", now)) // 60)) + " min")
     L.append("🕒 " + time.strftime("%H:%M:%S", time.gmtime(now)) + " UTC")
     return "\n".join(L)
@@ -1225,16 +1265,16 @@ def results_png():
     series = []
     for m, color in (("demo", (90, 200, 255)), ("real", (255, 196, 0))):
         d = _load(m)
-        curve = [[t, CAPITAL_USD + v] for t, v in (d.get("curve") or [])]
+        curve = [[t, cap(m) + v] for t, v in (d.get("curve") or [])]
         if curve:
-            curve.insert(0, [min(curve[0][0] - 60, (d.get("total") or {}).get("since") or curve[0][0] - 60), CAPITAL_USD])
-            series.append((NAME[m].split(" ", 1)[1].title() + " (resultado acumulado)", CAPITAL_USD, curve, color))
+            curve.insert(0, [min(curve[0][0] - 60, (d.get("total") or {}).get("since") or curve[0][0] - 60), cap(m)])
+            series.append((NAME[m].split(" ", 1)[1].title() + " (resultado acumulado)", cap(m), curve, color))
     return demo_report.chart_png(series) if series else None
 
 
 def status_text():
     L = [LABEL + " FULL MARGIN — Jupiter Perps · opera só " + ASSET + " · COMPRA e VENDA · preço médio",
-         "Cada conta tem US$ " + format(START_TOTAL, ".0f") + " por dia: opera com US$ " + format(CAPITAL_USD, ".0f") + " e guarda US$ " +
+         "DEMO: US$ " + format(START_TOTAL, ".0f") + " por dia: opera com US$ " + format(CAPITAL_USD, ".0f") + " e guarda US$ " +
          format(RESERVE_USD, ".0f") + " de reserva, que entra como MARGEM (US$ " + format(TOPUP_USD, ".0f") + " por vez) quando a margem "
          "das ordens está acabando; a cada US$ " + format(BANK_EVERY, ".0f") + " de lucro no dia, guarda US$ " + format(BANK_PUT, ".0f") +
          " na reserva. Opera O TEMPO TODO: fechou, já abre a próxima ordem "
@@ -1244,6 +1284,9 @@ def status_text():
          format(TP_MANY * 100, ".0f") + "% sobre o preço médio. "
          "Para no dia com +" + format(TARGET_PROFIT, ".0f") + " (ou com −" + format(START_TOTAL * MAX_LOSS, ".0f") +
          "). Recomeça todo dia às 00:00 UTC.",
+         "REAL: opera com US$ " + format(REAL_CAPITAL, ".0f") + (" + US$ " + format(REAL_RESERVE, ".0f") + " de reserva" if REAL_RESERVE else "") +
+         " · cada ordem US$ " + format(REAL_ORDER, ".0f") + " · meta +" + format(target("real"), ".0f") + " · limite −" +
+         format(total0("real") * MAX_LOSS, ".0f") + " por dia.",
          "", account_text("demo"), "", account_text("real")]
     if LAST.get("price"):
         L += ["", LABEL + " agora: $" + format(LAST["price"], ",.2f") + (" · " + LAST["reading"] if LAST.get("reading") else "")]
@@ -1348,10 +1391,11 @@ def handle(action, send, chat, run_async):
     elif action == "bfm_on_demo":
         _start("demo", send, chat, run_async)
     elif action == "bfm_on_real":
-        send(chat, "⚠️ CONTA REAL: usa até US$ " + format(START_TOTAL, ".0f") + " da carteira do bot (US$ " + format(CAPITAL_USD, ".0f") +
-             " operando + US$ " + format(RESERVE_USD, ".0f") + " de reserva para margem; em SOL, trocado por USDC) como "
+        send(chat, "⚠️ CONTA REAL: usa até US$ " + format(total0("real"), ".0f") + " da carteira do bot (ordens de US$ " +
+             format(REAL_ORDER, ".0f") + " cada" + (" + US$ " + format(REAL_RESERVE, ".0f") + " de reserva para margem" if REAL_RESERVE else "") +
+             "; em SOL, trocado por USDC) como "
              "garantia de ordens de COMPRA e VENDA de " + ASSET + " (até " + str(GRID_MAX) + ", preço médio) com " + str(_load("real")["leverage"]) + "x no Jupiter Perps, até a meta de US$ " +
-             format(TARGET_PROFIT, ".0f") + " de lucro por dia. Deixe pelo menos US$ " + format(START_TOTAL + 10, ".0f") + " em SOL na carteira. Se o " + ASSET + " andar rápido contra as "
+             format(target("real"), ".0f") + " de lucro por dia. Deixe pelo menos US$ " + format(total0("real") + 5, ".0f") + " em SOL na carteira. Se o " + ASSET + " andar rápido contra as "
              "ordens, você pode perder a garantia toda. Não existe garantia de lucro.",
              [[{"text": "✅ Entendi, ligar a conta REAL", "callback_data": "bfm_real_ok"}],
               [{"text": "↩️ Cancelar", "callback_data": "bfm"}]])
