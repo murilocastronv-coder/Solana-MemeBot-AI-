@@ -278,9 +278,43 @@ class Cycle(Base):
             self.assertEqual(self.cyc(candles(), mode="real"), "abriu")
             d = bfm._load("real")
             bfm._open(d, d["pos"]["entry"] * 1.006, "short", "vai voltar", 17.5)
-        self.assertEqual(calls[:2], [("usdc", 30.0), ("short", 30.0, bfm.DEFAULT_LEVERAGE, 0.0)])
-        self.assertEqual(calls[3][3], 30.0 * bfm.DEFAULT_LEVERAGE)       # the add waits for the bigger position
+        self.assertEqual(calls[:2], [("usdc", 10.0), ("short", 10.0, bfm.DEFAULT_LEVERAGE, 0.0)])   # real: US$ 10 orders
+        self.assertEqual(calls[3][3], 10.0 * bfm.DEFAULT_LEVERAGE)       # the add waits for the bigger position
         self.assertIn("solscan.io/tx/SIG", self.msgs[-1])
+
+    def test_real_account_has_50_and_orders_of_10(self):
+        d = bfm._load("real")
+        self.assertEqual((d["capital"], d["reserve"]), (50.0, 0.0))
+        self.assertEqual((bfm.total0("real"), bfm.target("real"), bfm.order_usd("real")), (50.0, 100.0, 10.0))
+        self.assertEqual((bfm.total0("demo"), bfm.target("demo"), bfm.order_usd("demo")), (300.0, 200.0, 0.0))
+        bfm.new_day(d, NOW)
+        self.assertEqual((d["capital"], d["reserve"]), (50.0, 0.0))
+
+    def test_real_recovery_order_is_10(self):
+        self.turn_on("real", capital=50.0, reserve=0.0, trades=3)
+        cs = candles()
+        d = bfm._load("real")
+        price = cs[-1]["c"]
+        d["pos"] = {"side": "short", "entry": price / 1.006, "size_usd": 80.0, "collateral_usd": 10.0, "n": 1, "last": price / 1.006,
+                    "opened": NOW, "asset": "SOL"}
+        bfm._save(d)
+        opened = []
+
+        class JP:
+            @staticmethod
+            def ensure_usdc(usd, sol):
+                pass
+
+            @staticmethod
+            def open_position(side, usd, lev, price, min_size=0.0, asset="BTC"):
+                opened.append(usd)
+                return {"price": price, "signature": "S"}
+
+        later = cs[:-1] + [dict(cs[-1], o=price * 1.001, c=price), dict(cs[-1], t=cs[-1]["t"] + 300, c=price)]
+        with patch.dict("sys.modules", {"jupiter_perps": JP}), patch.object(bfm, "sol_usd", return_value=150.0), \
+                patch.object(bfm, "read_chart", return_value=(-5, 10.0, "leitura -5")):
+            self.assertEqual(self.cyc(later, mode="real"), "reforço")
+        self.assertEqual(opened, [10.0])
 
 
 class OnlySol(Base):
