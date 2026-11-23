@@ -42,6 +42,28 @@ def is_owner(chat):
     return user_wallets.is_owner(chat)
 
 
+# owner, Nov 23: in the SOL robot bot (HOME "btc") the OTHER accounts can buy and sell coins with their own wallet,
+# paying ut.FEE_RATE (2%) of each buy and each sell to the fee wallet; the owner keeps only the Full Margin SOL robot
+USER_TRADING = HOME == "btc"
+USER_BLOCKED = {"tcopy", "trob", "trb_on", "trb_off", "trb_sol", "trb_bt", "/robo", "/backtest", "trpos", "/posicoes_robo",
+                "tscan", "twl", "tdl", "tlim", "/ordens", "towner", "trd_on", "trd_off", "trd_reset", "trd_go", "tterms_robot"}
+USER_BLOCKED_PREFIX = ("tad", "/airdrop", "sup", "vid", "/tarefas", "/videos", "tlo", "tld", "tla", "tlx", "tdo", "tdp",
+                       "tdx", "tsoon", "tsn")
+
+
+def airdrop_only(chat=None):
+    """The old 'airdrop only' lock; off for the other accounts when they trade coins in the SOL robot bot."""
+    if AIRDROP_ONLY and USER_TRADING and chat is not None and not is_owner(chat):
+        return False
+    return AIRDROP_ONLY
+
+
+def user_blocked(chat, action):
+    a = str(action or "")
+    return (USER_TRADING and not is_owner(chat) and
+            (a in USER_BLOCKED or a.split(":")[0] in USER_BLOCKED or a.startswith(USER_BLOCKED_PREFIX)))
+
+
 # ------------------------------------------------------------------ owner settings (pg_store)
 def _load():
     with _LOCK:
@@ -492,18 +514,18 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 
 # ------------------------------------------------------------------ home screen
 def home_text(chat):
-    if AIRDROP_ONLY and HOME == "btc":
+    if airdrop_only(chat) and HOME == "btc":
         if not is_owner(chat):
             return "🔒 Este bot agora é privado. Se você tem SOL na carteira do bot, toque em 💸 Sacar SOL."
         import btc_fullmargin              # owner, Nov 19: the BTC robot (demo + real) is the home screen
         return btc_fullmargin.status_text()
-    if AIRDROP_ONLY and HOME == "robot":
+    if airdrop_only(chat) and HOME == "robot":
         import big_bot
         return big_bot.status_text(chat, big_bot.cached_signals())
-    if AIRDROP_ONLY and HOME == "superteam":
+    if airdrop_only(chat) and HOME == "superteam":
         import superteam_bot
         return superteam_bot.screen(chat)[0] + "\n💬 Nosso grupo no Telegram: " + GROUP_URL
-    if AIRDROP_ONLY:
+    if airdrop_only(chat):
         import airdrop_bot
         t = airdrop_bot.screen(chat)[0].replace("🪂 AIRDROPS DA SOLANA", "🪂 CAÇADOR DE AIRDROPS DA SOLANA", 1)
         return t + "\n💬 Nosso grupo no Telegram: " + GROUP_URL
@@ -519,12 +541,12 @@ def home_text(chat):
 
 
 def home_keyboard(chat):
-    if AIRDROP_ONLY and HOME == "btc":
+    if airdrop_only(chat) and HOME == "btc":
         if not is_owner(chat):
             return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
         import btc_fullmargin
         return btc_fullmargin.keyboard()
-    if AIRDROP_ONLY and HOME == "robot":
+    if airdrop_only(chat) and HOME == "robot":
         import big_bot
         kb = [[{"text": "📊 Resultados da carteira de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat)
         row = [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}]
@@ -534,7 +556,7 @@ def home_keyboard(chat):
         except Exception:
             pass
         return kb + [row]
-    if AIRDROP_ONLY:
+    if airdrop_only(chat):
         import airdrop_bot
         import superteam_bot
         kb = superteam_bot.screen(chat)[1] if HOME == "superteam" else airdrop_bot.screen(chat)[1]
@@ -549,6 +571,11 @@ def home_keyboard(chat):
             kb.append([{"text": "🎬 Vídeos automáticos", "callback_data": "vid"}])
             kb.append([{"text": "📊 Painel do dono", "callback_data": "towner"}])
         return kb
+    if USER_TRADING and not is_owner(chat):                  # the other accounts: only buy / sell coins (2% fee)
+        return [[{"text": "🟢 Comprar", "callback_data": "tbuy"}, {"text": "🔴 Vender", "callback_data": "tsellm"}],
+                [{"text": "💼 Posições", "callback_data": "tpl"}, {"text": "⚙️ Configurações", "callback_data": "tset"}],
+                [{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"}],
+                [{"text": "❓ Ajuda", "callback_data": "thelp"}, {"text": "🔄 Atualizar", "callback_data": "thome"}]]
     kb = [[{"text": "🟢 Comprar", "callback_data": "tbuy"}, {"text": "🔴 Vender", "callback_data": "tsellm"}],
           [{"text": "💼 Posições", "callback_data": "tpl"}, {"text": "📋 Ordens limite", "callback_data": "tlim"},
            {"text": "🔁 Ordens DCA", "callback_data": "tdl"}],
@@ -757,7 +784,11 @@ def handle(action, text, send, chat, tail=None, run_async=None):
                                                   (text is not None and __import__("airdrop_bot").STATUS_RE.search(str(text)))):
         send(chat, "💰 O bot agora é só de tarefas pagas da Solana (Superteam Earn). Os airdrops foram removidos.", home_keyboard(chat))
         return True
-    if AIRDROP_ONLY and cb_blocked(action):
+    if user_blocked(chat, action):
+        send(chat, "Aqui você pode comprar e vender moedas da Solana com a sua carteira (taxa " + format(ut.FEE_RATE * 100, "g") +
+             "% por compra e por venda). Essa função não está disponível.", home_keyboard(chat))
+        return True
+    if airdrop_only(chat) and cb_blocked(action):
         send(chat, "🪂 O bot agora é só o caçador de airdrops. Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("tpl", "/posicoes"):
@@ -853,7 +884,7 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         if not is_owner(chat):
             return False
         return btc_fullmargin.handle(action, send, chat, run_async)
-    if AIRDROP_ONLY and HOME == "btc" and action not in ("thome", "/home"):
+    if airdrop_only(chat) and HOME == "btc" and action not in ("thome", "/home"):
         send(chat, "O bot agora é só o robô Full Margin SOL (contas demo e real). Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("trpos", "/posicoes_robo"):
