@@ -1264,13 +1264,7 @@ def keyboard():
     rows.append([{"text": "📥 Depositar", "callback_data": "wallet_deposit"}, {"text": "💸 Sacar", "callback_data": "wallet_withdraw"},
                  {"text": "💰 Saldo", "callback_data": "wallet_balance"}])
     rows.append([{"text": "📺 Ao vivo DEMO", "callback_data": "bfm_live_demo"}, {"text": "📺 Ao vivo REAL", "callback_data": "bfm_live_real"}])
-    rows.append([{"text": "🧪 Backtest " + ASSET + " 30 dias", "callback_data": "bfm_bt"},
-                 {"text": "🧪 Backtest " + ASSET + " 2 meses", "callback_data": "bfm_bt60"}])
-    rows.append([{"text": "🧪 Backtest " + ASSET + " 4 meses", "callback_data": "bfm_bt120"},
-                 {"text": "🧪 Backtest " + ASSET + " 1 ano", "callback_data": "bfm_bt365"}])
-    rows.append([{"text": "📏 SOL ordens a cada 6% · 30 dias", "callback_data": "bfm_btg_sol"},
-                 {"text": "📏 6% · 3 meses", "callback_data": "bfm_btg90_sol"},
-                 {"text": "📏 6% · 1 ano", "callback_data": "bfm_btg365_sol"}])
+    # owner, Nov 23: no backtest buttons - only the DEMO / REAL robot and its results
     rows.append([{"text": "📊 Resultados", "callback_data": "bfm_res"}])
     rows.append([{"text": "🔄 Atualizar", "callback_data": "bfm"}])
     return rows
