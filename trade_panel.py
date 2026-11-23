@@ -545,7 +545,8 @@ def home_keyboard(chat):
         if not is_owner(chat):
             return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
         import btc_fullmargin
-        return btc_fullmargin.keyboard()
+        # owner, Nov 23: the Solana airdrop hunter is back next to the SOL robot (replies prepared, posted by the owner)
+        return btc_fullmargin.keyboard() + [[{"text": "🪂 Airdrops da Solana (respostas no X)", "callback_data": "tad"}]]
     if airdrop_only(chat) and HOME == "robot":
         import big_bot
         kb = [[{"text": "📊 Resultados da carteira de teste", "callback_data": "tres"}]] + big_bot.keyboard(chat)
@@ -789,7 +790,8 @@ def handle(action, text, send, chat, tail=None, run_async=None):
              "% por compra e por venda). Essa função não está disponível.", home_keyboard(chat))
         return True
     if airdrop_only(chat) and cb_blocked(action):
-        send(chat, "🪂 O bot agora é só o caçador de airdrops. Essa função foi removida.", home_keyboard(chat))
+        send(chat, "O bot agora é o robô Full Margin SOL (demo e real) e os airdrops da Solana. Essa função foi removida."
+             if HOME == "btc" else "🪂 O bot agora é só o caçador de airdrops. Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("tpl", "/posicoes"):
         run_async(lambda: send(chat, *(lambda t, kb: (t, kb + tail))(*positions_text(chat))))
@@ -884,7 +886,10 @@ def handle(action, text, send, chat, tail=None, run_async=None):
         if not is_owner(chat):
             return False
         return btc_fullmargin.handle(action, send, chat, run_async)
-    if airdrop_only(chat) and HOME == "btc" and action not in ("thome", "/home"):
+    import airdrop_bot as _ab
+    airdrop_input = str(action).startswith(("tad", "/airdrop")) or (text is not None and (chat in _ab.WAIT or
+                                                                                         _ab.STATUS_RE.search(str(text))))
+    if airdrop_only(chat) and HOME == "btc" and action not in ("thome", "/home") and not airdrop_input:
         send(chat, "O bot agora é só o robô Full Margin SOL (contas demo e real). Essa função foi removida.", home_keyboard(chat))
         return True
     if action in ("trpos", "/posicoes_robo"):
