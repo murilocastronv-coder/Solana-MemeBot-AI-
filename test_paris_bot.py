@@ -88,6 +88,38 @@ class Strategy(unittest.TestCase):
         self.assertIn("PARIS SPORTIFS", self.msgs[-1])
 
 
+class Aggressive(Strategy):
+    def test_aggressive_profiles_bet_more(self):
+        p = pb.fair_probs([2.0, 3.6, 4.0])[0]
+        safe, aggr, turbo = (pb.stake_frac(p, 2.25, pb.PROFILES[k]) for k in ("safe", "aggr", "turbo"))
+        self.assertLess(safe, aggr)
+        self.assertLessEqual(aggr, turbo)
+        self.assertLessEqual(turbo, pb.PROFILES["turbo"]["cap"])
+        r = pb.parse_csv(HEAD + row("01/11/2026", "A", "B", 2, 0, [2.0, 3.6, 4.0], [2.08, 3.6, 4.0], [2.0, 3.5, 3.9],
+                                     [1.9, 2.0], [1.9, 2.0], [1.85, 1.95]))[0]
+        self.assertEqual(pb.candidates(r, "max", pb.PROFILES["turbo"]), [])         # +1.2%: too small for anyone
+        r["MaxH"] = "2.10"                                                         # +2.2%: only the aggressive ones
+        self.assertEqual(pb.candidates(r, "max", pb.PROFILES["safe"]), [])
+        self.assertEqual([c[0] for c in pb.candidates(r, "max", pb.PROFILES["aggr"])], ["H"])
+
+    def test_backtest_text_shows_the_three_profiles(self):
+        rows = pb.parse_csv(HEAD + row("01/11/2026", "A", "B", 2, 0, [2.0, 3.6, 4.0], [2.25, 3.6, 4.0], [2.0, 3.5, 3.9],
+                                       [1.9, 2.0], [1.9, 2.0], [1.85, 1.95]))
+        for r in rows:
+            r["_date"], r["_div"] = pb.parse_date(r), "E0"
+        res = {k: (pb.backtest(rows, 100, "max", pb.PROFILES[k]), pb.backtest(rows, 100, "avg", pb.PROFILES[k]))
+               for k in pb.PROFILE_ORDER}
+        t = pb.backtest_text(res["safe"][0], res["safe"][1], 365, res)
+        for k in pb.PROFILE_ORDER:
+            self.assertIn(pb.PROFILES[k]["name"], t)
+        self.assertGreater(res["turbo"][0]["profit"], res["safe"][0]["profit"])     # the winning bet paid more
+
+    def test_profile_button(self):
+        pb.handle("pb_prof", self.send, "1", lambda fn: fn())
+        self.assertEqual(pb.load()["profile"], "aggr")
+        self.assertIn("Agressiva", self.msgs[-1])
+
+
 class SolRobotRetired(unittest.TestCase):
     def test_open_orders_are_closed_and_accounts_off(self):
         import btc_fullmargin as bfm

@@ -35,6 +35,14 @@ MAX_ODDS = float(os.getenv("PARIS_MAX_ODDS", "6.0"))
 KELLY = 0.25                                            # quarter Kelly
 MAX_STAKE = 0.02                                        # never more than 2% of the bank on one bet
 BANK_CHOICES = (50, 100, 200, 500, 1000)
+# owner, Nov 24: strategy profiles - the conservative one and more aggressive ones to "win a lot" (bigger stakes,
+# smaller minimum edge, longer odds). Every profile is in the backtest, so the risk shows up in the numbers.
+PROFILES = {
+    "safe": {"name": "🛡️ Conservadora", "edge": EDGE, "min": MIN_ODDS, "max": MAX_ODDS, "kelly": KELLY, "cap": MAX_STAKE},
+    "aggr": {"name": "🔥 Agressiva", "edge": 0.02, "min": 1.3, "max": 10.0, "kelly": 0.5, "cap": 0.08},
+    "turbo": {"name": "🚀 Muito agressiva", "edge": 0.015, "min": 1.3, "max": 12.0, "kelly": 1.0, "cap": 0.15},
+}
+PROFILE_ORDER = ("safe", "aggr", "turbo")
 CHECK_EVERY_S = 3 * 3600                                # look for new signals every 3 h
 AHEAD_DAYS = 3                                          # signals for matches in the next 3 days
 NAMES = {"H": "vitória do mandante", "D": "empate", "A": "vitória do visitante", "O": "mais de 2,5 gols",
@@ -51,7 +59,7 @@ def _path():
 
 
 def load():
-    d = {"on": False, "bank": 100.0, "sent": [], "last_check": 0}
+    d = {"on": False, "bank": 100.0, "sent": [], "last_check": 0, "profile": "safe"}
     try:
         p = _path()
         if p.exists():
@@ -158,8 +166,10 @@ def fair_probs(odds):
     return [x / s for x in inv]
 
 
-def candidates(r, price="max"):
+def candidates(r, price="max", prof=None):
     """The value bets of one match: [(key, fair_prob, price, edge)] (at most one 1X2 and one goals bet)."""
+    prof = prof or PROFILES["safe"]
+    edge, lo, hi = prof["edge"], prof["min"], prof["max"]
     out = []
     pre = {"max": ("Max", "BbMx"), "avg": ("Avg", "BbAv")}[price]
     p1x2 = fair_probs([fl(r, "PSH", "PH"), fl(r, "PSD", "PD"), fl(r, "PSA", "PA")])
@@ -167,9 +177,9 @@ def candidates(r, price="max"):
         best = None
         for key, p, side in zip("HDA", p1x2, "HDA"):
             o = fl(r, pre[0] + side, pre[1] + side)
-            if o and MIN_ODDS <= o <= MAX_ODDS:
+            if o and lo <= o <= hi:
                 e = o * p - 1
-                if e >= EDGE and (best is None or e > best[3]):
+                if e >= edge and (best is None or e > best[3]):
                     best = (key, p, o, e)
         if best:
             out.append(best)
@@ -178,18 +188,19 @@ def candidates(r, price="max"):
         best = None
         for key, p, side in zip("OU", pou, (">2.5", "<2.5")):
             o = fl(r, pre[0] + side, pre[1] + side)
-            if o and MIN_ODDS <= o <= MAX_ODDS:
+            if o and lo <= o <= hi:
                 e = o * p - 1
-                if e >= EDGE and (best is None or e > best[3]):
+                if e >= edge and (best is None or e > best[3]):
                     best = (key, p, o, e)
         if best:
             out.append(best)
     return out
 
 
-def stake_frac(p, o):
+def stake_frac(p, o, prof=None):
+    prof = prof or PROFILES["safe"]
     k = (o * p - 1) / (o - 1)
-    return max(0.0, min(MAX_STAKE, k * KELLY))
+    return max(0.0, min(prof["cap"], k * prof["kelly"]))
 
 
 def won(r, key):
@@ -200,7 +211,7 @@ def won(r, key):
     return {"H": h > a, "D": h == a, "A": h < a, "O": h + a > 2, "U": h + a < 3}[key]
 
 
-def backtest(rows, bank=100.0, price="max"):
+def backtest(rows, bank=100.0, price="max", prof=None):
     """Every value bet of the period, quarter-Kelly stakes on the running bank (bets of the same day share it)."""
     start = bank
     curve, bets, peak, dd = [], [], bank, 0.0
@@ -210,11 +221,11 @@ def backtest(rows, bank=100.0, price="max"):
         d = r["_date"].date()
         if d != day:
             day, day_bank = d, bank
-        for key, p, o, e in candidates(r, price):
+        for key, p, o, e in candidates(r, price, prof):
             w = won(r, key)
             if w is None:
                 continue
-            st = round(day_bank * stake_frac(p, o), 2)
+            st = round(day_bank * stake_frac(p, o, prof), 2)
             if st <= 0:
                 continue
             res = st * (o - 1) if w else -st
@@ -232,30 +243,40 @@ def backtest(rows, bank=100.0, price="max"):
             "roi": (bank - start) / staked * 100 if staked else 0.0, "max_dd": dd * 100, "curve": curve,
             "by_month": by_month, "by_league": by_league,
             "avg_odds": sum(b["odds"] for b in bets) / len(bets) if bets else 0.0,
-            "matches": len(rows)}
+            "matches": len(rows), "busted": bank < start * 0.05}
 
 
-def backtest_text(rmax, ravg, days=365):
-    def line(r):
-        return ((("✅ LUCRO " if r["profit"] > 0 else "❌ PREJUÍZO ") + format(r["profit"], "+.2f") + " € (banca " +
-                 format(r["start"], ".0f") + " → " + format(r["bank"], ".2f") + ")") +
-                "\n   " + str(r["bets"]) + " apostas · acerto " + (format(r["wins"] / r["bets"] * 100, ".0f") + "%" if r["bets"] else "-") +
-                " · odd média " + format(r["avg_odds"], ".2f") + " · ROI " + format(r["roi"], "+.1f") + "% · queda máxima " +
-                format(r["max_dd"], ".0f") + "%")
+def _line(r):
+    return ((("✅ LUCRO " if r["profit"] > 0 else "❌ PREJUÍZO ") + format(r["profit"], "+.2f") + " € (banca " +
+             format(r["start"], ".0f") + " → " + format(r["bank"], ".2f") + ")" + (" 💥 QUEBROU" if r.get("busted") else "")) +
+            "\n   " + str(r["bets"]) + " apostas · acerto " + (format(r["wins"] / r["bets"] * 100, ".0f") + "%" if r["bets"] else "-") +
+            " · odd média " + format(r["avg_odds"], ".2f") + " · ROI " + format(r["roi"], "+.1f") + "% · queda máxima " +
+            format(r["max_dd"], ".0f") + "%")
+
+
+def backtest_text(rmax, ravg, days=365, results=None):
+    """results: {profile: (best-odds result, average-odds result)}; without it only the conservative profile."""
+    results = results or {"safe": (rmax, ravg)}
     L = ["🧪 BACKTEST " + str(days) + " DIAS — PARIS SPORTIFS (futebol, " + str(len(LEAGUES)) + " ligas, " + str(rmax["matches"]) + " jogos)",
-         "Estratégia: aposta quando a odd paga é pelo menos " + format(EDGE * 100, ".0f") + "% maior que a odd JUSTA da Pinnacle "
-         "(sem a margem dela) · 1X2 e mais/menos 2,5 gols · odds de " + format(MIN_ODDS, "g") + " a " + format(MAX_ODDS, "g") +
-         " · stake ¼ Kelly, no máximo " + format(MAX_STAKE * 100, ".0f") + "% da banca.", "",
-         "1) Apostando na MELHOR odd do mercado (comparando casas):", line(rmax), "",
-         "2) Apostando na odd MÉDIA (uma casa só, sem comparar):", line(ravg), ""]
-    if rmax["by_month"]:
-        L.append("Por mês (melhor odd): " + " · ".join(m[5:] + "/" + m[2:4] + " " + format(v, "+.0f")
-                                                         for m, v in sorted(rmax["by_month"].items())))
-    if rmax["by_league"]:
-        L.append("Por liga (melhor odd): " + " · ".join(LEAGUES.get(k, k).split(" ", 1)[-1] + " " + format(v, "+.0f")
-                                                         for k, v in sorted(rmax["by_league"].items(), key=lambda kv: -kv[1])))
-    L += ["", "⚠️ O resultado depende de pegar a odd alta: comparar casas (ou usar a que paga mais) é o que faz o lucro. "
-          "O passado não garante o futuro; com apostas sempre há semanas no vermelho."]
+         "Aposta de VALOR: a odd paga é maior que a odd JUSTA da Pinnacle (sem a margem dela) · 1X2 e mais/menos 2,5 gols.", ""]
+    for key in PROFILE_ORDER:
+        if key not in results:
+            continue
+        pr, (rm, ra) = PROFILES[key], results[key]
+        L += [pr["name"] + " — valor ≥ " + format(pr["edge"] * 100, "g") + "% · odds " + format(pr["min"], "g") + "–" +
+              format(pr["max"], "g") + " · stake " + format(pr["kelly"], "g") + " Kelly, até " + format(pr["cap"] * 100, "g") + "% da banca",
+              " • melhor odd do mercado: " + _line(rm),
+              " • odd média (uma casa só): " + _line(ra), ""]
+    best = max(results, key=lambda k: results[k][0]["profit"])
+    rb = results[best][0]
+    if rb["by_month"]:
+        L.append("Por mês (" + PROFILES[best]["name"] + ", melhor odd): " + " · ".join(
+            m[5:] + "/" + m[2:4] + " " + format(v, "+.0f") for m, v in sorted(rb["by_month"].items())))
+    if rb["by_league"]:
+        L.append("Por liga: " + " · ".join(LEAGUES.get(k, k).split(" ", 1)[-1] + " " + format(v, "+.0f")
+                                          for k, v in sorted(rb["by_league"].items(), key=lambda kv: -kv[1])))
+    L += ["", "⚠️ Mais agressiva = ganha mais quando acerta e cai muito mais quando erra (veja a queda máxima). O lucro depende de "
+          "pegar a odd alta (comparar casas). O passado não garante o futuro."]
     return "\n".join(L)
 
 
@@ -272,16 +293,18 @@ def run_backtest(send, chat, kb=None, days=365):
             send(chat, "⛔ Não consegui baixar os dados dos jogos agora. Tente de novo mais tarde.", kb)
             return
         bank = load()["bank"]
-        rmax, ravg = backtest(rows, bank, "max"), backtest(rows, bank, "avg")
+        results = {k: (backtest(rows, bank, "max", PROFILES[k]), backtest(rows, bank, "avg", PROFILES[k])) for k in PROFILE_ORDER}
+        rmax, ravg = results["safe"]
         try:
             import demo_report
-            png = demo_report.chart_png([("Melhor odd", bank, rmax["curve"], (90, 200, 255)),
-                                         ("Odd média", bank, ravg["curve"], (255, 196, 0))])
+            colors = {"safe": (90, 200, 255), "aggr": (255, 140, 0), "turbo": (255, 70, 90)}
+            png = demo_report.chart_png([(PROFILES[k]["name"].split(" ", 1)[1] + " (melhor odd)", bank, results[k][0]["curve"], colors[k])
+                                         for k in PROFILE_ORDER])
             if png and PHOTO:
-                PHOTO(chat, png, "📈 Backtest 1 ano: banca ao longo do tempo (azul = melhor odd, amarelo = odd média)")
+                PHOTO(chat, png, "📈 Backtest 1 ano: banca das 3 estratégias apostando na melhor odd")
         except Exception as exc:
             logging.info("paris chart: %s", type(exc).__name__)
-        send(chat, backtest_text(rmax, ravg, days), kb)
+        send(chat, backtest_text(rmax, ravg, days, results), kb)
     except Exception as exc:
         send(chat, "⛔ Backtest: " + str(exc)[:200], kb)
     finally:
@@ -306,10 +329,11 @@ def signal_id(r, key):
     return r["_date"].strftime("%Y%m%d") + ":" + r["HomeTeam"] + ":" + r["AwayTeam"] + ":" + key
 
 
-def signal_text(r, key, p, o, e, bank):
+def signal_text(r, key, p, o, e, bank, prof=None):
+    prof = prof or PROFILES["safe"]
     fair = 1 / p
-    min_odds = fair * (1 + EDGE)
-    st = bank * stake_frac(p, o)
+    min_odds = fair * (1 + prof["edge"])
+    st = bank * stake_frac(p, o, prof)
     return (LEAGUES.get(r["_div"], r["_div"]) + " · " + r["_date"].strftime("%d/%m %H:%M") + " UTC\n"
             "⚽ " + r["HomeTeam"] + " x " + r["AwayTeam"] + "\n"
             "🎯 Aposta: " + NAMES[key] + "\n"
@@ -321,11 +345,12 @@ def signal_text(r, key, p, o, e, bank):
 
 def find_signals(d, get=None, now=None):
     out = []
+    prof = PROFILES.get(d.get("profile"), PROFILES["safe"])
     for r in upcoming(get, now):
-        for key, p, o, e in candidates(r, "max"):
+        for key, p, o, e in candidates(r, "max", prof):
             sid = signal_id(r, key)
             if sid not in d["sent"]:
-                out.append((sid, signal_text(r, key, p, o, e, d["bank"])))
+                out.append((sid, signal_text(r, key, p, o, e, d["bank"], prof)))
     return out
 
 
@@ -355,7 +380,7 @@ def cycle(send, chat, now=None, get=None, force=False):
 
 
 # ------------------------------------------------------------------ Telegram
-ACTIONS = {"pb", "/paris", "pb_on", "pb_off", "pb_now", "pb_bt", "pb_bank"}
+ACTIONS = {"pb", "/paris", "pb_on", "pb_off", "pb_now", "pb_bt", "pb_bank", "pb_prof"}
 
 
 def status_text():
@@ -364,6 +389,8 @@ def status_text():
         "⚽ PARIS SPORTIFS — sinais de VALOR no futebol",
         "Status: " + ("🟢 sinais ligados (procuro a cada " + str(CHECK_EVERY_S // 3600) + " h)" if d["on"] else "🔴 sinais desligados"),
         "💶 Banca: " + format(d["bank"], ".0f") + " € (as stakes sugeridas são calculadas sobre ela)",
+        "⚡ Estratégia dos sinais: " + PROFILES.get(d.get("profile"), PROFILES["safe"])["name"] + " (stake até " +
+        format(PROFILES.get(d.get("profile"), PROFILES["safe"])["cap"] * 100, "g") + "% da banca)",
         "",
         "Como funciona: eu comparo as odds das casas com a odd JUSTA da Pinnacle (a casa mais precisa, sem a margem dela). "
         "Quando alguma casa paga pelo menos " + format(EDGE * 100, ".0f") + "% a mais que o justo, te mando o sinal: jogo, aposta, "
@@ -379,6 +406,7 @@ def keyboard():
              {"text": "🔎 Sinais agora", "callback_data": "pb_now"}],
             [{"text": "🧪 Backtest 1 ano", "callback_data": "pb_bt"},
              {"text": "💶 Banca " + format(d["bank"], ".0f") + " €", "callback_data": "pb_bank"}],
+            [{"text": "⚡ Estratégia: " + PROFILES.get(d.get("profile"), PROFILES["safe"])["name"], "callback_data": "pb_prof"}],
             [{"text": "🔄 Atualizar", "callback_data": "pb"}]]
 
 
@@ -400,6 +428,12 @@ def handle(action, send, chat, run_async):
     elif action == "pb_bt":
         run_async(lambda: run_backtest(send, chat, keyboard()))
         return True
+    elif action == "pb_prof":
+        with _LOCK:
+            d = load()
+            cur = d.get("profile") if d.get("profile") in PROFILE_ORDER else "safe"
+            d["profile"] = PROFILE_ORDER[(PROFILE_ORDER.index(cur) + 1) % len(PROFILE_ORDER)]
+            save(d)
     elif action == "pb_bank":
         with _LOCK:
             d = load()
