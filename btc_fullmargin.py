@@ -1427,3 +1427,29 @@ def handle(action, send, chat, run_async):
                     send(chat, "⛔ Não consegui fechar: " + str(exc)[:200], keyboard())
         run_async(go)
     return True
+
+
+# ------------------------------------------------------------------ retired (owner, Nov 24)
+def retire(send, chat, price=None):
+    """The SOL robot was removed (owner, Nov 24): both accounts off and every open order closed (the real one on
+    Jupiter). Returns True once nothing is left open."""
+    done = True
+    with _LOCK:
+        for mode in MODES:
+            d = _load(mode)
+            changed = d.get("on")
+            d["on"] = False
+            pos = d.get("pos")
+            if pos:
+                try:
+                    px = price or price_now(pos.get("asset", ASSET))
+                    why = "🧹 ROBÔ SOL REMOVIDO: fechei as ordens"
+                    pnl, sig = _close(d, px, why)
+                    send(chat, close_text(d, why, px, pos["entry"], pos) + _tx(sig))
+                    changed = True
+                except Exception as exc:
+                    done = False
+                    logging.warning("full margin retire %s: %s", mode, type(exc).__name__)
+            if changed:
+                _save(d)
+    return done

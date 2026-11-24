@@ -18,7 +18,11 @@ import user_trade as ut
 import user_wallets
 
 AIRDROP_ONLY = os.getenv("AIRDROP_ONLY", "true").strip().lower() != "false"   # owner (Nov 18): trading switched off
-HOME = os.getenv("BOT_HOME", "btc").strip().lower()   # owner (Nov 19, latest): only the BTC FULL MARGIN robot (demo + real)
+HOME = os.getenv("BOT_HOME", "paris").strip().lower()   # owner, Nov 24: football value-bet signals (SOL robot removed)
+if HOME == "btc":                                         # owner, Nov 24: the SOL robot was removed (even if BOT_HOME=btc)
+    HOME = "paris"
+# (before: "btc" = the Full Margin SOL robot)
+# (Nov 19 - Nov 23: "btc" = the BTC, then SOL, Full Margin robot)
 if HOME == "forex":                                      # owner (Nov 19): forex removed, the BTC robot replaced it
     HOME = "btc"
 GROUP_URL = os.getenv("TELEGRAM_GROUP_URL", "https://t.me/+fKaHJ2Dg_nIzM2U0")   # owner (Nov 18): community group
@@ -515,6 +519,11 @@ SOON = {"mev": "🛡️ Proteção MEV (envio privado pela Jito)", "pnl": "🖼�
 
 # ------------------------------------------------------------------ home screen
 def home_text(chat):
+    if HOME == "paris":
+        if not is_owner(chat):
+            return "🔒 Este bot agora é privado. Se você tem SOL na carteira do bot, toque em 💸 Sacar SOL."
+        import paris_bot
+        return paris_bot.status_text()
     if airdrop_only(chat) and HOME == "btc":
         if not is_owner(chat):
             return "🔒 Este bot agora é privado. Se você tem SOL na carteira do bot, toque em 💸 Sacar SOL."
@@ -542,6 +551,12 @@ def home_text(chat):
 
 
 def home_keyboard(chat):
+    if HOME == "paris":
+        if not is_owner(chat):
+            return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
+        import paris_bot
+        return paris_bot.keyboard() + [[{"text": "💰 Saldo da carteira", "callback_data": "wallet_balance"},
+                                        {"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
     if airdrop_only(chat) and HOME == "btc":
         if not is_owner(chat):
             return [[{"text": "💸 Sacar SOL", "callback_data": "wallet_withdraw"}]]
@@ -768,6 +783,16 @@ def handle(action, text, send, chat, tail=None, run_async=None):
     """Callbacks of the trading screens and the typed amount. True when handled."""
     run_async = run_async or (lambda fn: threading.Thread(target=fn, daemon=True).start())
     tail = tail or []
+    if HOME == "paris":                      # owner, Nov 24: only the football value-bet signals
+        import paris_bot
+        if action in paris_bot.ACTIONS and is_owner(chat):
+            return paris_bot.handle(action, send, chat, run_async)
+        if action in ("thome", "/home"):
+            send(chat, home_text(chat), home_keyboard(chat))
+            return True
+        send(chat, "O bot agora é só o de PARIS SPORTIFS (sinais de valor no futebol). Essa função foi removida."
+             if is_owner(chat) else home_text(chat), home_keyboard(chat))
+        return True
     s = settings(chat)
     if action in ("vid", "vid_on", "vid_off", "vid_now", "vid_yt", "/videos"):
         if not is_owner(chat):
