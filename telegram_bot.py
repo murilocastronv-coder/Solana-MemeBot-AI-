@@ -244,7 +244,7 @@ def active_chat():
   logging.exception("persistent Telegram owner unavailable; deny access")
   return None
 
-TRADE_ACTIONS={"bfm","/btc","bfm_real_ok","bfm_on_demo","bfm_on_real","bfm_off_demo","bfm_off_real","bfm_close_demo","bfm_close_real","bfm_lev2","bfm_lev3","bfm_lev5","bfm_lev10","bfm_lev15","bfm_lev20","bfm_lev30","bfm_lev40","bfm_lev50","bfm_res","/resultados_btc","bfm_bt","bfm_bt60","bfm_bt120","bfm_bt365","bfm_btg_sol","bfm_btg90_sol","bfm_btg365_sol","/backtest_btc","bfm_bt90","/backtest_btc_3m","bfm_bt_sol","bfm_bt90_sol","bfm_bt_eth","bfm_bt90_eth","/backtest_sol","/backtest_eth","bfm_bts_sol","bfm_bts90_sol","bfm_bts_eth","bfm_bts90_eth","bfm_btd_sol","bfm_btd90_sol","bfm_opt_sol","bfm_opt_btc","bfm_opt_eth","bfm_use_demo","bfm_use_real","bfm_live_demo","bfm_live_real","bfm_live_stop","/aovivo","fx","fx_on","fx_off","fx_deploy","fx_close","/forex","trpos","/posicoes_robo","tsn_on","tsn_off","tsn_reset","trd_on","trd_off","trd_reset","vid","vid_on","vid_off","vid_now","vid_yt","/videos","sup","sup_on","sup_off","sup_code","sup_min","sup_now","/tarefas","tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
+TRADE_ACTIONS={"pb","/paris","pb_on","pb_off","pb_now","pb_bt","pb_bank","bfm","/btc","bfm_real_ok","bfm_on_demo","bfm_on_real","bfm_off_demo","bfm_off_real","bfm_close_demo","bfm_close_real","bfm_lev2","bfm_lev3","bfm_lev5","bfm_lev10","bfm_lev15","bfm_lev20","bfm_lev30","bfm_lev40","bfm_lev50","bfm_res","/resultados_btc","bfm_bt","bfm_bt60","bfm_bt120","bfm_bt365","bfm_btg_sol","bfm_btg90_sol","bfm_btg365_sol","/backtest_btc","bfm_bt90","/backtest_btc_3m","bfm_bt_sol","bfm_bt90_sol","bfm_bt_eth","bfm_bt90_eth","/backtest_sol","/backtest_eth","bfm_bts_sol","bfm_bts90_sol","bfm_bts_eth","bfm_bts90_eth","bfm_btd_sol","bfm_btd90_sol","bfm_opt_sol","bfm_opt_btc","bfm_opt_eth","bfm_use_demo","bfm_use_real","bfm_live_demo","bfm_live_real","bfm_live_stop","/aovivo","fx","fx_on","fx_off","fx_deploy","fx_close","/forex","trpos","/posicoes_robo","tsn_on","tsn_off","tsn_reset","trd_on","trd_off","trd_reset","vid","vid_on","vid_off","vid_now","vid_yt","/videos","sup","sup_on","sup_off","sup_code","sup_min","sup_now","/tarefas","tad","/airdrop","tad_on","tad_off","tad_w","tad_now","trb_bt","/backtest","trob","trb_on","trb_off","trb_sol","/robo","tpl","tlim","tset","thelp","tbuy","tterms","tsb","tss","tsa","tst","tsl","tsr","thome","tsellm","tdl","twl","tscan",
  "tsc","tsv","tsell","twal","tsec","towner","trade_help","/posicoes","/ordens","/config","/ajuda","/comprar","/home","/dca","/watchlist","/scanner"}
 TRADE_PREFIXES=("tb","tbx","ts","tt","tl","tr","tc","tlo","tld","tla","tlx","tsoon","tsp","tw","tdo","tdp","tdx","tbc","tsx")
 def TRADE_ROUTE(cb,action):
@@ -880,12 +880,31 @@ def btc_live_loop():
    btc_live.LAST["why"]="erro: "+msg
    if msg!=BTC_LIVE_ERR.get("last") or time.time()-BTC_LIVE_ERR.get("at",0)>600:
     BTC_LIVE_ERR.update(last=msg,at=time.time());logging.warning("btc live cycle failed: %s",msg)
+def paris_loop():
+ """Paris sportifs (owner, Nov 24): football value-bet signals for the owner every few hours."""
+ import paris_bot
+ paris_bot.PHOTO=send_photo
+ while True:
+  time.sleep(600)
+  try:
+   chat=active_chat()
+   if chat:paris_bot.cycle(send,chat)
+  except Exception as exc:logging.warning("paris cycle failed: %s",type(exc).__name__)
 BFM_ERR={}
 def btc_fullmargin_loop():
  """BTC Full Margin (owner, Nov 19): demo + real accounts, US$ 100/day, stop at US$ 210; checks every 20 s."""
  import btc_fullmargin as bfm
+ import trade_panel
  bfm.PHOTO=send_photo
  bfm.EDIT=edit_message
+ if trade_panel.HOME!="btc":
+  # owner, Nov 24: the SOL robot was removed - close what it may still hold (real orders on Jupiter), then stop
+  while True:
+   try:
+    chat=active_chat()
+    if chat and bfm.retire(send,chat):return
+   except Exception as exc:logging.warning("full margin retire failed: %s",type(exc).__name__)
+   time.sleep(60)
  while True:
   time.sleep(bfm.CHECK_EVERY_S)
   try:
@@ -929,6 +948,7 @@ def loop():
  threading.Thread(target=btc_live_loop,daemon=True).start()
  threading.Thread(target=btc_leftover_loop,daemon=True).start()
  threading.Thread(target=btc_fullmargin_loop,daemon=True).start()
+ threading.Thread(target=paris_loop,daemon=True).start()
  threading.Thread(target=holdings_loop,daemon=True).start()
  while True:
   try:

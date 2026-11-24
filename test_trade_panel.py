@@ -85,9 +85,12 @@ class HandleTest(unittest.TestCase):
         tp.INPUT.clear()
         self.ao = mock.patch.object(tp, "AIRDROP_ONLY", False)
         self.ao.start()
+        self.home = mock.patch.object(tp, "HOME", "trade")               # the classic trading panel
+        self.home.start()
 
     def tearDown(self):
         self.ao.stop()
+        self.home.stop()
 
     def test_typed_amount_buys(self):
         sent, bought = [], []
