@@ -926,8 +926,24 @@ def btc_leftover_loop():
    if chat:btc_dip_live.cycle(send,chat)
   except Exception as exc:logging.warning("btc leftover cycle failed: %s",type(exc).__name__)
   time.sleep(btc_dip_live.CHECK_EVERY_S)
+MENU_COMMANDS=[("start","Abrir o menu do bot"),("menu","Abrir o menu do bot"),("posicoes","Minhas posições"),
+ ("ordens","Ordens abertas"),("btc","Robô BTC"),("resultados","Resultados"),("saldo","Saldo da carteira"),
+ ("depositar","Depositar SOL"),("sacar","Sacar"),("config","Configurações"),("ajuda","Ajuda"),("id","Meu chat ID")]
+def setup_telegram_menu():
+ """Telegram side of the menu: polling only works without a webhook, and the blue "Menu" button
+ lists the commands only after setMyCommands. Safe to call again (idempotent)."""
+ if not TOKEN:return False
+ ok=True
+ for method,params in (("deleteWebhook",{"drop_pending_updates":False}),
+   ("setMyCommands",{"commands":[{"command":c,"description":d} for c,d in MENU_COMMANDS]}),
+   ("setChatMenuButton",{"menu_button":{"type":"commands"}})):
+  try:
+   if not request_api(method,**params).get("ok"):ok=False;logging.warning("telegram %s not ok",method)
+  except Exception as exc:ok=False;logging.warning("telegram %s failed: %s",method,exc)
+ return ok
 def loop():
  offset=None
+ setup_telegram_menu()
  def notice():
   try:startup_notice()
   except Exception:logging.exception("startup notice failed")
@@ -960,7 +976,11 @@ def loop():
    else:time.sleep(10)
   except RuntimeError as exc:
    if "HTTP 409" in str(exc):
-    logging.warning("Telegram polling conflict: another instance may be polling this token");time.sleep(5)
+    # 409 = a webhook is set on this token (remove it) or another instance is polling it
+    logging.warning("Telegram polling conflict: removing webhook; another instance may also be polling this token")
+    try:request_api("deleteWebhook",drop_pending_updates=False)
+    except Exception:pass
+    time.sleep(5)
    else:logging.warning("telegram polling failed: %s",exc);time.sleep(2)
   except Exception:logging.exception("telegram worker error");time.sleep(3)
 
